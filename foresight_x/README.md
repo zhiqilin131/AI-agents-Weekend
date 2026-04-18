@@ -13,3 +13,5 @@ pytest
 ```
 
 Phase 0 delivers `schemas` and `config` with contract tests under `tests/`.
+
+Phase 1 delivers `retrieval/`: `UserMemory` and `WorldKnowledge` (Chroma + LlamaIndex), `TavilyGateway`, packaged seeds under `retrieval/seeds/`, and tests (`test_memory`, `test_world_cache`, `test_tavily_client`, `test_seed`).

@@ -22,10 +22,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8,<9",
+    "python-dotenv>=1,<2",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["foresight_x"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"foresight_x/retrieval/seeds" = "foresight_x/retrieval/seeds"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

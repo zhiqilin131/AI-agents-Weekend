@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     )
 
     tavily_api_key: str = Field(default="", validation_alias="TAVILY_API_KEY")
+    tavily_search_depth: str = Field(
+        default="advanced",
+        validation_alias="TAVILY_SEARCH_DEPTH",
+    )
 
     chroma_persist_dir: Path = Field(
         default=Path("./data/chroma"),

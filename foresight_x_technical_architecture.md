@@ -57,7 +57,7 @@ Treat Harness as the **production-grade wrapper** that makes an LLM behave like 
 foresight_x/
 ├── README.md
 ├── pyproject.toml                 # or requirements.txt
-├── .env.example                   # ANTHROPIC_API_KEY, TAVILY_API_KEY, ...
+├── .env.example                   # OPENAI_API_KEY, TAVILY_API_KEY, ...
 │
 ├── foresight_x/
 │   ├── __init__.py
@@ -570,15 +570,15 @@ Assumes ~48h build window, 2–4 devs, demo due Sunday 11:59am.
 - [ ] Repo init, `pyproject.toml`, `.env.example`
 - [ ] Install: `llama-index`, `llama-index-vector-stores-chroma`, `llama-index-llms-openai`, `llama-index-embeddings-openai`, `chromadb`, `tavily-python`, `pydantic`, `fastapi` or `streamlit`
 - [ ] Write `schemas.py` **in full** (it's the contract)
-- [ ] Smoke test: one LLM call, one Tavily call, one LlamaIndex index build
+- [ ] Smoke test: one LLM call, one Tavily call (or mock), one LlamaIndex index build
 
 ### Phase 1 — Retrieval spine (4h)
 
-- [ ] `memory.py` — UserMemory class, add/retrieve
-- [ ] `world_cache.py` — LlamaIndex cache
-- [ ] `tavily_client.py` — thin wrapper
-- [ ] Seed memory with 3–5 synthetic past decisions for the demo user
-- [ ] Seed world_cache with domain docs relevant to demo scenarios
+- [x] `memory.py` — UserMemory class, add/retrieve
+- [x] `world_cache.py` — LlamaIndex cache
+- [x] `tavily_client.py` — thin wrapper
+- [x] Seed memory with 3–5 synthetic past decisions for the demo user
+- [x] Seed world_cache with domain docs relevant to demo scenarios
 
 ### Phase 2 — Perception + Inference (4h)
 
@@ -703,5 +703,5 @@ Outputs (completion checklist):
 - **Never inline prompts.** Route through `prompts/*.py`.
 - **Log every module output** to the in-memory `DecisionTrace` — don't wait until the end to assemble it.
 - **Prefer async** throughout the workflow; use `asyncio.gather` for parallelizable steps (memory retrieval + world retrieval).
-- **Stub Tavily behind an interface** so tests can mock it cleanly.
+- **Stub Tavily behind `TavilyGateway`** so tests can mock it cleanly.
 - **Keep `improvement_loop.py` tiny but real** — at minimum, after an outcome is recorded, the memory index updates so retrieval changes. Indexing a new `DecisionTrace` without an outcome also counts for “one more document,” but **prefer** outcome write-back to match the product story.
