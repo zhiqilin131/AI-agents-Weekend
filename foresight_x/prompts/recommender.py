@@ -14,6 +14,7 @@ def recommender_prompt(
     memory: MemoryBundle,
     composite_by_option_id: dict[str, float],
     user_state: UserState,
+    user_profile_json: str,
     *,
     anchor_now_iso: str,
 ) -> str:
@@ -24,6 +25,10 @@ def recommender_prompt(
         "Constraints:\n"
         "- reasoning must reference memory patterns, evidence, and simulation scores at a high level.\n"
         "- next_actions must be specific (drafts, meetings, checklists) with optional deadlines.\n"
+        "- If user_profile.confidence >= 0.3, factor the user's values and risk_posture into the "
+        "selection. For example: if profile says risk_posture='risk-averse' and options trade risk "
+        "vs expected value, prefer the lower-risk option even at mild EV cost. If profile confidence "
+        "is below 0.3, treat the profile as weakly informative and fall back to evidence + simulation.\n"
         "- For each next_actions[].deadline, use the CURRENT_TIME_ANCHOR below: schedule only on or after this "
         "instant. Prefer ISO dates (YYYY-MM-DD) or unambiguous relative phrases (e.g. \"this Friday\", "
         "\"within 48 hours\") interpreted from that anchor. Do not use years or calendar dates in the past "
@@ -38,4 +43,5 @@ def recommender_prompt(
         f"Options: {[o.model_dump() for o in options]}\n"
         f"MemoryBundle: {memory.model_dump_json()}\n"
         f"EvidenceBundle: {evidence.model_dump_json()}\n"
+        f"user_profile: {user_profile_json}\n"
     )

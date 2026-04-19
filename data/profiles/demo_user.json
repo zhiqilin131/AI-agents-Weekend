@@ -1,0 +1,26 @@
+{
+  "user_id": "demo_user",
+  "values": [
+    "values stability over short-term gain"
+  ],
+  "risk_posture": "moderate",
+  "recurring_themes": [
+    "tends to seek extensions when under pressure",
+    "prefers to resolve conflicts directly rather than escalating"
+  ],
+  "current_goals": [
+    "secure a job offer",
+    "navigate personal relationships",
+    "obtain food without spending money"
+  ],
+  "known_constraints": [
+    "upcoming graduation",
+    "financial considerations"
+  ],
+  "n_decisions_summarized": 30,
+  "last_updated": "2026-04-19T09:38:07.986594",
+  "confidence": 0.7,
+  "priorities": [],
+  "about_me": "",
+  "constraints": []
+}

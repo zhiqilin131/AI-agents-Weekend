@@ -21,12 +21,42 @@ class Reversibility(str, Enum):
 
 
 class UserProfile(BaseModel):
-    """Persisted user context (\"shadow self\"): priorities, narrative, constraints."""
+    """Tier 3 semantic profile (with legacy fields kept for compatibility)."""
 
+    # ---------- Semantic User Profile (Tier 3 Memory) ----------
+    user_id: str = ""
+    values: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Stable values the user has revealed through past decisions. "
+            "E.g. 'long-term stability over short-term gain', 'autonomy', "
+            "'relationships over career advancement'."
+        ),
+    )
+    risk_posture: Literal["risk-averse", "moderate", "risk-seeking", "unknown"] = "unknown"
+    recurring_themes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Behavioral patterns observed across past decisions. "
+            "E.g. 'tends to overcommit when excited', 'delays irreversible choices'."
+        ),
+    )
+    current_goals: list[str] = Field(
+        default_factory=list,
+        description="Active goals the user is working toward, distilled from recent decisions.",
+    )
+    known_constraints: list[str] = Field(
+        default_factory=list,
+        description="Stable constraints: time, money, obligations, health, location.",
+    )
+    n_decisions_summarized: int = 0
+    last_updated: str = ""
+    confidence: float = Field(ge=0, le=1, default=0.0)
+
+    # Legacy profile fields still used by current backend/frontend wiring.
     priorities: list[str] = Field(default_factory=list)
     about_me: str = ""
     constraints: list[str] = Field(default_factory=list)
-    values: list[str] = Field(default_factory=list)
 
 
 class UserState(BaseModel):

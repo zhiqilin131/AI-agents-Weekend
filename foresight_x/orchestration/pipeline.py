@@ -17,6 +17,8 @@ from foresight_x.inference.option_generator import generate_options
 from foresight_x.perception.clarify_gate import merge_clarification_answers
 from foresight_x.perception.layer import build_user_state
 from foresight_x.perception.query_enhance import prepare_decision_text
+from foresight_x.memory.profile_store import load_profile as load_tier3_profile
+from foresight_x.memory.profile_summarizer import summarize_profile
 from foresight_x.profile.merge import append_clarification_to_profile, merge_profile_into_user_state
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.retrieval.memory import UserMemory
@@ -159,6 +161,20 @@ def finalize_trace(
         save_decision_trace(trace, settings=settings)
         if user_memory is not None:
             user_memory.add_decision(trace, outcome=None)
+            # Auto-refresh Tier 3 semantic profile every N newly added decisions.
+            try:
+                n = int(getattr(settings, "tier3_auto_update_every", 5) or 0)
+                min_n = int(getattr(settings, "tier3_min_decisions", 3) or 3)
+                if n > 0 and llm is not None and hasattr(user_memory, "list_all_past_decisions"):
+                    past = user_memory.list_all_past_decisions()
+                    if len(past) >= min_n:
+                        prior = load_tier3_profile(settings.foresight_user_id)
+                        summarized_before = int(prior.n_decisions_summarized) if prior else 0
+                        if len(past) - summarized_before >= n:
+                            summarize_profile(settings.foresight_user_id, past, llm=llm)
+            except Exception:
+                # Never fail a user run because profile refresh failed.
+                pass
     return trace
 
 
@@ -172,6 +188,7 @@ def iter_pipeline_events(
     anchor_now_iso: str | None = None,
     clarification_answers: dict[str, str] | None = None,
     save_clarification_to_profile: bool = False,
+    preserve_raw_input: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Yield meta, partial trace fragments per stage, then ``complete`` (SSE)."""
     settings = ctx.settings or load_settings()
@@ -185,12 +202,15 @@ def iter_pipeline_events(
     profile = load_user_profile(settings)
     user_raw = raw_input.strip()
     effective = merge_clarification_answers(user_raw, clarification_answers)
-    original, enhanced = prepare_decision_text(
-        effective,
-        ctx.llm,
-        profile=profile,
-        original_override=user_raw,
-    )
+    if preserve_raw_input:
+        original, enhanced = user_raw, user_raw
+    else:
+        original, enhanced = prepare_decision_text(
+            effective,
+            ctx.llm,
+            profile=profile,
+            original_override=user_raw,
+        )
     yield {
         "event": "partial",
         "stage": "enhance",
@@ -277,6 +297,7 @@ def run_pipeline(
     anchor_now_iso: str | None = None,
     clarification_answers: dict[str, str] | None = None,
     save_clarification_to_profile: bool = False,
+    preserve_raw_input: bool = False,
 ) -> DecisionTrace:
     """Execute the full RIS stack and return a ``DecisionTrace``; optionally save JSON under ``data/traces/``."""
     settings = ctx.settings or load_settings()
@@ -287,12 +308,15 @@ def run_pipeline(
     profile = load_user_profile(settings)
     user_raw = raw_input.strip()
     effective = merge_clarification_answers(user_raw, clarification_answers)
-    original, enhanced = prepare_decision_text(
-        effective,
-        ctx.llm,
-        profile=profile,
-        original_override=user_raw,
-    )
+    if preserve_raw_input:
+        original, enhanced = user_raw, user_raw
+    else:
+        original, enhanced = prepare_decision_text(
+            effective,
+            ctx.llm,
+            profile=profile,
+            original_override=user_raw,
+        )
     user_state = build_user_state(enhanced, ctx.llm, profile=profile)
     user_state = merge_profile_into_user_state(user_state, profile)
     memory_bundle, evidence_bundle = retrieve_bundles_parallel(user_state, ctx)

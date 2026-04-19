@@ -37,8 +37,85 @@ def _dedupe_options(options: list[Option]) -> list[Option]:
     return out
 
 
+_GENERIC_PATTERNS = (
+    "seek support",
+    "wait and see",
+    "gather more information",
+    "do more research",
+    "think it over",
+    "take your time",
+)
+
+
+def _keyword_set(text: str) -> set[str]:
+    return {
+        w
+        for w in re.findall(r"[a-zA-Z]{4,}", text.lower())
+        if w
+        not in {
+            "with",
+            "that",
+            "this",
+            "from",
+            "your",
+            "have",
+            "what",
+            "when",
+            "where",
+            "should",
+            "would",
+            "could",
+            "about",
+            "into",
+        }
+    }
+
+
+def _looks_generic(opt: Option, user_state: UserState) -> bool:
+    txt = _norm(f"{opt.name} {opt.description}")
+    if any(p in txt for p in _GENERIC_PATTERNS):
+        return True
+    # Require some lexical anchoring to user context for specificity.
+    context = _keyword_set(user_state.raw_input + " " + " ".join(user_state.goals))
+    if not context:
+        return False
+    opt_words = _keyword_set(opt.name + " " + opt.description + " " + " ".join(opt.key_assumptions))
+    overlap = context.intersection(opt_words)
+    return len(overlap) == 0
+
+
 def _fallback_options(user_state: UserState) -> list[Option]:
     text = user_state.raw_input.lower()
+    if any(k in text for k in ("food", "hungry", "meal", "pantry", "budget", "broke", "money")):
+        return [
+            Option(
+                option_id="opt_food_211_today",
+                name="Call 2-1-1 for same-day food resources",
+                description=(
+                    "Call 211 now and request nearby food pantries/soup kitchens open today, then visit the first one with required ID details."
+                ),
+                key_assumptions=["Local 211 directory is available and up to date"],
+                cost_of_reversal="low",
+            ),
+            Option(
+                option_id="opt_food_school_emergency",
+                name="Use school/community emergency food office",
+                description=(
+                    "Contact your school/community emergency aid office today for immediate food vouchers or campus pantry pickup."
+                ),
+                key_assumptions=["Your institution/area has emergency aid intake"],
+                cost_of_reversal="low",
+            ),
+            Option(
+                option_id="opt_food_mutual_aid",
+                name="Request short-term support from trusted contacts",
+                description=(
+                    "Send a direct message to 2-3 trusted friends/family now asking for short-term food support while you secure formal assistance."
+                ),
+                key_assumptions=["You have at least one reachable trusted contact"],
+                cost_of_reversal="low",
+            ),
+        ]
     if any(k in text for k in ("cancer", "tumor", "diagnosis", "medical", "hospital")):
         return [
             Option(
@@ -163,8 +240,14 @@ def generate_options(
             candidates = _fallback_options(user_state)
 
     options = _dedupe_options(candidates)
+    non_generic = [o for o in options if not _looks_generic(o, user_state)]
+    if non_generic:
+        options = non_generic
     options = _ensure_novel_option(options, user_state.raw_input)
     if len(options) < min_options:
         options.extend(_fallback_options(user_state))
         options = _dedupe_options(options)
+        non_generic = [o for o in options if not _looks_generic(o, user_state)]
+        if non_generic:
+            options = non_generic
     return options[:max_options]

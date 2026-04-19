@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { AppState } from '../model';
 
 interface InputPanelProps {
@@ -6,6 +7,8 @@ interface InputPanelProps {
   onRun: () => void;
   onReset: () => void;
   state: AppState;
+  isClarifyChecking?: boolean;
+  clarifyOpen?: boolean;
   loadingStage?: string | null;
   stageLabel?: Record<string, string>;
 }
@@ -16,9 +19,34 @@ export function InputPanel({
   onRun,
   onReset,
   state,
+  isClarifyChecking = false,
+  clarifyOpen = false,
   loadingStage,
   stageLabel,
 }: InputPanelProps) {
+  const [justClicked, setJustClicked] = useState(false);
+  const clickTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (clickTimerRef.current !== null) {
+        window.clearTimeout(clickTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleRunClick = () => {
+    setJustClicked(true);
+    if (clickTimerRef.current !== null) {
+      window.clearTimeout(clickTimerRef.current);
+    }
+    clickTimerRef.current = window.setTimeout(() => {
+      setJustClicked(false);
+      clickTimerRef.current = null;
+    }, 900);
+    onRun();
+  };
+
   return (
     <div>
       <div className="bg-white/50 backdrop-blur-2xl rounded-[32px] p-8 border border-white/80 shadow-[0_8px_32px_rgba(0,0,0,0.06)]">
@@ -45,9 +73,11 @@ export function InputPanel({
               </div>
 
               <button
-                onClick={onRun}
-                disabled={!decisionInput.trim() || state === 'loading'}
-                className="w-full px-8 py-5 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-full hover:shadow-2xl hover:shadow-purple-500/30 disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed transition-all text-base flex items-center justify-center gap-3"
+                onClick={handleRunClick}
+                disabled={!decisionInput.trim() || state === 'loading' || isClarifyChecking || clarifyOpen}
+                className={`w-full px-8 py-5 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-full hover:shadow-2xl hover:shadow-purple-500/30 disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed transition-all text-base flex items-center justify-center gap-3 ${
+                  justClicked ? 'ring-4 ring-purple-200 scale-[0.995]' : ''
+                }`}
                 style={{ fontWeight: 600 }}
               >
                 {state === 'loading' ? (
@@ -61,6 +91,23 @@ export function InputPanel({
                         </span>
                       )}
                     </span>
+                  </>
+                ) : isClarifyChecking ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    <span>Checking if clarification is needed…</span>
+                  </>
+                ) : clarifyOpen ? (
+                  <>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 3l1.545 4.635L18.18 9.18l-4.635 1.545L12 15.36l-1.545-4.635L5.82 9.18l4.635-1.545L12 3z" />
+                    </svg>
+                    Waiting for your clarification
+                  </>
+                ) : justClicked ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    Run request received
                   </>
                 ) : (
                   <>

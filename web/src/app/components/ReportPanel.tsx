@@ -7,6 +7,22 @@ interface ReportPanelProps {
   state: AppState;
   report: DecisionReport | null;
   fullTrace: Record<string, unknown> | null;
+  tier3Profile?: {
+    profile?: {
+      user_id?: string;
+      values?: string[];
+      risk_posture?: string;
+      recurring_themes?: string[];
+      current_goals?: string[];
+      known_constraints?: string[];
+      n_decisions_summarized?: number;
+      last_updated?: string;
+      confidence?: number;
+    };
+    used_in_recommender?: boolean;
+    use_threshold?: number;
+    source?: string;
+  } | null;
   showJson: boolean;
   onToggleJson: () => void;
   onShowOutcome: () => void;
@@ -21,6 +37,7 @@ export function ReportPanel({
   state,
   report,
   fullTrace,
+  tier3Profile,
   showJson,
   onToggleJson,
   onShowOutcome,
@@ -30,7 +47,23 @@ export function ReportPanel({
   isStreaming = false,
 }: ReportPanelProps) {
   if (state === 'empty') {
-    return <EmptyState />;
+    return (
+      <div className="space-y-4">
+        {tier3Profile?.profile && (
+          <div className="rounded-xl border border-violet-200/80 bg-violet-50/70 px-4 py-3">
+            <p className="text-xs text-violet-900" style={{ fontWeight: 700 }}>
+              Tier 3 profile ready
+            </p>
+            <p className="text-[11px] text-violet-800 mt-1">
+              Confidence {(tier3Profile.profile.confidence ?? 0).toFixed(2)} (threshold{' '}
+              {(tier3Profile.use_threshold ?? 0.3).toFixed(2)}), risk posture:{' '}
+              {tier3Profile.profile.risk_posture ?? 'unknown'}.
+            </p>
+          </div>
+        )}
+        <EmptyState />
+      </div>
+    );
   }
 
   if (state === 'loading' && !report) {
@@ -41,7 +74,7 @@ export function ReportPanel({
     return (
       <div className="space-y-4">
         <LoadingState compact progress={runProgress} stageLabel={runStageLabel} />
-        <ReportCompact report={report} fullTrace={fullTrace} isStreaming />
+        <ReportCompact report={report} fullTrace={fullTrace} tier3Profile={tier3Profile} isStreaming />
       </div>
     );
   }
@@ -56,6 +89,7 @@ export function ReportPanel({
           key={typeof fullTrace?.decision_id === 'string' ? fullTrace.decision_id : 'report'}
           report={report}
           fullTrace={fullTrace}
+          tier3Profile={tier3Profile}
           isStreaming={false}
         />
 

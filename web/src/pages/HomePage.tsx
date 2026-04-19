@@ -33,6 +33,24 @@ function stageToProgress(stage: string): number {
 type StreamOpts = {
   clarification_answers?: Record<string, string>;
   save_clarification_to_profile?: boolean;
+  preserve_raw_input?: boolean;
+};
+
+type Tier3ProfileView = {
+  profile: {
+    user_id?: string;
+    values?: string[];
+    risk_posture?: string;
+    recurring_themes?: string[];
+    current_goals?: string[];
+    known_constraints?: string[];
+    n_decisions_summarized?: number;
+    last_updated?: string;
+    confidence?: number;
+  };
+  used_in_recommender: boolean;
+  use_threshold: number;
+  source: string;
 };
 
 export default function HomePage() {
@@ -51,7 +69,9 @@ export default function HomePage() {
   const [loadingStage, setLoadingStage] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState(0);
   const [runStageLabel, setRunStageLabel] = useState('Starting…');
+  const [tier3Profile, setTier3Profile] = useState<Tier3ProfileView | null>(null);
   const [clarifyOpen, setClarifyOpen] = useState(false);
+  const [clarifyChecking, setClarifyChecking] = useState(false);
   const [clarifyPayload, setClarifyPayload] = useState<{ questions: ClarifyQuestion[]; note: string } | null>(null);
   /** Shown only when clarify fails or LLM is missing — not when the model simply says no extra questions. */
   const [clarifyGateHint, setClarifyGateHint] = useState<string | null>(null);
@@ -120,6 +140,21 @@ export default function HomePage() {
 
   const traceForPanel = state === 'result' ? fullTrace : liveTrace;
 
+  const loadTier3Profile = useCallback(async () => {
+    try {
+      const res = await fetch(apiUrl('/api/profile/tier3'));
+      if (!res.ok) return;
+      const data = (await res.json()) as Tier3ProfileView;
+      if (data && typeof data === 'object') setTier3Profile(data);
+    } catch {
+      // non-blocking diagnostics panel
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTier3Profile();
+  }, [loadTier3Profile]);
+
   const runPipelineStream = useCallback(
     async (opts?: StreamOpts) => {
       setError(null);
@@ -142,6 +177,9 @@ export default function HomePage() {
         if (opts?.clarification_answers && Object.keys(opts.clarification_answers).length > 0) {
           body.clarification_answers = opts.clarification_answers;
           body.save_clarification_to_profile = Boolean(opts.save_clarification_to_profile);
+        }
+        if (opts?.preserve_raw_input) {
+          body.preserve_raw_input = true;
         }
 
         const res = await fetch(apiUrl('/api/run/stream'), {
@@ -210,6 +248,7 @@ export default function HomePage() {
         setTracePath(path);
         setClarifyGateHint(null);
         setState('result');
+        void loadTier3Profile();
         const tid = trace.decision_id;
         if (typeof tid === 'string' && tid) {
           navigate(`/trace/${tid}`, { replace: true });
@@ -230,12 +269,14 @@ export default function HomePage() {
         setRunProgress(0);
       }
     },
-    [decisionInput, navigate],
+    [decisionInput, loadTier3Profile, navigate],
   );
 
   const handleRunDecision = async () => {
+    if (state === 'loading' || clarifyChecking || clarifyOpen) return;
     setError(null);
     setClarifyGateHint(null);
+    setClarifyChecking(true);
     try {
       const cr = await fetch(apiUrl('/api/clarify'), {
         method: 'POST',
@@ -251,22 +292,35 @@ export default function HomePage() {
         };
         if (gate.need_clarification && Array.isArray(gate.questions) && gate.questions.length > 0) {
           setClarifyPayload({ questions: gate.questions, note: String(gate.note ?? '') });
+          // Ensure we do not show pipeline loading until user clicks "Continue analysis".
+          setState('empty');
+          setLoadingStage(null);
+          setRunProgress(0);
+          setRunStageLabel('Starting…');
           setClarifyOpen(true);
+          setClarifyChecking(false);
           return;
         }
         // No modal: either input was specific enough (not_needed) or gate unavailable — see clarifyGateHint.
         if (gate.skip_reason === 'error') {
           setClarifyGateHint(
-            'Clarification check failed (model/network). Analysis continues with your text as entered.',
+            'Clarification check failed (model/network). Continuing with your raw text (no enhancement rewrite).',
           );
+          setClarifyChecking(false);
+          await runPipelineStream({ preserve_raw_input: true });
+          return;
         } else if (gate.skip_reason === 'no_llm') {
           setClarifyGateHint('Optional clarification is off: API has no LLM configured. Running analysis anyway.');
         }
       }
     } catch {
       /* optional gate — same as skip_reason error: proceed to pipeline */
-      setClarifyGateHint('Could not reach clarification endpoint; continuing with your text.');
+      setClarifyGateHint('Could not reach clarification endpoint; continuing with your raw text.');
+      setClarifyChecking(false);
+      await runPipelineStream({ preserve_raw_input: true });
+      return;
     }
+    setClarifyChecking(false);
     await runPipelineStream();
   };
 
@@ -337,6 +391,8 @@ export default function HomePage() {
             onRun={handleRunDecision}
             onReset={handleReset}
             state={state}
+            isClarifyChecking={clarifyChecking}
+            clarifyOpen={clarifyOpen}
             loadingStage={loadingStage}
             stageLabel={STAGE_LABEL}
           />
@@ -347,6 +403,7 @@ export default function HomePage() {
             state={state}
             report={displayReport}
             fullTrace={traceForPanel}
+            tier3Profile={tier3Profile}
             showJson={showJson}
             onToggleJson={() => setShowJson(!showJson)}
             onShowOutcome={() => setShowOutcome(true)}
@@ -373,17 +430,6 @@ export default function HomePage() {
             <div className="w-full max-w-3xl">
               {nav}
               <div className="text-center mb-16">
-                <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-purple-500/10 to-blue-500/10 backdrop-blur-xl rounded-3xl mb-8 border border-white/60 shadow-xl">
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="url(#gradient)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <defs>
-                      <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="#a855f7" />
-                        <stop offset="100%" stopColor="#3b82f6" />
-                      </linearGradient>
-                    </defs>
-                    <path d="M12 3l1.545 4.635L18.18 9.18l-4.635 1.545L12 15.36l-1.545-4.635L5.82 9.18l4.635-1.545L12 3z" />
-                  </svg>
-                </div>
                 <h1 className="text-7xl mb-5 text-gray-900 tracking-tight" style={{ fontWeight: 700, letterSpacing: '-0.04em' }}>
                   Foresight-X
                 </h1>
@@ -402,6 +448,8 @@ export default function HomePage() {
                 onRun={handleRunDecision}
                 onReset={handleReset}
                 state={state}
+                isClarifyChecking={clarifyChecking}
+                clarifyOpen={clarifyOpen}
                 loadingStage={loadingStage}
                 stageLabel={STAGE_LABEL}
               />
@@ -414,7 +462,13 @@ export default function HomePage() {
 
       <ClarifyDialog
         open={clarifyOpen}
-        onOpenChange={setClarifyOpen}
+        onOpenChange={(open) => {
+          setClarifyOpen(open);
+          if (!open) {
+            setClarifyPayload(null);
+            setClarifyChecking(false);
+          }
+        }}
         questions={clarifyPayload?.questions ?? []}
         note={clarifyPayload?.note}
         onConfirm={(answers, saveToProfile) => {

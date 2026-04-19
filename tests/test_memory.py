@@ -183,3 +183,45 @@ def test_pipeline_persist_indexes_for_subsequent_retrieval(
     bundle = mem.retrieve(trace_b.user_state, top_k=12)
     ids = {p.decision_id for p in bundle.similar_past_decisions}
     assert "carry-a" in ids
+
+
+def test_list_all_past_decisions_returns_unique_newest_first(
+    embed_model: MockEmbedding,
+    settings: Settings,
+) -> None:
+    mem = UserMemory("list_user", settings=settings, embed_model=embed_model)
+    mem.add_past_decision(
+        PastDecision(
+            decision_id="d-old",
+            situation_summary="older one",
+            chosen_option="wait",
+            outcome="ok",
+            outcome_quality=3,
+            timestamp="2026-01-01T00:00:00Z",
+        )
+    )
+    mem.add_past_decision(
+        PastDecision(
+            decision_id="d-new",
+            situation_summary="newer one",
+            chosen_option="act",
+            outcome="great",
+            outcome_quality=5,
+            timestamp="2026-03-01T00:00:00Z",
+        )
+    )
+    # Re-insert same decision id with newer timestamp to verify dedupe keeps newest.
+    mem.add_past_decision(
+        PastDecision(
+            decision_id="d-old",
+            situation_summary="older one updated",
+            chosen_option="wait",
+            outcome="better",
+            outcome_quality=4,
+            timestamp="2026-02-01T00:00:00Z",
+        )
+    )
+
+    rows = mem.list_all_past_decisions()
+    assert [r.decision_id for r in rows] == ["d-new", "d-old"]
+    assert rows[1].outcome == "better"

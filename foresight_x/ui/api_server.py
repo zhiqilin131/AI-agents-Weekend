@@ -20,6 +20,8 @@ from foresight_x.perception.clarify_gate import run_clarify_gate
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import DecisionOutcome, UserProfile
 from foresight_x.ui.cli import _build_context
+from foresight_x.memory.profile_store import empty_profile as load_tier3_empty_profile
+from foresight_x.memory.profile_store import load_profile as load_tier3_profile
 
 
 def _utc_now() -> str:
@@ -48,6 +50,8 @@ class RunRequest(BaseModel):
     clarification_answers: dict[str, str] | None = Field(default=None)
     #: When true, append clarification lines to the persisted user profile priorities.
     save_clarification_to_profile: bool = Field(default=False)
+    #: When true, skip query-enhancement rewrite and use user's raw input verbatim.
+    preserve_raw_input: bool = Field(default=False)
 
 
 class ClarifyRequest(BaseModel):
@@ -81,6 +85,7 @@ def root() -> dict[str, object]:
             "/api/run",
             "/api/run/stream",
             "/api/profile",
+            "/api/profile/tier3",
             "/api/clarify",
             "/api/traces",
             "/api/traces/{decision_id}",
@@ -112,6 +117,7 @@ def run_decision(body: RunRequest) -> RunResponse:
         anchor_now_iso=_client_anchor_iso(body.client_now_iso),
         clarification_answers=body.clarification_answers,
         save_clarification_to_profile=body.save_clarification_to_profile,
+        preserve_raw_input=body.preserve_raw_input,
     )
     trace_path = settings.traces_dir / f"{trace.decision_id}.json"
     return RunResponse(
@@ -137,6 +143,7 @@ def run_decision_stream(body: RunRequest) -> StreamingResponse:
             anchor_now_iso=_client_anchor_iso(body.client_now_iso),
             clarification_answers=body.clarification_answers,
             save_clarification_to_profile=body.save_clarification_to_profile,
+            preserve_raw_input=body.preserve_raw_input,
         ):
             if ev.get("event") == "complete" and isinstance(ev.get("trace"), dict):
                 tid = ev["trace"].get("decision_id")
@@ -169,6 +176,19 @@ def get_profile() -> dict:
 def put_profile(body: UserProfile) -> dict:
     path = save_user_profile(body)
     return {"ok": True, "path": str(path)}
+
+
+@app.get("/api/profile/tier3")
+def get_tier3_profile() -> dict:
+    """Tier 3 profile consumed by the recommender prompt."""
+    s = load_settings()
+    p = load_tier3_profile(s.foresight_user_id) or load_tier3_empty_profile(s.foresight_user_id)
+    return {
+        "profile": p.model_dump(mode="json"),
+        "used_in_recommender": p.confidence >= 0.3,
+        "use_threshold": 0.3,
+        "source": "foresight_x.memory.profile_store",
+    }
 
 
 @app.post("/api/clarify")

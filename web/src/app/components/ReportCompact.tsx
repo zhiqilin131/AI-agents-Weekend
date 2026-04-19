@@ -59,18 +59,34 @@ interface TraceFuture {
 }
 
 interface TraceEvidence {
-  facts?: Array<{ text: string; confidence?: number }>;
-  base_rates?: Array<{ text: string }>;
-  recent_events?: Array<{ text: string }>;
+  facts?: Array<{ text: string; confidence?: number; source_url?: string }>;
+  base_rates?: Array<{ text: string; source_url?: string }>;
+  recent_events?: Array<{ text: string; source_url?: string }>;
 }
 
 interface ReportCompactProps {
   report: DecisionReport;
   fullTrace: Record<string, unknown> | null;
+  tier3Profile?: {
+    profile?: {
+      user_id?: string;
+      values?: string[];
+      risk_posture?: string;
+      recurring_themes?: string[];
+      current_goals?: string[];
+      known_constraints?: string[];
+      n_decisions_summarized?: number;
+      last_updated?: string;
+      confidence?: number;
+    };
+    used_in_recommender?: boolean;
+    use_threshold?: number;
+    source?: string;
+  } | null;
   isStreaming?: boolean;
 }
 
-export function ReportCompact({ report, fullTrace, isStreaming }: ReportCompactProps) {
+export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: ReportCompactProps) {
   const futures = (fullTrace?.futures as TraceFuture[]) ?? [];
   const evidence = fullTrace?.evidence as TraceEvidence | undefined;
   const hasRec = Boolean(report.recommendation.reasoning || report.recommendation.chosenOption);
@@ -177,6 +193,10 @@ export function ReportCompact({ report, fullTrace, isStreaming }: ReportCompactP
           </h3>
           <TradeoffsRadarChart tradeoffs={report.tradeoffs} />
         </section>
+      )}
+
+      {tier3Profile?.profile && (
+        <Tier3ProfileBlock tier3Profile={tier3Profile} fullTrace={fullTrace} />
       )}
 
       <Accordion type="multiple" defaultValue={['situation', 'options']} className="rounded-2xl border border-white/80 bg-white/40 px-2">
@@ -350,6 +370,121 @@ export function ReportCompact({ report, fullTrace, isStreaming }: ReportCompactP
   );
 }
 
+function Tier3ProfileBlock({
+  tier3Profile,
+  fullTrace,
+}: {
+  tier3Profile: NonNullable<ReportCompactProps['tier3Profile']>;
+  fullTrace: Record<string, unknown> | null;
+}) {
+  const p = tier3Profile.profile ?? {};
+  const confidence = typeof p.confidence === 'number' ? p.confidence : 0;
+  const threshold = typeof tier3Profile.use_threshold === 'number' ? tier3Profile.use_threshold : 0.3;
+  const used = Boolean(tier3Profile.used_in_recommender);
+  const userState = (fullTrace?.user_state as
+    | {
+        profile_values?: string[];
+        profile_priorities?: string[];
+        profile_constraints?: string[];
+      }
+    | undefined) ?? { profile_values: [], profile_priorities: [], profile_constraints: [] };
+
+  const injectedCount =
+    (userState.profile_values?.length ?? 0) +
+    (userState.profile_priorities?.length ?? 0) +
+    (userState.profile_constraints?.length ?? 0);
+
+  return (
+    <section className="rounded-2xl bg-white/70 border border-white/85 p-4 shadow-sm space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm text-gray-900 flex items-center gap-2" style={{ fontWeight: 700 }}>
+            <Brain className="w-4 h-4 text-violet-600" aria-hidden />
+            Tier 3 semantic profile
+          </h3>
+          <p className="text-[11px] text-gray-600 mt-1">
+            Values/risk/themes profile from `cursor_tier3_profile_prompt.md`, loaded for recommender.
+          </p>
+        </div>
+        <span
+          className={cn(
+            'text-[10px] px-2 py-1 rounded-full border',
+            used
+              ? 'bg-emerald-100 text-emerald-900 border-emerald-200'
+              : 'bg-amber-100 text-amber-900 border-amber-200',
+          )}
+          style={{ fontWeight: 700 }}
+        >
+          {used ? 'Profile actively used' : 'Profile weakly weighted'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <MiniMetric label="Confidence" value={confidence.toFixed(2)} />
+        <MiniMetric label="Threshold" value={threshold.toFixed(2)} />
+        <MiniMetric label="Risk posture" value={p.risk_posture || 'unknown'} />
+        <MiniMetric label="Decisions summarized" value={String(p.n_decisions_summarized ?? 0)} />
+      </div>
+
+      <div className="text-[11px] text-gray-600 leading-relaxed rounded-md bg-violet-50/80 border border-violet-100 px-2.5 py-2">
+        In this run, profile fields injected into `user_state` for downstream modules: {injectedCount}
+        {(userState.profile_values?.length ?? 0) > 0 ? ` · values ${userState.profile_values?.length ?? 0}` : ''}
+        {(userState.profile_priorities?.length ?? 0) > 0 ? ` · priorities ${userState.profile_priorities?.length ?? 0}` : ''}
+        {(userState.profile_constraints?.length ?? 0) > 0 ? ` · constraints ${userState.profile_constraints?.length ?? 0}` : ''}
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-3">
+        <StringList title="Values" items={p.values ?? []} />
+        <StringList title="Recurring themes" items={p.recurring_themes ?? []} />
+        <StringList title="Current goals" items={p.current_goals ?? []} />
+        <StringList title="Known constraints" items={p.known_constraints ?? []} />
+      </div>
+
+      <p className="text-[10px] text-gray-500">
+        Source: {tier3Profile.source || 'unknown'}{p.last_updated ? ` · last updated ${p.last_updated}` : ''}
+      </p>
+    </section>
+  );
+}
+
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-white/90 border border-gray-200/80 px-2.5 py-2">
+      <p className="text-[10px] text-gray-500 uppercase" style={{ fontWeight: 600 }}>
+        {label}
+      </p>
+      <p className="text-xs text-gray-900 truncate" style={{ fontWeight: 700 }}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function StringList({ title, items }: { title: string; items: string[] }) {
+  if (!items.length) {
+    return (
+      <div className="rounded-lg bg-white/80 border border-gray-200/80 px-2.5 py-2">
+        <p className="text-[11px] text-gray-500 mb-1" style={{ fontWeight: 700 }}>
+          {title}
+        </p>
+        <p className="text-xs text-gray-400">No signal yet.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg bg-white/80 border border-gray-200/80 px-2.5 py-2">
+      <p className="text-[11px] text-gray-500 mb-1" style={{ fontWeight: 700 }}>
+        {title}
+      </p>
+      <ul className="list-disc ml-4 text-xs text-gray-800 space-y-0.5">
+        {items.slice(0, 5).map((x, i) => (
+          <li key={`${title}-${i}`}>{x}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function EvidenceBlock({
   evidence,
   patterns,
@@ -360,6 +495,20 @@ function EvidenceBlock({
   const facts = evidence?.facts ?? [];
   const rates = evidence?.base_rates ?? [];
   const recent = evidence?.recent_events ?? [];
+  const liveReferenceCount = rates.filter((r) => (r.text || '').toLowerCase().startsWith('live reference')).length;
+  const sourceHosts = (() => {
+    const hosts = new Set<string>();
+    for (const x of [...facts, ...rates, ...recent]) {
+      const raw = (x.source_url ?? '').trim();
+      if (!raw) continue;
+      try {
+        hosts.add(new URL(raw).hostname);
+      } catch {
+        // ignore malformed URLs in diagnostics
+      }
+    }
+    return [...hosts].slice(0, 5);
+  })();
   const patternList = (() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -401,6 +550,10 @@ function EvidenceBlock({
             re-run so the vector index rebuilds.
           </p>
         </details>
+        <div className="rounded-md bg-indigo-50/90 border border-indigo-100 px-2 py-1.5 text-[10px] text-indigo-900 leading-relaxed">
+          Diagnostics — facts: {facts.length}, base rates: {rates.length}, recent events: {recent.length}, live references: {liveReferenceCount}
+          {sourceHosts.length > 0 ? `, sources: ${sourceHosts.join(', ')}` : ', sources: none'}
+        </div>
       </div>
       {patternList.length > 0 && (
         <div>
@@ -415,22 +568,24 @@ function EvidenceBlock({
           </ul>
         </div>
       )}
-      <SnippetList variant="fact" title="Facts" items={facts.map((f) => f.text)} />
-      <SnippetList variant="baseline" title="Base rates" items={rates.map((f) => f.text)} />
-      <SnippetList variant="recent" title="Recent events" items={recent.map((f) => f.text)} />
+      <SnippetList variant="fact" title="Facts" items={facts} />
+      <SnippetList variant="baseline" title="Base rates" items={rates} />
+      <SnippetList variant="recent" title="Recent events" items={recent} />
     </div>
   );
 }
 
-function _dedupeSnippets(items: string[], max: number): string[] {
+type EvidenceItem = { text: string; source_url?: string; confidence?: number };
+
+function _dedupeSnippets(items: EvidenceItem[], max: number): EvidenceItem[] {
   const seen = new Set<string>();
-  const out: string[] = [];
+  const out: EvidenceItem[] = [];
   for (const raw of items) {
-    const t = normalizeEvidenceSnippet(raw);
+    const t = normalizeEvidenceSnippet(raw.text || '');
     const key = t.toLowerCase().slice(0, 800);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    out.push(t);
+    out.push({ ...raw, text: t });
     if (out.length >= max) break;
   }
   return out;
@@ -449,12 +604,13 @@ function normalizeEvidenceSnippet(raw: string): string {
 const SNIPPET_PREVIEW_CHARS = 320;
 
 function EvidenceSnippetRow({
-  text,
+  item,
   emphasis = 'fact',
 }: {
-  text: string;
+  item: EvidenceItem;
   emphasis?: 'fact' | 'baseline' | 'recent';
 }) {
+  const text = item.text || '';
   const [open, setOpen] = useState(false);
   const long = text.length > SNIPPET_PREVIEW_CHARS;
 
@@ -510,6 +666,19 @@ function EvidenceSnippetRow({
           {open ? 'Show less' : 'Show full text'}
         </button>
       )}
+      {item.source_url && (
+        <p className="mt-1.5 text-[10px] text-gray-500 break-all">
+          source:{' '}
+          <a
+            href={item.source_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-indigo-700 hover:underline"
+          >
+            {item.source_url}
+          </a>
+        </p>
+      )}
     </li>
   );
 }
@@ -520,11 +689,10 @@ function SnippetList({
   variant = 'fact',
 }: {
   title: string;
-  items: string[];
+  items: EvidenceItem[];
   variant?: 'fact' | 'baseline' | 'recent';
 }) {
   const deduped = _dedupeSnippets(items, 5);
-  if (deduped.length === 0) return null;
 
   const shell =
     variant === 'baseline'
@@ -569,11 +737,15 @@ function SnippetList({
           Each line below is a baseline-style reference (prior or external rate), not a personal memory pattern.
         </p>
       )}
-      <ul className="space-y-2">
-        {deduped.map((t, i) => (
-          <EvidenceSnippetRow key={i} text={t} emphasis={variant} />
-        ))}
-      </ul>
+      {deduped.length === 0 ? (
+        <p className="text-xs text-gray-500 italic">No items retrieved for this section in the current run.</p>
+      ) : (
+        <ul className="space-y-2">
+          {deduped.map((t, i) => (
+            <EvidenceSnippetRow key={i} item={t} emphasis={variant} />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

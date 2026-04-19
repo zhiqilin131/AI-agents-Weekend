@@ -219,6 +219,52 @@ class UserMemory:
         patterns = list(trace.memory.behavioral_patterns) if trace.memory else []
         self.add_past_decision(past, behavioral_patterns=patterns or None)
 
+    def list_all_past_decisions(self) -> list[PastDecision]:
+        """Return all persisted past decisions for this user, newest first."""
+        rows = self._collection.get(include=["metadatas", "documents"])
+        metadatas = rows.get("metadatas") or []
+        documents = rows.get("documents") or []
+
+        by_decision_id: dict[str, PastDecision] = {}
+        for idx, md_raw in enumerate(metadatas):
+            md = _decode_meta(dict(md_raw or {}))
+            did = str(md.get("decision_id", "") or "").strip()
+            if not did:
+                continue
+            oq = md.get("outcome_quality")
+            if isinstance(oq, (int, float)) and int(oq) == -1:
+                pq: int | None = None
+            elif isinstance(oq, (int, float)):
+                pq = int(oq)
+            else:
+                pq = None
+
+            doc_text = str(documents[idx]) if idx < len(documents) and documents[idx] is not None else ""
+            candidate = PastDecision(
+                decision_id=did,
+                situation_summary=str(md.get("situation_summary", doc_text[:800])),
+                chosen_option=str(md.get("chosen_option", "")),
+                outcome=str(md.get("outcome")) if md.get("outcome") else None,
+                outcome_quality=pq,
+                timestamp=str(md.get("timestamp", "")),
+            )
+            prev = by_decision_id.get(did)
+            if prev is None:
+                by_decision_id[did] = candidate
+                continue
+            # Prefer the entry with the newer valid timestamp.
+            prev_dt = _parse_iso_timestamp(prev.timestamp) or datetime.min.replace(tzinfo=timezone.utc)
+            cand_dt = _parse_iso_timestamp(candidate.timestamp) or datetime.min.replace(tzinfo=timezone.utc)
+            if cand_dt >= prev_dt:
+                by_decision_id[did] = candidate
+
+        out = list(by_decision_id.values())
+        out.sort(
+            key=lambda p: _parse_iso_timestamp(p.timestamp) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return out
+
     def retrieve(self, user_state: UserState, top_k: int = 5) -> MemoryBundle:
         extra = profile_snippet_for_retrieval(user_state)
         query = " ".join(

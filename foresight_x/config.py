@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         validation_alias="OPENAI_EMBEDDING_MODEL",
     )
     openai_api_base: str | None = Field(default=None, validation_alias="OPENAI_API_BASE")
+    #: Auto-refresh Tier 3 profile every N newly accumulated decisions (0 disables auto-refresh).
+    tier3_auto_update_every: int = Field(default=5, ge=0, validation_alias="TIER3_AUTO_UPDATE_EVERY")
+    #: Require at least this many decisions before Tier 3 auto-refresh can run.
+    tier3_min_decisions: int = Field(default=3, ge=1, validation_alias="TIER3_MIN_DECISIONS")
 
     @property
     def memory_dir(self) -> Path:

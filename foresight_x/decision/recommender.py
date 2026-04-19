@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from foresight_x.config import load_settings
 from foresight_x.decision.deadline_normalize import normalize_recommendation_deadlines
+from foresight_x.memory.profile_store import empty_profile, load_profile
 from foresight_x.structured_predict import structured_predict
 from foresight_x.prompts.recommender import recommender_prompt
 from foresight_x.schemas import (
@@ -101,6 +103,9 @@ def recommend(
         chosen = options[0]
 
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or _utc_now_iso()
+    s = load_settings()
+    profile = load_profile(s.foresight_user_id) or empty_profile(s.foresight_user_id)
+    user_profile_json = profile.model_dump_json()
 
     if llm is None:
         return normalize_recommendation_deadlines(
@@ -116,6 +121,7 @@ def recommend(
         memory,
         composite_by_option_id,
         user_state,
+        user_profile_json,
         anchor_now_iso=anchor,
     )
     try:

@@ -104,6 +104,21 @@ def _is_removed_packaged_internship_base_rate(text: str) -> bool:
     return "many students receive only one strong internship offer" in t
 
 
+def _is_placeholder_source_url(url: str | None) -> bool:
+    u = (url or "").strip().lower()
+    if not u:
+        return False
+    return "example.test" in u
+
+
+def _is_placeholder_world_fact_text(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return (
+        "external labor market note" in t
+        or "career decision cache (demo)" in t
+    )
+
+
 def _scalar_metadata(meta: dict[str, Any]) -> dict[str, str | int | float | bool]:
     out: dict[str, str | int | float | bool] = {}
     for k, v in meta.items():
@@ -242,6 +257,20 @@ class WorldKnowledge:
             or len(raw_nodes) < m
             or _time_sensitive(user_state)
         )
+        if self._tavily is not None and not need_tavily:
+            # If cached hits are mostly placeholders, force a live fetch.
+            non_placeholder = 0
+            for node in raw_nodes:
+                md = _world_node_metadata(node)
+                txt = _world_node_text(node)
+                surl = str(md.get("source_url") or "").strip()
+                if _is_placeholder_source_url(surl):
+                    continue
+                if _is_placeholder_world_fact_text(txt):
+                    continue
+                non_placeholder += 1
+            if non_placeholder < m:
+                need_tavily = True
 
         web_facts: list[Fact] = []
         tavily_urls: set[str] = set()
@@ -264,6 +293,8 @@ class WorldKnowledge:
                 continue
             kind = str(md.get("kind", "fact"))
             fact = self._node_to_fact(txt, md)
+            if _is_placeholder_source_url(fact.source_url) or _is_placeholder_world_fact_text(fact.text):
+                continue
             if kind == "base_rate":
                 if _is_removed_packaged_internship_base_rate(fact.text):
                     continue
@@ -277,7 +308,15 @@ class WorldKnowledge:
             else:
                 facts.append(fact)
 
+        if self._tavily is not None and not web_facts and not facts and not base_rates and not recent_events:
+            # Last-resort freshness guard: local cache returned nothing usable after filtering.
+            web_facts = self._tavily.search_as_facts(query)
+            self._ingest_tavily_facts(web_facts)
+
         if need_tavily:
+            for wf in web_facts:
+                base_rates.append(_tavily_fact_as_base_rate(wf))
+        elif web_facts:
             for wf in web_facts:
                 base_rates.append(_tavily_fact_as_base_rate(wf))
 
