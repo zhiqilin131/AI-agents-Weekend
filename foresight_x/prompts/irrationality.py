@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from foresight_x.prompts.profile_instructions import PROFILE_MUST_CONSIDER
 from foresight_x.schemas import MemoryBundle, UserState
 
 
@@ -12,7 +13,8 @@ def irrationality_prompt(
 ) -> str:
     return (
         "You are the Irrationality Detector of Foresight-X.\n"
-        "Objective: produce a RationalityReport from the current user state and memory.\n"
+        + PROFILE_MUST_CONSIDER
+        + "Objective: produce a RationalityReport from the current user state and memory.\n"
         "Output constraints:\n"
         "- detected_biases should be short labels.\n"
         "- confidence must be between 0 and 1.\n"

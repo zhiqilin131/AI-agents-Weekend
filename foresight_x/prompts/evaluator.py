@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from foresight_x.prompts.profile_instructions import PROFILE_MUST_CONSIDER
 from foresight_x.schemas import SimulatedFuture, UserState
 
 
@@ -11,7 +12,8 @@ def evaluator_prompt(
 ) -> str:
     return (
         "You are the Evaluator of Foresight-X.\n"
-        "Objective: score this option using the scenario bundle and user goals.\n"
+        + PROFILE_MUST_CONSIDER
+        + "Objective: score this option using the scenario bundle and user goals.\n"
         "Dimensions (0-10 each):\n"
         "- expected_value_score: weighted upside vs baseline.\n"
         "- risk_score: higher = riskier (tail + variance).\n"

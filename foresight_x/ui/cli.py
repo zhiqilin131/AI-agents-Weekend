@@ -11,6 +11,7 @@ from foresight_x.harness.outcome_tracker import ask_outcome
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.orchestration.pipeline import PipelineContext, run_pipeline
 from foresight_x.retrieval.memory import UserMemory
+from foresight_x.retrieval.tavily_client import build_tavily_gateway
 from foresight_x.retrieval.world_cache import WorldKnowledge
 from foresight_x.schemas import DecisionTrace
 
@@ -30,13 +31,22 @@ def _build_context(settings: Settings) -> tuple[PipelineContext, list[str]]:
         except Exception as exc:
             notes.append(f"Memory unavailable: {exc}")
         try:
-            world = WorldKnowledge(settings=settings)
+            tavily = None
+            if settings.tavily_api_key.strip():
+                try:
+                    tavily = build_tavily_gateway(settings)
+                    notes.append("Tavily web search: enabled (used when rules in world_cache.retrieve match).")
+                except Exception as exc:
+                    notes.append(f"Tavily unavailable: {exc}")
+            else:
+                notes.append("TAVILY_API_KEY missing; live web retrieval is disabled.")
+            world = WorldKnowledge(settings=settings, tavily=tavily)
         except Exception as exc:
             notes.append(f"World retrieval unavailable: {exc}")
     else:
         notes.append("OPENAI_API_KEY missing; running without vector retrieval.")
-    if not settings.tavily_api_key:
-        notes.append("TAVILY_API_KEY missing; live web retrieval is disabled.")
+        if not settings.tavily_api_key:
+            notes.append("TAVILY_API_KEY missing; live web retrieval is disabled.")
     return PipelineContext(settings=settings, llm=llm, user_memory=user_memory, world=world), notes
 
 

@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from foresight_x.structured_predict import structured_predict
 from foresight_x.prompts.perception import perception_prompt
-from foresight_x.schemas import Reversibility, TimePressure, UserState
+from foresight_x.schemas import Reversibility, TimePressure, UserProfile, UserState
 
 
 class StructuredPredictLLM(Protocol):
@@ -47,14 +47,19 @@ def _heuristic_user_state(raw_input: str) -> UserState:
     )
 
 
-def build_user_state(raw_input: str, llm: StructuredPredictLLM | None = None) -> UserState:
+def build_user_state(
+    raw_input: str,
+    llm: StructuredPredictLLM | None = None,
+    *,
+    profile: UserProfile | None = None,
+) -> UserState:
     """Return `UserState` using structured prediction with a robust fallback.
 
     If ``llm`` is ``None``, uses fast heuristics only (orchestration / tests without API keys).
     """
     if llm is None:
         return _heuristic_user_state(raw_input)
-    prompt = perception_prompt(raw_input)
+    prompt = perception_prompt(raw_input, profile=profile)
     try:
         out = structured_predict(llm, UserState, prompt)
         if isinstance(out, UserState):

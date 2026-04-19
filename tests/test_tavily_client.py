@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from foresight_x.retrieval.tavily_client import TavilyGateway
+from foresight_x.retrieval.tavily_client import TAVILY_MAX_QUERY_CHARS, TavilyGateway
 
 
 @pytest.fixture
@@ -45,3 +45,14 @@ def test_search_as_facts_maps_to_schema(tavily_response: dict) -> None:
 def test_requires_api_key() -> None:
     with pytest.raises(ValueError, match="TAVILY_API_KEY"):
         TavilyGateway(api_key="")
+
+
+def test_long_query_truncated_for_tavily_api(tavily_response: dict) -> None:
+    mock_client = MagicMock()
+    mock_client.search.return_value = tavily_response
+    with patch("foresight_x.retrieval.tavily_client.TavilyClient", return_value=mock_client):
+        gw = TavilyGateway(api_key="tvly-test")
+    long_q = "x" * 2000
+    gw.search_as_facts(long_q)
+    passed = mock_client.search.call_args[0][0]
+    assert len(passed) <= TAVILY_MAX_QUERY_CHARS

@@ -2,22 +2,32 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from foresight_x.config import load_settings
 from foresight_x.harness.improvement_loop import apply_outcome_to_memory
 from foresight_x.harness.outcome_tracker import save_decision_outcome
-from foresight_x.orchestration.pipeline import PipelineContext, run_pipeline
-from foresight_x.schemas import DecisionOutcome
+from foresight_x.harness.trace import load_decision_trace
+from foresight_x.harness.trace_index import delete_trace, list_traces
+from foresight_x.orchestration.pipeline import PipelineContext, iter_pipeline_events, run_pipeline
+from foresight_x.perception.clarify_gate import run_clarify_gate
+from foresight_x.profile.store import load_user_profile, save_user_profile
+from foresight_x.schemas import DecisionOutcome, UserProfile
 from foresight_x.ui.cli import _build_context
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _sse_chunk(obj: dict) -> str:
+    return f"data: {json.dumps(obj)}\n\n"
 
 
 app = FastAPI(title="Foresight-X API", version="0.1.0")
@@ -32,6 +42,16 @@ app.add_middleware(
 
 class RunRequest(BaseModel):
     raw_input: str = Field(min_length=1)
+    #: Browser `new Date().toISOString()` — used to anchor action deadlines to the user's clock.
+    client_now_iso: str | None = Field(default=None)
+    #: Optional answers from the pre-run clarification modal (question_id → selected label).
+    clarification_answers: dict[str, str] | None = Field(default=None)
+    #: When true, append clarification lines to the persisted user profile priorities.
+    save_clarification_to_profile: bool = Field(default=False)
+
+
+class ClarifyRequest(BaseModel):
+    raw_input: str = Field(min_length=1)
 
 
 class RunResponse(BaseModel):
@@ -42,7 +62,13 @@ class RunResponse(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    from foresight_x import __version__
+
+    return {
+        "status": "ok",
+        "version": __version__,
+        "api": "foresight-x",
+    }
 
 
 @app.get("/")
@@ -50,7 +76,16 @@ def root() -> dict[str, object]:
     return {
         "service": "Foresight-X API",
         "status": "ok",
-        "routes": ["/api/health", "/api/run", "/api/record-outcome"],
+        "routes": [
+            "/api/health",
+            "/api/run",
+            "/api/run/stream",
+            "/api/profile",
+            "/api/clarify",
+            "/api/traces",
+            "/api/traces/{decision_id}",
+            "/api/record-outcome",
+        ],
     }
 
 
@@ -59,11 +94,25 @@ def health_alias() -> dict[str, str]:
     return health()
 
 
+def _client_anchor_iso(client_now_iso: str | None) -> str | None:
+    if not client_now_iso or not str(client_now_iso).strip():
+        return None
+    s = str(client_now_iso).strip()
+    return s if len(s) >= 10 else None
+
+
 @app.post("/api/run", response_model=RunResponse)
 def run_decision(body: RunRequest) -> RunResponse:
     settings = load_settings()
     ctx, notes = _build_context(settings)
-    trace = run_pipeline(ctx, body.raw_input.strip(), persist_trace=True)
+    trace = run_pipeline(
+        ctx,
+        body.raw_input.strip(),
+        persist_trace=True,
+        anchor_now_iso=_client_anchor_iso(body.client_now_iso),
+        clarification_answers=body.clarification_answers,
+        save_clarification_to_profile=body.save_clarification_to_profile,
+    )
     trace_path = settings.traces_dir / f"{trace.decision_id}.json"
     return RunResponse(
         trace=trace.model_dump(mode="json"),
@@ -72,9 +121,93 @@ def run_decision(body: RunRequest) -> RunResponse:
     )
 
 
+@app.post("/api/run/stream")
+def run_decision_stream(body: RunRequest) -> StreamingResponse:
+    """SSE: notes, meta, per-stage ``partial`` payloads, then ``complete`` with full ``DecisionTrace``."""
+
+    settings = load_settings()
+    ctx, notes = _build_context(settings)
+
+    def gen():
+        yield _sse_chunk({"event": "notes", "notes": notes})
+        for ev in iter_pipeline_events(
+            ctx,
+            body.raw_input.strip(),
+            persist_trace=True,
+            anchor_now_iso=_client_anchor_iso(body.client_now_iso),
+            clarification_answers=body.clarification_answers,
+            save_clarification_to_profile=body.save_clarification_to_profile,
+        ):
+            if ev.get("event") == "complete" and isinstance(ev.get("trace"), dict):
+                tid = ev["trace"].get("decision_id")
+                if isinstance(tid, str) and tid:
+                    ev = {**ev, "trace_path": str(settings.traces_dir / f"{tid}.json")}
+            yield _sse_chunk(ev)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/run", response_model=RunResponse)
 def run_decision_alias(body: RunRequest) -> RunResponse:
     return run_decision(body)
+
+
+@app.get("/api/profile")
+def get_profile() -> dict:
+    return load_user_profile().model_dump(mode="json")
+
+
+@app.put("/api/profile")
+def put_profile(body: UserProfile) -> dict:
+    path = save_user_profile(body)
+    return {"ok": True, "path": str(path)}
+
+
+@app.post("/api/clarify")
+def clarify(body: ClarifyRequest) -> dict:
+    """Return optional multiple-choice questions before running the full pipeline."""
+    settings = load_settings()
+    ctx, _notes = _build_context(settings)
+    profile = load_user_profile(settings)
+    result = run_clarify_gate(body.raw_input.strip(), ctx.llm, profile=profile)
+    return result.model_dump(mode="json")
+
+
+@app.get("/api/traces")
+def get_traces() -> list[dict]:
+    return [t.model_dump(mode="json") for t in list_traces()]
+
+
+@app.get("/api/traces/{decision_id}")
+def get_trace(decision_id: str) -> dict:
+    try:
+        trace = load_decision_trace(decision_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}") from None
+    return trace.model_dump(mode="json")
+
+
+@app.delete("/api/traces/{decision_id}")
+def remove_trace(decision_id: str) -> dict:
+    try:
+        trace_deleted, outcome_deleted = delete_trace(decision_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not trace_deleted:
+        raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}")
+    return {
+        "ok": True,
+        "trace_deleted": trace_deleted,
+        "outcome_deleted": outcome_deleted,
+    }
 
 
 class RecordOutcomeRequest(BaseModel):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from llama_index.core.embeddings import MockEmbedding
 
 from foresight_x.config import Settings
@@ -13,13 +14,12 @@ from foresight_x.retrieval.memory import UserMemory
 from foresight_x.schemas import DecisionOutcome
 
 
-def test_apply_outcome_to_memory_reindexes_trace(tmp_path: Path) -> None:
-    settings = Settings(
-        chroma_persist_dir=tmp_path / "chroma",
-        foresight_data_dir=tmp_path / "data",
-        openai_api_key="test",
-        tavily_api_key="",
-    )
+def test_apply_outcome_to_memory_reindexes_trace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Constructor kwargs are overridden by env / .env; pin dirs for an isolated Chroma store.
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+    settings = Settings()
     trace = run_pipeline(
         PipelineContext(settings=settings, llm=None, user_memory=None, world=None),
         "Should I ask for one week extension?",

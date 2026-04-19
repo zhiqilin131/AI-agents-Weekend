@@ -1,8 +1,7 @@
-import { AppState, DecisionReport } from '../App';
+import { AppState, DecisionReport } from '../model';
 import { LoadingState } from './LoadingState';
 import { EmptyState } from './EmptyState';
-import { ReportSections } from './ReportSections';
-import { TableOfContents } from './TableOfContents';
+import { ReportCompact } from './ReportCompact';
 
 interface ReportPanelProps {
   state: AppState;
@@ -12,6 +11,10 @@ interface ReportPanelProps {
   onToggleJson: () => void;
   onShowOutcome: () => void;
   canRecordOutcome: boolean;
+  runProgress?: number;
+  runStageLabel?: string;
+  /** True while SSE is still streaming after first partial payload. */
+  isStreaming?: boolean;
 }
 
 export function ReportPanel({
@@ -22,24 +25,41 @@ export function ReportPanel({
   onToggleJson,
   onShowOutcome,
   canRecordOutcome,
+  runProgress = 0,
+  runStageLabel = 'Working…',
+  isStreaming = false,
 }: ReportPanelProps) {
   if (state === 'empty') {
     return <EmptyState />;
   }
 
-  if (state === 'loading') {
-    return <LoadingState />;
+  if (state === 'loading' && !report) {
+    return <LoadingState progress={runProgress} stageLabel={runStageLabel} />;
+  }
+
+  if (state === 'loading' && report) {
+    return (
+      <div className="space-y-4">
+        <LoadingState compact progress={runProgress} stageLabel={runStageLabel} />
+        <ReportCompact report={report} fullTrace={fullTrace} isStreaming />
+      </div>
+    );
   }
 
   if (state === 'result' && report) {
     return (
       <div className="space-y-5">
         <h3 className="text-lg text-gray-800 tracking-tight" style={{ fontWeight: 600 }}>
-          7-section output
+          Decision output
         </h3>
-        <ReportSections report={report} />
+        <ReportCompact
+          key={typeof fullTrace?.decision_id === 'string' ? fullTrace.decision_id : 'report'}
+          report={report}
+          fullTrace={fullTrace}
+          isStreaming={false}
+        />
 
-        <div className="flex gap-4">
+        <div className="flex flex-wrap gap-4">
           <button
             type="button"
             onClick={onShowOutcome}
@@ -50,6 +70,7 @@ export function ReportPanel({
             Record Outcome
           </button>
           <button
+            type="button"
             onClick={onToggleJson}
             className="px-7 py-4 bg-white/50 backdrop-blur-2xl text-gray-700 border border-white/80 rounded-full hover:bg-white/70 hover:shadow-lg transition-all text-base"
             style={{ fontWeight: 500 }}
@@ -59,11 +80,11 @@ export function ReportPanel({
         </div>
 
         {showJson && fullTrace && (
-          <div className="p-7 bg-white/50 backdrop-blur-2xl border border-white/80 rounded-[28px] shadow-[0_4px_24px_rgba(0,0,0,0.04)]">
+          <div className="p-7 bg-white/50 backdrop-blur-2xl border border-white/80 rounded-[28px] shadow-[0_4px_24px_rgba(0,0,0,0.04)] max-h-[420px] overflow-y-auto">
             <p className="text-xs text-gray-500 mb-2" style={{ fontWeight: 600 }}>
               Trace JSON (DecisionTrace)
             </p>
-            <pre className="text-xs text-gray-900 overflow-x-auto max-h-[480px]" style={{ fontWeight: 400 }}>
+            <pre className="text-xs text-gray-900 overflow-x-auto whitespace-pre-wrap" style={{ fontWeight: 400 }}>
               {JSON.stringify(fullTrace, null, 2)}
             </pre>
           </div>

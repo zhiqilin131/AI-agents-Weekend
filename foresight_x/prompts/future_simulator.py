@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from foresight_x.prompts.profile_instructions import PROFILE_MUST_CONSIDER
 from foresight_x.schemas import EvidenceBundle, Option, UserState
 
 
@@ -12,7 +13,8 @@ def future_simulator_prompt(
 ) -> str:
     return (
         "You are the Future Simulator of Foresight-X.\n"
-        "Objective: for the given option, describe best / base / worst plausible futures over a time horizon.\n"
+        + PROFILE_MUST_CONSIDER
+        + "Objective: for the given option, describe best / base / worst plausible futures over a time horizon.\n"
         "Constraints:\n"
         "- Output a SimulatedFuture with exactly three scenarios: labels best, base, worst.\n"
         "- Probabilities must sum to 1.0 (+/- 0.05).\n"

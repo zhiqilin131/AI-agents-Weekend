@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.decision.recommender import recommend
@@ -13,7 +14,11 @@ from foresight_x.decision.reflector import reflect
 from foresight_x.harness.trace import save_decision_trace
 from foresight_x.inference.irrationality import detect_irrationality
 from foresight_x.inference.option_generator import generate_options
+from foresight_x.perception.clarify_gate import merge_clarification_answers
 from foresight_x.perception.layer import build_user_state
+from foresight_x.perception.query_enhance import prepare_decision_text
+from foresight_x.profile.merge import append_clarification_to_profile, merge_profile_into_user_state
+from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.retrieval.memory import UserMemory
 from foresight_x.retrieval.world_cache import WorldKnowledge
 from foresight_x.schemas import (
@@ -66,6 +71,28 @@ def retrieve_bundles(
     return memory, evidence
 
 
+def retrieve_bundles_parallel(
+    user_state: UserState,
+    ctx: PipelineContext,
+) -> tuple[MemoryBundle, EvidenceBundle]:
+    """Run memory and world retrieval concurrently (embedding + vector search; thread pool)."""
+
+    def mem() -> MemoryBundle:
+        if ctx.user_memory:
+            return ctx.user_memory.retrieve(user_state)
+        return _empty_memory()
+
+    def ev() -> EvidenceBundle:
+        if ctx.world:
+            return ctx.world.retrieve(user_state)
+        return _empty_evidence()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_m = pool.submit(mem)
+        fut_e = pool.submit(ev)
+        return fut_m.result(), fut_e.result()
+
+
 def step_infer(
     user_state: UserState,
     memory_bundle: MemoryBundle,
@@ -91,13 +118,19 @@ def finalize_trace(
     llm: Any | None,
     persist_trace: bool,
     settings: Settings,
+    user_memory: UserMemory | None = None,
+    original_user_input: str = "",
+    anchor_now_iso: str | None = None,
 ) -> DecisionTrace:
+    anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
     recommendation = recommend(
         evaluations,
         options,
         evidence_bundle,
         memory_bundle,
+        user_state=user_state,
         llm=llm,
+        anchor_now_iso=anchor,
     )
     placeholder = Reflection(
         possible_errors=["pending"],
@@ -109,6 +142,7 @@ def finalize_trace(
     trace = DecisionTrace(
         decision_id=decision_id,
         timestamp=timestamp,
+        original_user_input=original_user_input,
         user_state=user_state,
         memory=memory_bundle,
         evidence=evidence_bundle,
@@ -123,30 +157,95 @@ def finalize_trace(
     trace = trace.model_copy(update={"reflection": reflection})
     if persist_trace:
         save_decision_trace(trace, settings=settings)
+        if user_memory is not None:
+            user_memory.add_decision(trace, outcome=None)
     return trace
 
 
-def run_pipeline(
+def iter_pipeline_events(
     ctx: PipelineContext,
     raw_input: str,
     *,
     decision_id: str | None = None,
+    timestamp: str | None = None,
     persist_trace: bool = True,
-) -> DecisionTrace:
-    """Execute the full RIS stack and return a ``DecisionTrace``; optionally save JSON under ``data/traces/``."""
+    anchor_now_iso: str | None = None,
+    clarification_answers: dict[str, str] | None = None,
+    save_clarification_to_profile: bool = False,
+) -> Iterator[dict[str, Any]]:
+    """Yield meta, partial trace fragments per stage, then ``complete`` (SSE)."""
     settings = ctx.settings or load_settings()
     did = decision_id or str(uuid.uuid4())
-    ts = utc_timestamp()
+    ts = timestamp or utc_timestamp()
+    anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
 
-    user_state = build_user_state(raw_input, ctx.llm)
-    memory_bundle, evidence_bundle = retrieve_bundles(user_state, ctx)
+    yield {"event": "meta", "decision_id": did, "timestamp": ts}
 
+    yield {"event": "stage", "stage": "enhance"}
+    profile = load_user_profile(settings)
+    user_raw = raw_input.strip()
+    effective = merge_clarification_answers(user_raw, clarification_answers)
+    original, enhanced = prepare_decision_text(
+        effective,
+        ctx.llm,
+        profile=profile,
+        original_override=user_raw,
+    )
+    yield {
+        "event": "partial",
+        "stage": "enhance",
+        "data": {"original_user_input": original, "enhanced_preview": enhanced},
+    }
+
+    yield {"event": "stage", "stage": "perceive"}
+    user_state = build_user_state(enhanced, ctx.llm, profile=profile)
+    user_state = merge_profile_into_user_state(user_state, profile)
+    yield {
+        "event": "partial",
+        "stage": "perceive",
+        "data": {"user_state": user_state.model_dump(mode="json")},
+    }
+
+    yield {"event": "stage", "stage": "retrieve"}
+    memory_bundle, evidence_bundle = retrieve_bundles_parallel(user_state, ctx)
+    yield {
+        "event": "partial",
+        "stage": "retrieve",
+        "data": {
+            "memory": memory_bundle.model_dump(mode="json"),
+            "evidence": evidence_bundle.model_dump(mode="json"),
+        },
+    }
+
+    yield {"event": "stage", "stage": "infer"}
     rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
+    yield {
+        "event": "partial",
+        "stage": "infer",
+        "data": {
+            "rationality": rationality.model_dump(mode="json"),
+            "options": [o.model_dump(mode="json") for o in options],
+        },
+    }
 
+    yield {"event": "stage", "stage": "simulate"}
     futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm)
-    evaluations = evaluate_options(futures, user_state, ctx.llm)
+    yield {
+        "event": "partial",
+        "stage": "simulate",
+        "data": {"futures": [f.model_dump(mode="json") for f in futures]},
+    }
 
-    return finalize_trace(
+    yield {"event": "stage", "stage": "evaluate"}
+    evaluations = evaluate_options(futures, user_state, ctx.llm)
+    yield {
+        "event": "partial",
+        "stage": "evaluate",
+        "data": {"evaluations": [e.model_dump(mode="json") for e in evaluations]},
+    }
+
+    yield {"event": "stage", "stage": "finalize"}
+    trace = finalize_trace(
         decision_id=did,
         timestamp=ts,
         user_state=user_state,
@@ -159,4 +258,68 @@ def run_pipeline(
         llm=ctx.llm,
         persist_trace=persist_trace,
         settings=settings,
+        user_memory=ctx.user_memory,
+        original_user_input=original,
+        anchor_now_iso=anchor,
     )
+    if save_clarification_to_profile and clarification_answers:
+        p = append_clarification_to_profile(load_user_profile(settings), clarification_answers)
+        save_user_profile(p, settings=settings)
+    yield {"event": "complete", "trace": trace.model_dump(mode="json")}
+
+
+def run_pipeline(
+    ctx: PipelineContext,
+    raw_input: str,
+    *,
+    decision_id: str | None = None,
+    persist_trace: bool = True,
+    anchor_now_iso: str | None = None,
+    clarification_answers: dict[str, str] | None = None,
+    save_clarification_to_profile: bool = False,
+) -> DecisionTrace:
+    """Execute the full RIS stack and return a ``DecisionTrace``; optionally save JSON under ``data/traces/``."""
+    settings = ctx.settings or load_settings()
+    did = decision_id or str(uuid.uuid4())
+    ts = utc_timestamp()
+    anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
+
+    profile = load_user_profile(settings)
+    user_raw = raw_input.strip()
+    effective = merge_clarification_answers(user_raw, clarification_answers)
+    original, enhanced = prepare_decision_text(
+        effective,
+        ctx.llm,
+        profile=profile,
+        original_override=user_raw,
+    )
+    user_state = build_user_state(enhanced, ctx.llm, profile=profile)
+    user_state = merge_profile_into_user_state(user_state, profile)
+    memory_bundle, evidence_bundle = retrieve_bundles_parallel(user_state, ctx)
+
+    rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
+
+    futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm)
+    evaluations = evaluate_options(futures, user_state, ctx.llm)
+
+    trace = finalize_trace(
+        decision_id=did,
+        timestamp=ts,
+        user_state=user_state,
+        memory_bundle=memory_bundle,
+        evidence_bundle=evidence_bundle,
+        rationality=rationality,
+        options=options,
+        futures=futures,
+        evaluations=evaluations,
+        llm=ctx.llm,
+        persist_trace=persist_trace,
+        settings=settings,
+        user_memory=ctx.user_memory,
+        original_user_input=original,
+        anchor_now_iso=anchor,
+    )
+    if save_clarification_to_profile and clarification_answers:
+        p = append_clarification_to_profile(load_user_profile(settings), clarification_answers)
+        save_user_profile(p, settings=settings)
+    return trace

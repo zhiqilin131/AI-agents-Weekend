@@ -13,8 +13,95 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.retrieval._embeddings import build_openai_embedding
+from foresight_x.retrieval.query_text import profile_snippet_for_retrieval
 from foresight_x.retrieval.tavily_client import TavilyGateway
 from foresight_x.schemas import EvidenceBundle, Fact, UserState
+
+
+def _world_node_text(node: Any) -> str:
+    inner = getattr(node, "node", None)
+    if inner is not None:
+        return str(getattr(inner, "text", "") or "")
+    return str(getattr(node, "text", "") or "")
+
+
+def _world_node_metadata(node: Any) -> dict[str, Any]:
+    inner = getattr(node, "node", None)
+    if inner is not None and getattr(inner, "metadata", None):
+        return dict(inner.metadata)
+    return dict(getattr(node, "metadata", None) or {})
+
+
+def _normalize_world_score(score: float | None, rank: int) -> float:
+    if score is None:
+        return 1.0 / (rank + 1)
+    s = float(score)
+    if 0.0 <= s <= 1.0:
+        return max(0.04, s)
+    if s > 1.0:
+        return max(0.04, 1.0 / (1.0 + s))
+    return max(0.04, min(1.0, s))
+
+
+def _should_emit_packaged_world_fact(user_state: UserState, text: str, md: dict[str, Any]) -> bool:
+    """Hide packaged career demo snippets when the decision is clearly not career-shaped."""
+    v = md.get("packaged_seed")
+    is_seed = v is True or v == 1 or str(v).lower() in ("true", "1", "yes")
+    if not is_seed and "career decision cache (demo)" not in (text or "").lower():
+        return True
+    if not is_seed and "career decision cache (demo)" in (text or "").lower():
+        is_seed = True
+    if not is_seed:
+        return True
+    dt = (user_state.decision_type or "general").lower()
+    if dt in ("career", "academic"):
+        return True
+    return False
+
+
+def _world_seed_multiplier(user_state: UserState, text: str, md: dict[str, Any]) -> float:
+    """Downrank packaged career demo chunks when the query is not career-shaped."""
+    v = md.get("packaged_seed")
+    is_seed = v is True or v == 1 or str(v).lower() in ("true", "1", "yes")
+    if not is_seed and "career decision cache (demo)" in (text or "").lower():
+        is_seed = True
+    if not is_seed:
+        return 1.0
+    dt = (user_state.decision_type or "general").lower()
+    if dt in ("career", "academic"):
+        return 0.86
+    if dt in ("financial", "health"):
+        return 0.5
+    return 0.32
+
+
+def _dedupe_facts_by_text(items: list[Fact]) -> list[Fact]:
+    """Drop near-duplicate snippets (common when the vector store returns overlapping chunks)."""
+    seen: set[str] = set()
+    out: list[Fact] = []
+    for f in items:
+        key = " ".join(f.text.split()).strip().lower()[:6000]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+    return out
+
+
+def _tavily_fact_as_base_rate(wf: Fact) -> Fact:
+    """Turn a web snippet into a query-aligned base-rate line for the UI (not a static seed)."""
+    body = (wf.text or "").strip()
+    if len(body) > 1500:
+        body = body[:1497] + "..."
+    line = f"Live reference (aligned to your question): {body}"
+    conf = wf.confidence if isinstance(wf.confidence, (int, float)) else 0.75
+    return Fact(text=line, source_url=wf.source_url, confidence=min(0.82, float(conf)))
+
+
+def _is_removed_packaged_internship_base_rate(text: str) -> bool:
+    """Old demo seed still present in persisted Chroma; drop it so live/Tavily lines dominate base_rates."""
+    t = (text or "").lower()
+    return "many students receive only one strong internship offer" in t
 
 
 def _scalar_metadata(meta: dict[str, Any]) -> dict[str, str | int | float | bool]:
@@ -78,6 +165,7 @@ class WorldKnowledge:
         kind: str = "fact",
         source_url: str | None = None,
         confidence: float = 0.85,
+        packaged_seed: bool = False,
     ) -> None:
         """Insert a cached knowledge snippet (used by seeding and tests)."""
         meta: dict[str, Any] = {
@@ -86,6 +174,8 @@ class WorldKnowledge:
             "confidence": confidence,
             "doc_id": str(uuid.uuid4()),
         }
+        if packaged_seed:
+            meta["packaged_seed"] = True
         self._index.insert(Document(text=text, metadata=_scalar_metadata(meta)))
 
     def _ingest_tavily_facts(self, facts: list[Fact]) -> None:
@@ -116,42 +206,83 @@ class WorldKnowledge:
         self,
         user_state: UserState,
         *,
-        min_cache_hits: int = 3,
+        min_cache_hits: int | None = None,
         top_k: int = 8,
     ) -> EvidenceBundle:
+        extra = profile_snippet_for_retrieval(user_state)
         query = " ".join(
             [
                 user_state.decision_type,
                 " ".join(user_state.goals),
+                extra,
                 user_state.raw_input[:2000],
             ]
         )
-        retriever = self._index.as_retriever(similarity_top_k=top_k)
-        nodes = retriever.retrieve(query)
+        fetch_k = min(36, max(top_k * 4, 16))
+        retriever = self._index.as_retriever(similarity_top_k=fetch_k)
+        raw_nodes = retriever.retrieve(query)
+
+        ranked: list[tuple[float, Any]] = []
+        for rank, node in enumerate(raw_nodes):
+            md = _world_node_metadata(node)
+            txt = _world_node_text(node)
+            sim = _normalize_world_score(getattr(node, "score", None), rank)
+            mult = _world_seed_multiplier(user_state, txt, md)
+            ranked.append((sim * mult, node))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        nodes = [n for _, n in ranked[:top_k]]
+
+        m = self.settings.tavily_min_cache_hits if min_cache_hits is None else min_cache_hits
+
+        # Heuristic: skip Tavily when the local cache already returns enough chunks and the
+        # decision is not time-sensitive — unless ``tavily_always`` or cache is sparse.
+        # Use raw retrieval size (before top_k slice) so "enough hits" reflects the index, not the cap.
+        need_tavily = self._tavily is not None and (
+            self.settings.tavily_always
+            or len(raw_nodes) < m
+            or _time_sensitive(user_state)
+        )
+
+        web_facts: list[Fact] = []
+        tavily_urls: set[str] = set()
+        if need_tavily:
+            web_facts = self._tavily.search_as_facts(query)
+            self._ingest_tavily_facts(web_facts)
+            for wf in web_facts:
+                u = (wf.source_url or "").strip()
+                if u:
+                    tavily_urls.add(u)
 
         facts: list[Fact] = []
         base_rates: list[Fact] = []
         recent_events: list[Fact] = []
 
         for node in nodes:
-            md = dict(node.metadata or {})
+            md = _world_node_metadata(node)
+            txt = _world_node_text(node)
+            if not _should_emit_packaged_world_fact(user_state, txt, md):
+                continue
             kind = str(md.get("kind", "fact"))
-            fact = self._node_to_fact(node.text, md)
+            fact = self._node_to_fact(txt, md)
             if kind == "base_rate":
+                if _is_removed_packaged_internship_base_rate(fact.text):
+                    continue
                 base_rates.append(fact)
             elif kind in ("recent_event", "event"):
+                surl = str(md.get("source_url") or "").strip()
+                if surl and surl in tavily_urls:
+                    # Same URLs are surfaced under base_rates from this run's Tavily (not pushed to Recent).
+                    continue
                 recent_events.append(fact)
             else:
                 facts.append(fact)
 
-        need_tavily = len(nodes) < min_cache_hits or _time_sensitive(user_state)
-        if need_tavily and self._tavily is not None:
-            extra = self._tavily.search_as_facts(query)
-            self._ingest_tavily_facts(extra)
-            recent_events.extend(extra)
+        if need_tavily:
+            for wf in web_facts:
+                base_rates.append(_tavily_fact_as_base_rate(wf))
 
         return EvidenceBundle(
-            facts=facts,
-            base_rates=base_rates,
-            recent_events=recent_events,
+            facts=_dedupe_facts_by_text(facts),
+            base_rates=_dedupe_facts_by_text(base_rates),
+            recent_events=_dedupe_facts_by_text(recent_events),
         )

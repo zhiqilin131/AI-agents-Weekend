@@ -8,6 +8,7 @@ import pytest
 from llama_index.core.embeddings import MockEmbedding
 
 from foresight_x.config import Settings
+from foresight_x.orchestration.pipeline import PipelineContext, run_pipeline
 from foresight_x.retrieval.memory import UserMemory
 from foresight_x.schemas import (
     PastDecision,
@@ -156,3 +157,29 @@ def test_add_decision_from_trace(embed_model: MockEmbedding, settings: Settings)
     mem.add_decision(trace)
     bundle = mem.retrieve(us, top_k=2)
     assert any(t.decision_id == "t-1" for t in bundle.similar_past_decisions)
+
+
+def test_pipeline_persist_indexes_for_subsequent_retrieval(
+    embed_model: MockEmbedding,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persisted runs are written to UserMemory so later runs can retrieve prior decisions."""
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+    mem = UserMemory(settings.foresight_user_id, settings=settings, embed_model=embed_model)
+    ctx = PipelineContext(settings=settings, llm=None, user_memory=mem)
+    run_pipeline(
+        ctx,
+        "career internship deadline anxiety offer versus wait",
+        decision_id="carry-a",
+        persist_trace=True,
+    )
+    trace_b = run_pipeline(
+        ctx,
+        "career internship follow-up should I renege on acceptance",
+        decision_id="carry-b",
+        persist_trace=True,
+    )
+    bundle = mem.retrieve(trace_b.user_state, top_k=12)
+    ids = {p.decision_id for p in bundle.similar_past_decisions}
+    assert "carry-a" in ids

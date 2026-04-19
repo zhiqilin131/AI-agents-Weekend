@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from foresight_x.schemas import EvidenceBundle, MemoryBundle, Option, OptionEvaluation
+from foresight_x.prompts.profile_instructions import PROFILE_MUST_CONSIDER
+from foresight_x.schemas import EvidenceBundle, MemoryBundle, Option, OptionEvaluation, UserState
 
 
 def recommender_prompt(
@@ -12,15 +13,25 @@ def recommender_prompt(
     evidence: EvidenceBundle,
     memory: MemoryBundle,
     composite_by_option_id: dict[str, float],
+    user_state: UserState,
+    *,
+    anchor_now_iso: str,
 ) -> str:
     return (
         "You are the Recommender of Foresight-X.\n"
-        "Objective: justify the chosen option and list concrete next actions.\n"
+        + PROFILE_MUST_CONSIDER
+        + "Objective: justify the chosen option and list concrete next actions.\n"
         "Constraints:\n"
         "- reasoning must reference memory patterns, evidence, and simulation scores at a high level.\n"
         "- next_actions must be specific (drafts, meetings, checklists) with optional deadlines.\n"
+        "- For each next_actions[].deadline, use the CURRENT_TIME_ANCHOR below: schedule only on or after this "
+        "instant. Prefer ISO dates (YYYY-MM-DD) or unambiguous relative phrases (e.g. \"this Friday\", "
+        "\"within 48 hours\") interpreted from that anchor. Do not use years or calendar dates in the past "
+        "relative to CURRENT_TIME_ANCHOR.\n"
         "- reassessment_triggers are observable events that should prompt a re-run.\n"
         "- Do not invent facts outside EvidenceBundle.\n\n"
+        f"CURRENT_TIME_ANCHOR (ISO-8601 UTC from the user's session or server): {anchor_now_iso}\n\n"
+        f"UserState: {user_state.model_dump_json()}\n"
         f"Chosen option (pre-selected by composite score): {chosen_option.model_dump_json()}\n"
         f"Composite scores by option_id: {composite_by_option_id}\n"
         f"All OptionEvaluation: {[e.model_dump() for e in evaluations]}\n"

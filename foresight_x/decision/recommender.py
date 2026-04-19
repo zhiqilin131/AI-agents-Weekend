@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from foresight_x.decision.deadline_normalize import normalize_recommendation_deadlines
 from foresight_x.structured_predict import structured_predict
 from foresight_x.prompts.recommender import recommender_prompt
-from foresight_x.schemas import EvidenceBundle, MemoryBundle, Option, OptionEvaluation, Recommendation, NextAction
+from foresight_x.schemas import (
+    EvidenceBundle,
+    MemoryBundle,
+    Option,
+    OptionEvaluation,
+    Recommendation,
+    NextAction,
+    UserState,
+)
 
 
 class StructuredPredictLLM(Protocol):
     def structured_predict(self, output_cls: Any, prompt: str, **kwargs: Any) -> Any:
         ...
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 DEFAULT_EVALUATION_WEIGHTS: dict[str, float] = {
@@ -63,8 +77,11 @@ def recommend(
     options: list[Option],
     evidence: EvidenceBundle,
     memory: MemoryBundle,
+    *,
+    user_state: UserState,
     weights: dict[str, float] | None = None,
     llm: StructuredPredictLLM | None = None,
+    anchor_now_iso: str | None = None,
 ) -> Recommendation:
     """Argmax composite score, then optional LLM narrative for reasoning and actions."""
     if not options:
@@ -83,11 +100,23 @@ def recommend(
     else:
         chosen = options[0]
 
+    anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or _utc_now_iso()
+
     if llm is None:
-        return _fallback_recommendation(chosen, composite_by_option_id)
+        return normalize_recommendation_deadlines(
+            _fallback_recommendation(chosen, composite_by_option_id),
+            anchor,
+        )
 
     prompt = recommender_prompt(
-        chosen, evaluations, options, evidence, memory, composite_by_option_id
+        chosen,
+        evaluations,
+        options,
+        evidence,
+        memory,
+        composite_by_option_id,
+        user_state,
+        anchor_now_iso=anchor,
     )
     try:
         raw = structured_predict(llm, Recommendation, prompt)
@@ -95,6 +124,9 @@ def recommend(
         valid_ids = {o.option_id for o in options}
         if rec.chosen_option_id not in valid_ids:
             rec = rec.model_copy(update={"chosen_option_id": chosen.option_id})
-        return rec
+        return normalize_recommendation_deadlines(rec, anchor)
     except Exception:
-        return _fallback_recommendation(chosen, composite_by_option_id)
+        return normalize_recommendation_deadlines(
+            _fallback_recommendation(chosen, composite_by_option_id),
+            anchor,
+        )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Protocol
 
 from foresight_x.structured_predict import structured_predict
@@ -46,24 +47,43 @@ def _heuristic_evaluation(future: SimulatedFuture, user_state: UserState) -> Opt
     )
 
 
+def _evaluate_one(
+    fut: SimulatedFuture,
+    user_state: UserState,
+    llm: StructuredPredictLLM | None,
+) -> OptionEvaluation:
+    if llm is None:
+        return _heuristic_evaluation(fut, user_state)
+    prompt = evaluator_prompt(fut, user_state)
+    try:
+        raw = structured_predict(llm, OptionEvaluation, prompt)
+        ev = raw if isinstance(raw, OptionEvaluation) else OptionEvaluation.model_validate(raw)
+        if ev.option_id != fut.option_id:
+            ev = ev.model_copy(update={"option_id": fut.option_id})
+        return ev
+    except Exception:
+        return _heuristic_evaluation(fut, user_state)
+
+
 def evaluate_options(
     futures: list[SimulatedFuture],
     user_state: UserState,
     llm: StructuredPredictLLM | None = None,
 ) -> list[OptionEvaluation]:
-    """One OptionEvaluation per SimulatedFuture; LLM overrides with structured scores."""
-    evaluations: list[OptionEvaluation] = []
-    for fut in futures:
-        if llm is None:
-            evaluations.append(_heuristic_evaluation(fut, user_state))
-            continue
-        prompt = evaluator_prompt(fut, user_state)
-        try:
-            raw = structured_predict(llm, OptionEvaluation, prompt)
-            ev = raw if isinstance(raw, OptionEvaluation) else OptionEvaluation.model_validate(raw)
-            if ev.option_id != fut.option_id:
-                ev = ev.model_copy(update={"option_id": fut.option_id})
-            evaluations.append(ev)
-        except Exception:
-            evaluations.append(_heuristic_evaluation(fut, user_state))
-    return evaluations
+    """One OptionEvaluation per SimulatedFuture; LLM overrides with structured scores.
+
+    Evaluations run in parallel when using the LLM (same prompts as sequential calls).
+    """
+    if not futures:
+        return []
+    if llm is None:
+        return [_evaluate_one(f, user_state, None) for f in futures]
+
+    max_workers = min(4, len(futures))
+    out: list[OptionEvaluation | None] = [None] * len(futures)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futs = {pool.submit(_evaluate_one, fut, user_state, llm): i for i, fut in enumerate(futures)}
+        for fut in as_completed(futs):
+            idx = futs[fut]
+            out[idx] = fut.result()
+    return [x for x in out if x is not None]

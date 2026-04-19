@@ -22,5 +22,6 @@ def apply_outcome_to_memory(
     s = settings or load_settings()
     trace = load_decision_trace(decision_id, settings=s, traces_dir=traces_dir)
     memory = user_memory or UserMemory(s.foresight_user_id, settings=s)
+    memory.remove_by_decision_id(decision_id)
     memory.add_decision(trace, outcome=outcome)
     return trace

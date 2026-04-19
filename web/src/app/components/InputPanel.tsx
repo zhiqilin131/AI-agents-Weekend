@@ -1,4 +1,4 @@
-import { AppState } from '../App';
+import { AppState } from '../model';
 
 interface InputPanelProps {
   decisionInput: string;
@@ -6,24 +6,23 @@ interface InputPanelProps {
   onRun: () => void;
   onReset: () => void;
   state: AppState;
+  loadingStage?: string | null;
+  stageLabel?: Record<string, string>;
 }
 
-export function InputPanel({ decisionInput, onInputChange, onRun, onReset, state }: InputPanelProps) {
+export function InputPanel({
+  decisionInput,
+  onInputChange,
+  onRun,
+  onReset,
+  state,
+  loadingStage,
+  stageLabel,
+}: InputPanelProps) {
   return (
-    <div className={state === 'empty' ? '' : 'sticky top-16'}>
+    <div>
       <div className="bg-white/50 backdrop-blur-2xl rounded-[32px] p-8 border border-white/80 shadow-[0_8px_32px_rgba(0,0,0,0.06)]">
         <div className="space-y-6">
-          {state !== 'empty' && (
-            <div className="pb-6 border-b border-gray-200/40">
-              <label className="block text-xs uppercase tracking-wider text-gray-500 mb-3" style={{ fontWeight: 600, letterSpacing: '0.05em' }}>
-                Your decision
-              </label>
-              <p className="text-sm text-gray-900 line-clamp-4 leading-relaxed" style={{ fontWeight: 400 }}>
-                {decisionInput}
-              </p>
-            </div>
-          )}
-
           {state === 'empty' && (
             <>
               <div className="space-y-4">
@@ -39,6 +38,10 @@ export function InputPanel({ decisionInput, onInputChange, onRun, onReset, state
                   style={{ fontWeight: 400 }}
                   disabled={state === 'loading'}
                 />
+                <p className="text-[11px] text-gray-500 leading-relaxed -mt-1">
+                  Optional multiple-choice prompts appear only when the model judges your message too vague; clear
+                  decisions (e.g. A vs B with stated constraints) usually skip that step.
+                </p>
               </div>
 
               <button
@@ -50,7 +53,14 @@ export function InputPanel({ decisionInput, onInputChange, onRun, onReset, state
                 {state === 'loading' ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                    Analyzing decision...
+                    <span className="flex flex-col items-center gap-1">
+                      <span>Analyzing decision…</span>
+                      {loadingStage && stageLabel && (
+                        <span className="text-xs font-normal opacity-90">
+                          {stageLabel[loadingStage] ?? loadingStage}
+                        </span>
+                      )}
+                    </span>
                   </>
                 ) : (
                   <>
@@ -62,6 +72,20 @@ export function InputPanel({ decisionInput, onInputChange, onRun, onReset, state
                 )}
               </button>
             </>
+          )}
+
+          {state === 'loading' && (
+            <div className="py-2 space-y-3">
+              <p className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
+                Running pipeline…
+              </p>
+              {loadingStage && stageLabel && (
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  {stageLabel[loadingStage] ?? loadingStage}
+                </p>
+              )}
+              <div className="w-8 h-8 border-2 border-purple-200 border-t-purple-600 rounded-full animate-spin" />
+            </div>
           )}
 
           {state === 'result' && (

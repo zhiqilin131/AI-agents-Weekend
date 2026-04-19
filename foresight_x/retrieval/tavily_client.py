@@ -9,6 +9,16 @@ from tavily import TavilyClient
 from foresight_x.config import Settings, load_settings
 from foresight_x.schemas import Fact
 
+# https://docs.tavily.com/ — API rejects queries over 400 characters.
+TAVILY_MAX_QUERY_CHARS = 400
+
+
+def _truncate_tavily_query(q: str) -> str:
+    s = (q or "").strip()
+    if len(s) <= TAVILY_MAX_QUERY_CHARS:
+        return s
+    return s[: TAVILY_MAX_QUERY_CHARS - 1].rstrip() + "…"
+
 
 class TavilySearchClient(Protocol):
     """Subset of `tavily.TavilyClient` used by `TavilyGateway`."""
@@ -41,8 +51,9 @@ class TavilyGateway:
         confidence: float = 0.75,
         search_depth: str | None = None,
     ) -> list[Fact]:
+        safe_q = _truncate_tavily_query(query)
         payload = self._client.search(
-            query,
+            safe_q,
             max_results=max_results or self._max_results,
             search_depth=search_depth or self._search_depth,
         )

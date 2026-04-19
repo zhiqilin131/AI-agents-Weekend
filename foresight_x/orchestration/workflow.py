@@ -7,14 +7,18 @@ from typing import Any
 
 from llama_index.core.workflow import Event, StartEvent, StopEvent, Workflow, step
 
+from foresight_x.config import load_settings
 from foresight_x.orchestration.pipeline import (
     PipelineContext,
     finalize_trace,
-    retrieve_bundles,
+    retrieve_bundles_parallel,
     step_infer,
     utc_timestamp,
 )
 from foresight_x.perception.layer import build_user_state
+from foresight_x.perception.query_enhance import prepare_decision_text
+from foresight_x.profile.merge import merge_profile_into_user_state
+from foresight_x.profile.store import load_user_profile
 from foresight_x.schemas import (
     EvidenceBundle,
     MemoryBundle,
@@ -41,6 +45,7 @@ class PerceivedEvent(Event):
     decision_id: str
     timestamp: str
     persist_trace: bool
+    original_user_input: str
 
 
 class RetrievedEvent(Event):
@@ -48,6 +53,7 @@ class RetrievedEvent(Event):
     decision_id: str
     timestamp: str
     persist_trace: bool
+    original_user_input: str
     memory: MemoryBundle
     evidence: EvidenceBundle
 
@@ -57,6 +63,7 @@ class InferredEvent(Event):
     decision_id: str
     timestamp: str
     persist_trace: bool
+    original_user_input: str
     memory: MemoryBundle
     evidence: EvidenceBundle
     rationality: RationalityReport
@@ -68,6 +75,7 @@ class SimulatedEvent(Event):
     decision_id: str
     timestamp: str
     persist_trace: bool
+    original_user_input: str
     memory: MemoryBundle
     evidence: EvidenceBundle
     rationality: RationalityReport
@@ -80,6 +88,7 @@ class EvaluatedEvent(Event):
     decision_id: str
     timestamp: str
     persist_trace: bool
+    original_user_input: str
     memory: MemoryBundle
     evidence: EvidenceBundle
     rationality: RationalityReport
@@ -99,22 +108,28 @@ class ForesightWorkflow(Workflow):
     async def perceive(self, ev: ForesightStartEvent) -> PerceivedEvent:
         uid = ev.decision_id or str(uuid.uuid4())
         ts = utc_timestamp()
-        user_state = build_user_state(ev.raw_input, self.pipe_ctx.llm)
+        settings = self.pipe_ctx.settings or load_settings()
+        profile = load_user_profile(settings)
+        original, enhanced = prepare_decision_text(ev.raw_input, self.pipe_ctx.llm, profile=profile)
+        user_state = build_user_state(enhanced, self.pipe_ctx.llm, profile=profile)
+        user_state = merge_profile_into_user_state(user_state, profile)
         return PerceivedEvent(
             user_state=user_state,
             decision_id=uid,
             timestamp=ts,
             persist_trace=ev.persist_trace,
+            original_user_input=original,
         )
 
     @step
     async def retrieve(self, ev: PerceivedEvent) -> RetrievedEvent:
-        memory, evidence = retrieve_bundles(ev.user_state, self.pipe_ctx)
+        memory, evidence = retrieve_bundles_parallel(ev.user_state, self.pipe_ctx)
         return RetrievedEvent(
             user_state=ev.user_state,
             decision_id=ev.decision_id,
             timestamp=ev.timestamp,
             persist_trace=ev.persist_trace,
+            original_user_input=ev.original_user_input,
             memory=memory,
             evidence=evidence,
         )
@@ -129,6 +144,7 @@ class ForesightWorkflow(Workflow):
             decision_id=ev.decision_id,
             timestamp=ev.timestamp,
             persist_trace=ev.persist_trace,
+            original_user_input=ev.original_user_input,
             memory=ev.memory,
             evidence=ev.evidence,
             rationality=rationality,
@@ -145,6 +161,7 @@ class ForesightWorkflow(Workflow):
             decision_id=ev.decision_id,
             timestamp=ev.timestamp,
             persist_trace=ev.persist_trace,
+            original_user_input=ev.original_user_input,
             memory=ev.memory,
             evidence=ev.evidence,
             rationality=ev.rationality,
@@ -160,6 +177,7 @@ class ForesightWorkflow(Workflow):
             decision_id=ev.decision_id,
             timestamp=ev.timestamp,
             persist_trace=ev.persist_trace,
+            original_user_input=ev.original_user_input,
             memory=ev.memory,
             evidence=ev.evidence,
             rationality=ev.rationality,
@@ -170,8 +188,6 @@ class ForesightWorkflow(Workflow):
 
     @step
     async def decide(self, ev: EvaluatedEvent) -> StopEvent:
-        from foresight_x.config import load_settings
-
         settings = self.pipe_ctx.settings or load_settings()
         trace = finalize_trace(
             decision_id=ev.decision_id,
@@ -186,6 +202,9 @@ class ForesightWorkflow(Workflow):
             llm=self.pipe_ctx.llm,
             persist_trace=ev.persist_trace,
             settings=settings,
+            user_memory=self.pipe_ctx.user_memory,
+            original_user_input=ev.original_user_input,
+            anchor_now_iso=utc_timestamp(),
         )
         return StopEvent(result=trace)
 

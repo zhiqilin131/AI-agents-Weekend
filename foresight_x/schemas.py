@@ -20,6 +20,15 @@ class Reversibility(str, Enum):
     IRREVERSIBLE = "irreversible"
 
 
+class UserProfile(BaseModel):
+    """Persisted user context (\"shadow self\"): priorities, narrative, constraints."""
+
+    priorities: list[str] = Field(default_factory=list)
+    about_me: str = ""
+    constraints: list[str] = Field(default_factory=list)
+    values: list[str] = Field(default_factory=list)
+
+
 class UserState(BaseModel):
     raw_input: str
     goals: list[str]
@@ -30,6 +39,11 @@ class UserState(BaseModel):
     decision_type: str
     reversibility: Reversibility
     deadline_hint: str | None = None
+    # Filled from persisted UserProfile for retrieval + LLM prompts (defaults keep older traces valid).
+    profile_priorities: list[str] = Field(default_factory=list)
+    profile_about_me: str = ""
+    profile_constraints: list[str] = Field(default_factory=list)
+    profile_values: list[str] = Field(default_factory=list)
 
 
 class PastDecision(BaseModel):
@@ -133,6 +147,10 @@ class Reflection(BaseModel):
 class DecisionTrace(BaseModel):
     decision_id: str
     timestamp: str
+    original_user_input: str = Field(
+        default="",
+        description="Exact user text before optional LLM clarification (empty on legacy traces).",
+    )
     user_state: UserState
     memory: MemoryBundle
     evidence: EvidenceBundle
@@ -159,3 +177,12 @@ class HarnessReport(BaseModel):
     trace_count: int = 0
     outcome_count: int = 0
     notes: str = ""
+
+
+class TraceListItem(BaseModel):
+    """Metadata for a saved decision trace (GET /api/traces)."""
+
+    decision_id: str
+    timestamp: str
+    decision_type: str
+    preview: str

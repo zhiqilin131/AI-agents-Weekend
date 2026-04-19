@@ -67,7 +67,7 @@ def test_pipeline_yields_valid_decision_trace() -> None:
 
     futures = simulate_futures(options, state, evidence, llm=None)
     evaluations = evaluate_options(futures, state, llm=None)
-    recommendation = recommend(evaluations, options, evidence, memory, llm=None)
+    recommendation = recommend(evaluations, options, evidence, memory, user_state=state, llm=None)
 
     placeholder = Reflection(
         possible_errors=["pending"],

@@ -14,6 +14,7 @@ from llama_index.core.embeddings import MockEmbedding
 from foresight_x.config import Settings
 from foresight_x.inference.option_generator import OptionSet
 from foresight_x.orchestration.pipeline import PipelineContext, run_pipeline
+from foresight_x.perception.query_enhance import EnhancedDecisionText
 from foresight_x.orchestration.workflow import ForesightStartEvent, ForesightWorkflow, run_pipeline_workflow
 from foresight_x.retrieval.memory import UserMemory
 from foresight_x.retrieval.seed import ingest_memory_json, ingest_world_markdown
@@ -185,6 +186,8 @@ class RoutingLLM:
         name = getattr(output_cls, "__name__", "")
         self.output_classes.append(name)
 
+        if name == "EnhancedDecisionText":
+            return EnhancedDecisionText(enhanced_question="synthetic routing input")
         if name == "UserState":
             return UserState(
                 raw_input="synthetic routing input",
@@ -281,6 +284,7 @@ def test_routing_llm_full_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     )
 
     expected_types = [
+        "EnhancedDecisionText",
         "UserState",
         "RationalityReport",
         "OptionSet",
@@ -322,7 +326,7 @@ def test_tavily_mock_injects_recent_events_in_trace(
     embed_model: MockEmbedding,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sparse cache + time-sensitive query calls Tavily mock; trace JSON lists recent_events."""
+    """Sparse cache + time-sensitive query calls Tavily mock; web snippets appear in evidence (base_rates or recent_events)."""
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     mock_gw = MagicMock()
     mock_gw.search_as_facts.return_value = [
@@ -346,6 +350,7 @@ def test_tavily_mock_injects_recent_events_in_trace(
         persist_trace=True,
     )
     assert mock_gw.search_as_facts.called
-    assert any("labor market" in f.text.lower() for f in trace.evidence.recent_events)
+    web_evidence = list(trace.evidence.recent_events) + list(trace.evidence.base_rates)
+    assert any("labor market" in f.text.lower() for f in web_evidence)
     dumped = (chroma_settings.foresight_data_dir / "traces" / "tavily-trace-1.json").read_text(encoding="utf-8")
-    assert "labor market" in dumped.lower() or "recent_events" in dumped
+    assert "labor market" in dumped.lower()

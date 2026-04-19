@@ -10,7 +10,11 @@ from foresight_x.config import Settings, load_settings
 
 
 def build_openai_llm(settings: Settings | None = None) -> Any:
-    """Build a LlamaIndex OpenAI-compatible LLM for structured_predict calls."""
+    """Build a LlamaIndex OpenAI-compatible LLM for structured_predict calls.
+
+    Using a smaller/faster model via OPENAI_MODEL reduces cost/latency but can hurt
+    structured-output fidelity and calibration — only appropriate for non-critical steps.
+    """
     s = settings or load_settings()
     kwargs: dict[str, Any] = {
         "model": s.openai_model,

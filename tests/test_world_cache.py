@@ -30,6 +30,30 @@ def embed_model() -> MockEmbedding:
     return MockEmbedding(embed_dim=1536)
 
 
+def test_deprecated_internship_base_rate_filtered(settings: Settings, embed_model: MockEmbedding) -> None:
+    wk = WorldKnowledge(settings=settings, embed_model=embed_model, tavily=None)
+    wk.insert_text(
+        "Base rate heuristic: many students receive only one strong internship offer per cycle; "
+        "asking for a short extension is common and often granted.",
+        kind="base_rate",
+        confidence=0.7,
+        packaged_seed=True,
+    )
+    state = UserState(
+        raw_input="compare offers",
+        goals=["fit"],
+        time_pressure=TimePressure.LOW,
+        stress_level=2,
+        workload=3,
+        current_behavior="calm",
+        decision_type="career",
+        reversibility=Reversibility.REVERSIBLE,
+    )
+    ev = wk.retrieve(state, min_cache_hits=1, top_k=8)
+    joined = " ".join(f.text for f in ev.base_rates).lower()
+    assert "internship offer per cycle" not in joined
+
+
 def test_cache_only_no_tavily(settings: Settings, embed_model: MockEmbedding) -> None:
     wk = WorldKnowledge(settings=settings, embed_model=embed_model, tavily=None)
     ingest_world_markdown(wk)
@@ -66,4 +90,7 @@ def test_tavily_supplements_when_sparse(settings: Settings, embed_model: MockEmb
     )
     ev = wk.retrieve(state, min_cache_hits=5, top_k=3)
     assert mock_gw.search_as_facts.called
-    assert len(ev.recent_events) >= 1
+    br = " ".join(f.text for f in ev.base_rates).lower()
+    assert "live web snippet about recruiting" in br
+    # Tavily hits are not pushed to recent_events (only base_rates).
+    assert not any("live web snippet about recruiting" in (f.text or "").lower() for f in ev.recent_events)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from foresight_x.prompts.profile_instructions import PROFILE_MUST_CONSIDER
 from foresight_x.schemas import EvidenceBundle, MemoryBundle, UserState
 
 
@@ -12,7 +13,8 @@ def option_generator_prompt(
 ) -> str:
     return (
         "You are the Option Generator of Foresight-X.\n"
-        "Objective: propose 2-4 distinct options for the user's decision.\n"
+        + PROFILE_MUST_CONSIDER
+        + "Objective: propose 2-4 distinct options for the user's decision.\n"
         "Constraints:\n"
         "- At least one option should expand beyond explicit user wording.\n"
         "- Options must be mutually distinct, not paraphrases.\n"

@@ -15,10 +15,11 @@ from foresight_x.schemas import Reversibility, TimePressure, UserState
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
+def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """Isolate Chroma from repo ``data/chroma`` (integration tests may ingest Tavily mocks)."""
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path / "data"))
     return Settings(
-        chroma_persist_dir=tmp_path / "chroma",
-        foresight_data_dir=tmp_path / "data",
         openai_api_key="test",
         tavily_api_key="test",
     )

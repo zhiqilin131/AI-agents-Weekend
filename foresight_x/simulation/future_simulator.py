@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Protocol
 
 from foresight_x.structured_predict import structured_predict
@@ -88,23 +89,46 @@ def _coerce_simulated_future(raw: Any, opt: Option) -> SimulatedFuture:
     )
 
 
+def _simulate_one_future(
+    opt: Option,
+    user_state: UserState,
+    evidence: EvidenceBundle,
+    llm: StructuredPredictLLM | None,
+) -> SimulatedFuture:
+    if llm is None:
+        return _fallback_future(opt, user_state, evidence)
+    prompt = future_simulator_prompt(opt, user_state, evidence)
+    try:
+        raw = structured_predict(llm, SimulatedFuture, prompt)
+        return _coerce_simulated_future(raw, opt)
+    except Exception:
+        return _fallback_future(opt, user_state, evidence)
+
+
 def simulate_futures(
     options: list[Option],
     user_state: UserState,
     evidence: EvidenceBundle,
     llm: StructuredPredictLLM | None = None,
 ) -> list[SimulatedFuture]:
-    """Produce a SimulatedFuture per option; LLM path uses structured output with probability normalization."""
-    out: list[SimulatedFuture] = []
-    for opt in options:
-        if llm is None:
-            out.append(_fallback_future(opt, user_state, evidence))
-            continue
-        prompt = future_simulator_prompt(opt, user_state, evidence)
-        try:
-            raw = structured_predict(llm, SimulatedFuture, prompt)
-            fut = _coerce_simulated_future(raw, opt)
-            out.append(fut)
-        except Exception:
-            out.append(_fallback_future(opt, user_state, evidence))
-    return out
+    """Produce a SimulatedFuture per option; LLM path uses structured output with probability normalization.
+
+    Independent options are simulated in parallel (thread pool) to reduce wall-clock time without
+    changing prompts or schemas — same outputs as sequential calls, modulo API ordering.
+    """
+    if not options:
+        return []
+    if llm is None:
+        return [_simulate_one_future(o, user_state, evidence, None) for o in options]
+
+    max_workers = min(4, len(options))
+    out: list[SimulatedFuture | None] = [None] * len(options)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futs = {
+            pool.submit(_simulate_one_future, opt, user_state, evidence, llm): i
+            for i, opt in enumerate(options)
+        }
+        for fut in as_completed(futs):
+            idx = futs[fut]
+            out[idx] = fut.result()
+    return [x for x in out if x is not None]

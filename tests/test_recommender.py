@@ -67,7 +67,7 @@ def test_composite_score_monotonic() -> None:
 
 
 def test_recommend_picks_higher_composite() -> None:
-    _, mem, ev = _ctx()
+    st, mem, ev = _ctx()
     options = [
         Option(option_id="a", name="A", description="", key_assumptions=[], cost_of_reversal="low"),
         Option(option_id="b", name="B", description="", key_assumptions=[], cost_of_reversal="low"),
@@ -92,12 +92,12 @@ def test_recommend_picks_higher_composite() -> None:
             rationale="",
         ),
     ]
-    rec = recommend(evaluations, options, ev, mem, llm=None)
+    rec = recommend(evaluations, options, ev, mem, user_state=st, llm=None)
     assert rec.chosen_option_id == "b"
 
 
 def test_recommend_llm_path() -> None:
-    _, mem, ev = _ctx()
+    st, mem, ev = _ctx()
     options = [
         Option(option_id="x", name="X", description="", key_assumptions=[], cost_of_reversal="low"),
     ]
@@ -118,12 +118,12 @@ def test_recommend_llm_path() -> None:
         next_actions=[],
         reassessment_triggers=["t1"],
     )
-    rec = recommend(evaluations, options, ev, mem, llm=FakeLLM(rec_obj))
+    rec = recommend(evaluations, options, ev, mem, user_state=st, llm=FakeLLM(rec_obj))
     assert rec.reasoning.startswith("Because")
 
 
 def test_recommend_invalid_chosen_id_snapped() -> None:
-    _, mem, ev = _ctx()
+    st, mem, ev = _ctx()
     options = [
         Option(option_id="ok", name="OK", description="", key_assumptions=[], cost_of_reversal="low"),
     ]
@@ -144,13 +144,20 @@ def test_recommend_invalid_chosen_id_snapped() -> None:
         next_actions=[],
         reassessment_triggers=[],
     )
-    rec = recommend(evaluations, options, ev, mem, llm=FakeLLM(bad))
+    rec = recommend(evaluations, options, ev, mem, user_state=st, llm=FakeLLM(bad))
     assert rec.chosen_option_id == "ok"
 
 
 def test_recommend_requires_options() -> None:
+    st, mem, ev = _ctx()
     try:
-        recommend([], [], EvidenceBundle(facts=[], base_rates=[], recent_events=[]), MemoryBundle(similar_past_decisions=[], behavioral_patterns=[], prior_outcomes_summary=""))
+        recommend(
+            [],
+            [],
+            ev,
+            mem,
+            user_state=st,
+        )
         raise AssertionError("expected ValueError")
     except ValueError as e:
         assert "at least one option" in str(e).lower()

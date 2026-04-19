@@ -27,23 +27,17 @@ def ingest_memory_json(user_memory: UserMemory, path: Path | None = None) -> int
         payload = {k: row[k] for k in allowed if k in row}
         past = PastDecision.model_validate(payload)
         extra = list(row.get("behavioral_patterns") or []) + global_patterns
-        user_memory.add_past_decision(past, behavioral_patterns=extra or None)
+        user_memory.add_past_decision(past, behavioral_patterns=extra or None, packaged_seed=True)
         count += 1
     return count
 
 
 def ingest_world_markdown(world: WorldKnowledge, path: Path | None = None) -> None:
-    """Insert static career-domain text as cached facts."""
+    """Insert optional packaged reference text as cached facts (no fixed internship base-rate line)."""
     p = path or _seed_dir() / "world_career.md"
     if not p.exists():
         return
     text = p.read_text(encoding="utf-8").strip()
     if not text:
         return
-    world.insert_text(text, kind="fact", confidence=0.9)
-    world.insert_text(
-        "Base rate heuristic: many students receive only one strong internship offer per cycle; "
-        "asking for a short extension is common and often granted.",
-        kind="base_rate",
-        confidence=0.7,
-    )
+    world.insert_text(text, kind="fact", confidence=0.9, packaged_seed=True)

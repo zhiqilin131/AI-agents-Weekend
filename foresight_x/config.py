@@ -18,6 +18,10 @@ class Settings(BaseSettings):
         default="advanced",
         validation_alias="TAVILY_SEARCH_DEPTH",
     )
+    #: Call Tavily on every run (when API key is set), not only when the cache is sparse.
+    tavily_always: bool = Field(default=False, validation_alias="TAVILY_ALWAYS")
+    #: If local Chroma has fewer than this many hits, run Tavily (unless ``tavily_always``).
+    tavily_min_cache_hits: int = Field(default=3, ge=0, validation_alias="TAVILY_MIN_CACHE_HITS")
 
     chroma_persist_dir: Path = Field(
         default=Path("./data/chroma"),
@@ -47,6 +51,10 @@ class Settings(BaseSettings):
     @property
     def traces_dir(self) -> Path:
         return self.foresight_data_dir / "traces"
+
+    @property
+    def profile_dir(self) -> Path:
+        return self.foresight_data_dir / "profile"
 
     @property
     def outcomes_dir(self) -> Path:
