@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,38 +11,44 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # Allow ``Settings(chroma_persist_dir=..., foresight_data_dir=...)``; without this,
+        # validation_alias-only fields ignore constructor kwargs and fall back to .env/defaults.
+        populate_by_name=True,
     )
 
-    tavily_api_key: str = Field(default="", validation_alias="TAVILY_API_KEY")
+    tavily_api_key: str = Field(default="", validation_alias=AliasChoices("tavily_api_key", "TAVILY_API_KEY"))
     tavily_search_depth: str = Field(
         default="advanced",
-        validation_alias="TAVILY_SEARCH_DEPTH",
+        validation_alias=AliasChoices("tavily_search_depth", "TAVILY_SEARCH_DEPTH"),
     )
     #: Call Tavily on every run (when API key is set), not only when the cache is sparse.
-    tavily_always: bool = Field(default=False, validation_alias="TAVILY_ALWAYS")
+    tavily_always: bool = Field(default=False, validation_alias=AliasChoices("tavily_always", "TAVILY_ALWAYS"))
     #: If local Chroma has fewer than this many hits, run Tavily (unless ``tavily_always``).
-    tavily_min_cache_hits: int = Field(default=3, ge=0, validation_alias="TAVILY_MIN_CACHE_HITS")
+    tavily_min_cache_hits: int = Field(default=3, ge=0, validation_alias=AliasChoices("tavily_min_cache_hits", "TAVILY_MIN_CACHE_HITS"))
 
     chroma_persist_dir: Path = Field(
         default=Path("./data/chroma"),
-        validation_alias="CHROMA_PERSIST_DIR",
+        validation_alias=AliasChoices("chroma_persist_dir", "CHROMA_PERSIST_DIR"),
     )
 
-    foresight_user_id: str = Field(default="demo_user", validation_alias="FORESIGHT_USER_ID")
-    foresight_data_dir: Path = Field(default=Path("./data"), validation_alias="FORESIGHT_DATA_DIR")
+    foresight_user_id: str = Field(default="demo_user", validation_alias=AliasChoices("foresight_user_id", "FORESIGHT_USER_ID"))
+    foresight_data_dir: Path = Field(
+        default=Path("./data"),
+        validation_alias=AliasChoices("foresight_data_dir", "FORESIGHT_DATA_DIR"),
+    )
 
     # LlamaIndex uses OpenAI-compatible APIs for chat + embeddings (RAG still uses LlamaIndex + Chroma).
-    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_MODEL")
+    openai_api_key: str = Field(default="", validation_alias=AliasChoices("openai_api_key", "OPENAI_API_KEY"))
+    openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("openai_model", "OPENAI_MODEL"))
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",
-        validation_alias="OPENAI_EMBEDDING_MODEL",
+        validation_alias=AliasChoices("openai_embedding_model", "OPENAI_EMBEDDING_MODEL"),
     )
-    openai_api_base: str | None = Field(default=None, validation_alias="OPENAI_API_BASE")
+    openai_api_base: str | None = Field(default=None, validation_alias=AliasChoices("openai_api_base", "OPENAI_API_BASE"))
     #: Auto-refresh Tier 3 profile every N newly accumulated decisions (0 disables auto-refresh).
-    tier3_auto_update_every: int = Field(default=5, ge=0, validation_alias="TIER3_AUTO_UPDATE_EVERY")
+    tier3_auto_update_every: int = Field(default=5, ge=0, validation_alias=AliasChoices("tier3_auto_update_every", "TIER3_AUTO_UPDATE_EVERY"))
     #: Require at least this many decisions before Tier 3 auto-refresh can run.
-    tier3_min_decisions: int = Field(default=3, ge=1, validation_alias="TIER3_MIN_DECISIONS")
+    tier3_min_decisions: int = Field(default=3, ge=1, validation_alias=AliasChoices("tier3_min_decisions", "TIER3_MIN_DECISIONS"))
 
     @property
     def memory_dir(self) -> Path:

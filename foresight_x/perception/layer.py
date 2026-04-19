@@ -34,6 +34,22 @@ def _heuristic_user_state(raw_input: str) -> UserState:
     if "reversible" in text:
         reversibility = Reversibility.REVERSIBLE
 
+    decision_type = "general"
+    if any(
+        k in text
+        for k in (
+            "internship",
+            "job offer",
+            "return offer",
+            "recruiting",
+            "campus recruiting",
+            "full-time",
+            "full time",
+            "career ",
+        )
+    ):
+        decision_type = "career"
+
     return UserState(
         raw_input=raw_input,
         goals=["make a high-quality decision"],
@@ -41,7 +57,7 @@ def _heuristic_user_state(raw_input: str) -> UserState:
         stress_level=stress_level,
         workload=5,
         current_behavior="seeking guidance",
-        decision_type="general",
+        decision_type=decision_type,
         reversibility=reversibility,
         deadline_hint="unknown" if time_pressure == TimePressure.HIGH else None,
     )

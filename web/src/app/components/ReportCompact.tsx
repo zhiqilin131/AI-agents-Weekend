@@ -64,6 +64,18 @@ interface TraceEvidence {
   recent_events?: Array<{ text: string; source_url?: string }>;
 }
 
+interface TraceMemoryBlock {
+  behavioral_patterns?: string[];
+  similar_past_decisions?: Array<{
+    decision_id?: string;
+    situation_summary?: string;
+    chosen_option?: string;
+    outcome?: string | null;
+    timestamp?: string;
+  }>;
+  prior_outcomes_summary?: string;
+}
+
 interface ReportCompactProps {
   report: DecisionReport;
   fullTrace: Record<string, unknown> | null;
@@ -293,7 +305,11 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
             Memory & evidence
           </AccordionTrigger>
           <AccordionContent>
-            <EvidenceBlock evidence={evidence} patterns={report.insights.memoryPatterns} />
+            <EvidenceBlock
+              evidence={evidence}
+              patterns={report.insights.memoryPatterns}
+              memoryTrace={fullTrace?.memory as TraceMemoryBlock | undefined}
+            />
           </AccordionContent>
         </AccordionItem>
 
@@ -488,9 +504,11 @@ function StringList({ title, items }: { title: string; items: string[] }) {
 function EvidenceBlock({
   evidence,
   patterns,
+  memoryTrace,
 }: {
   evidence?: TraceEvidence;
   patterns?: string[];
+  memoryTrace?: TraceMemoryBlock;
 }) {
   const facts = evidence?.facts ?? [];
   const rates = evidence?.base_rates ?? [];
@@ -526,16 +544,17 @@ function EvidenceBlock({
     <div className="space-y-3 text-sm">
       <div className="text-[11px] text-gray-500 leading-relaxed border-b border-gray-200/60 pb-2 mb-1 space-y-1.5">
         <p>
-          <span style={{ fontWeight: 600 }}>Patterns</span> — short labels from similar past decisions in memory (not
-          your full chat).
+          <span style={{ fontWeight: 600 }}>Vector memory</span> — similar past decisions you stored in this app (not
+          your full chat transcript). <span style={{ fontWeight: 600 }}>Patterns</span> are short labels derived from
+          those records.
           <span className="mx-1">·</span>
-          <span style={{ fontWeight: 600 }}>Facts</span> — static or retrieved reference snippets.
+          <span style={{ fontWeight: 600 }}>Facts</span> — static or cached reference snippets from the world index.
           <span className="mx-1">·</span>
-          <span style={{ fontWeight: 600 }}>Base rates</span> (<span className="text-amber-800/95">baseline</span>) — priors /
-          heuristic reference rates, including query-aligned web lines.
+          <span style={{ fontWeight: 600 }}>Base rates</span> (<span className="text-amber-800/95">baseline</span>) —
+          priors / heuristic rates and <em>all live web search lines</em> (Tavily), shown as &quot;Live reference…&quot;.
           <span className="mx-1">·</span>
-          <span style={{ fontWeight: 600 }}>Recent</span> — fresher web or event-style snippets. Career demo seeds are
-          hidden when your decision type is not career/academic.
+          <span style={{ fontWeight: 600 }}>Recent</span> — only non-web event lines (rare); web results are not listed
+          here. Career demo seeds are hidden when your decision type is not career/academic.
         </p>
         <details className="group rounded-md bg-gray-50/90 border border-gray-100 px-2 py-1.5">
           <summary className="cursor-pointer list-none text-purple-800/90 [&::-webkit-details-marker]:hidden flex items-center gap-1 select-none">
@@ -555,6 +574,43 @@ function EvidenceBlock({
           {sourceHosts.length > 0 ? `, sources: ${sourceHosts.join(', ')}` : ', sources: none'}
         </div>
       </div>
+      {(memoryTrace?.prior_outcomes_summary || '').trim().length > 0 && (
+        <div className="rounded-lg border border-violet-200/80 bg-violet-50/60 px-3 py-2">
+          <p className="text-[10px] text-violet-900 uppercase mb-1" style={{ fontWeight: 700 }}>
+            Prior outcomes summary (memory)
+          </p>
+          <p className="text-xs text-gray-800 leading-relaxed whitespace-pre-wrap">
+            {memoryTrace?.prior_outcomes_summary}
+          </p>
+        </div>
+      )}
+
+      {memoryTrace?.similar_past_decisions && memoryTrace.similar_past_decisions.length > 0 && (
+        <div>
+          <p className="text-xs text-gray-500 mb-1 flex items-center gap-1" style={{ fontWeight: 600 }}>
+            <Brain className="w-3.5 h-3.5" aria-hidden />
+            Similar past decisions (retrieved)
+          </p>
+          <ul className="space-y-2">
+            {memoryTrace.similar_past_decisions.slice(0, 5).map((d, i) => (
+              <li
+                key={d.decision_id ?? i}
+                className="text-xs text-gray-800 rounded-lg border border-gray-200/80 bg-white/80 px-2.5 py-2 leading-relaxed"
+              >
+                <span className="text-[10px] text-gray-500 font-mono block mb-0.5">{d.decision_id ?? '—'}</span>
+                {d.situation_summary ?? '—'}
+                {(d.chosen_option || '').length > 0 && (
+                  <span className="block mt-1 text-gray-600">
+                    <span style={{ fontWeight: 600 }}>Chose: </span>
+                    {d.chosen_option}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {patternList.length > 0 && (
         <div>
           <p className="text-xs text-gray-500 mb-1 flex items-center gap-1" style={{ fontWeight: 600 }}>

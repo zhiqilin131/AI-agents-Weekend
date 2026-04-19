@@ -1,7 +1,8 @@
 {
   "user_id": "demo_user",
   "values": [
-    "values stability over short-term gain"
+    "values stability over short-term gain",
+    "prioritizes relationships over career aspirations"
   ],
   "risk_posture": "moderate",
   "recurring_themes": [
@@ -17,9 +18,9 @@
     "upcoming graduation",
     "financial considerations"
   ],
-  "n_decisions_summarized": 30,
-  "last_updated": "2026-04-19T09:38:07.986594",
-  "confidence": 0.7,
+  "n_decisions_summarized": 42,
+  "last_updated": "2026-04-19T09:55:04.307125",
+  "confidence": 0.8,
   "priorities": [],
   "about_me": "",
   "constraints": []

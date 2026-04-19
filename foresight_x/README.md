@@ -1,6 +1,8 @@
 # Foresight-X package
 
-Python package implementing the RIS pipeline and Harness. See repository root specs:
+Python package implementing the RIS pipeline and Harness. **Overview, memory vs evidence buckets, and run instructions:** repository root `README.md`.
+
+Specs:
 
 - `foresight_x_product_spec.md`
 - `foresight_x_technical_architecture.md`

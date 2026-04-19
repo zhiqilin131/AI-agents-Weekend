@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from foresight_x.structured_predict import structured_predict
 from foresight_x.prompts.future_simulator import future_simulator_prompt
-from foresight_x.schemas import EvidenceBundle, Option, Scenario, SimulatedFuture, UserState
+from foresight_x.schemas import EvidenceBundle, MemoryBundle, Option, Scenario, SimulatedFuture, UserState
 
 
 class StructuredPredictLLM(Protocol):
@@ -94,10 +94,11 @@ def _simulate_one_future(
     user_state: UserState,
     evidence: EvidenceBundle,
     llm: StructuredPredictLLM | None,
+    memory: MemoryBundle | None = None,
 ) -> SimulatedFuture:
     if llm is None:
         return _fallback_future(opt, user_state, evidence)
-    prompt = future_simulator_prompt(opt, user_state, evidence)
+    prompt = future_simulator_prompt(opt, user_state, evidence, memory)
     try:
         raw = structured_predict(llm, SimulatedFuture, prompt)
         return _coerce_simulated_future(raw, opt)
@@ -110,6 +111,7 @@ def simulate_futures(
     user_state: UserState,
     evidence: EvidenceBundle,
     llm: StructuredPredictLLM | None = None,
+    memory: MemoryBundle | None = None,
 ) -> list[SimulatedFuture]:
     """Produce a SimulatedFuture per option; LLM path uses structured output with probability normalization.
 
@@ -119,13 +121,13 @@ def simulate_futures(
     if not options:
         return []
     if llm is None:
-        return [_simulate_one_future(o, user_state, evidence, None) for o in options]
+        return [_simulate_one_future(o, user_state, evidence, None, memory) for o in options]
 
     max_workers = min(4, len(options))
     out: list[SimulatedFuture | None] = [None] * len(options)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futs = {
-            pool.submit(_simulate_one_future, opt, user_state, evidence, llm): i
+            pool.submit(_simulate_one_future, opt, user_state, evidence, llm, memory): i
             for i, opt in enumerate(options)
         }
         for fut in as_completed(futs):

@@ -249,7 +249,7 @@ def iter_pipeline_events(
     }
 
     yield {"event": "stage", "stage": "simulate"}
-    futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm)
+    futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
     yield {
         "event": "partial",
         "stage": "simulate",
@@ -323,7 +323,7 @@ def run_pipeline(
 
     rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
 
-    futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm)
+    futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
     evaluations = evaluate_options(futures, user_state, ctx.llm)
 
     trace = finalize_trace(

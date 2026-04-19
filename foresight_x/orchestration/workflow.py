@@ -154,7 +154,7 @@ class ForesightWorkflow(Workflow):
     @step
     async def simulate(self, ev: InferredEvent) -> SimulatedEvent:
         futures = simulate_futures(
-            ev.options, ev.user_state, ev.evidence, self.pipe_ctx.llm
+            ev.options, ev.user_state, ev.evidence, self.pipe_ctx.llm, ev.memory
         )
         return SimulatedEvent(
             user_state=ev.user_state,

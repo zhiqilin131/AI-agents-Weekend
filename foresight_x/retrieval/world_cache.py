@@ -112,11 +112,24 @@ def _is_placeholder_source_url(url: str | None) -> bool:
 
 
 def _is_placeholder_world_fact_text(text: str) -> bool:
+    """Filter integration-test placeholder snippets only — not real seed files (they may mention the demo title)."""
     t = (text or "").strip().lower()
-    return (
-        "external labor market note" in t
-        or "career decision cache (demo)" in t
-    )
+    return "external labor market note" in t
+
+
+def _is_web_source_url(url: str | None) -> bool:
+    """Tavily and other web hits carry http(s) URLs; route these to baseline-style bundle, not \"news\"."""
+    u = (url or "").strip().lower()
+    return u.startswith("http://") or u.startswith("https://")
+
+
+def _meta_truthy(val: Any) -> bool:
+    if val is True:
+        return True
+    if isinstance(val, (int, float)) and val == 1:
+        return True
+    s = str(val).strip().lower()
+    return s in ("true", "1", "yes")
 
 
 def _scalar_metadata(meta: dict[str, Any]) -> dict[str, str | int | float | bool]:
@@ -194,10 +207,12 @@ class WorldKnowledge:
         self._index.insert(Document(text=text, metadata=_scalar_metadata(meta)))
 
     def _ingest_tavily_facts(self, facts: list[Fact]) -> None:
+        """Store web results as ``web_reference`` so retrieval surfaces them under baseline, not \"recent news\"."""
         for f in facts:
             meta = _scalar_metadata(
                 {
-                    "kind": "recent_event",
+                    "kind": "web_reference",
+                    "from_tavily": True,
                     "source_url": f.source_url or "",
                     "confidence": f.confidence,
                     "doc_id": str(uuid.uuid4()),
@@ -299,12 +314,18 @@ class WorldKnowledge:
                 if _is_removed_packaged_internship_base_rate(fact.text):
                     continue
                 base_rates.append(fact)
+            elif kind == "web_reference" or _meta_truthy(md.get("from_tavily")):
+                # Live or cached web snippets — baseline / external-reference bucket for the UI.
+                base_rates.append(_tavily_fact_as_base_rate(fact))
             elif kind in ("recent_event", "event"):
                 surl = str(md.get("source_url") or "").strip()
                 if surl and surl in tavily_urls:
-                    # Same URLs are surfaced under base_rates from this run's Tavily (not pushed to Recent).
                     continue
-                recent_events.append(fact)
+                # Legacy index rows: Tavily used to ingest as ``recent_event``; still treat http(s) as web baselines.
+                if _is_web_source_url(surl):
+                    base_rates.append(_tavily_fact_as_base_rate(fact))
+                else:
+                    recent_events.append(fact)
             else:
                 facts.append(fact)
 

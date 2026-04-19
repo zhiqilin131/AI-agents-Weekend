@@ -25,6 +25,11 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
+def _norm_loose(text: str) -> str:
+    """Whitespace + punctuation-insensitive blob for \"is the option only repeating the user?\" checks."""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
 def _dedupe_options(options: list[Option]) -> list[Option]:
     out: list[Option] = []
     seen: set[str] = set()
@@ -198,8 +203,8 @@ def _fallback_options(user_state: UserState) -> list[Option]:
 
 
 def _ensure_novel_option(options: list[Option], raw_input: str) -> list[Option]:
-    text = raw_input.lower()
-    if any(_norm(f"{o.name} {o.description}") not in text for o in options):
+    blob = _norm_loose(raw_input)
+    if any(_norm_loose(f"{o.name} {o.description}") not in blob for o in options):
         return options
     options.append(
         Option(
