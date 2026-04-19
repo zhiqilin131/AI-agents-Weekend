@@ -180,7 +180,20 @@ def get_profile() -> dict:
 
 @app.put("/api/profile")
 def put_profile(body: UserProfile) -> dict:
-    path = save_user_profile(body)
+    """Update user-editable profile fields; preserves inferred_priorities from disk (not set by UI)."""
+    existing = load_user_profile()
+    stated_raw = body.user_priorities or body.priorities
+    stated = list(stated_raw) if stated_raw else existing.stated_priority_lines()
+    merged = existing.model_copy(
+        update={
+            "user_priorities": stated,
+            "priorities": stated,
+            "about_me": body.about_me,
+            "constraints": list(body.constraints),
+            "values": list(body.values),
+        }
+    )
+    path = save_user_profile(merged)
     return {"ok": True, "path": str(path)}
 
 

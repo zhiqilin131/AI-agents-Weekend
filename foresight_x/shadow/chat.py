@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.orchestration.llm_factory import build_openai_llm
+from foresight_x.profile.merge import append_inferred_priority_line
+from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.shadow.store import ShadowSelfState, load_shadow_self, merge_observation, save_shadow_self
 from foresight_x.structured_predict import structured_predict
 
@@ -15,9 +17,11 @@ from foresight_x.structured_predict import structured_predict
 class ShadowChatTurn(BaseModel):
     reply_to_user: str = Field(
         description=(
-            "Your next message to the user. Warm, curious, therapist-like researcher and friend. "
-            "Do not recommend a specific decision, option, or plan. No numbered action lists for "
-            "what they should do. Reflect feelings, ask gentle questions, share brief human warmth."
+            "Direct reply to the user (second person: you). Engage with what they actually said—same topic, "
+            "same stakes—without replacing their words with generic therapy language. "
+            "FORBIDDEN: third-person summaries ('User is expressing…'), vague 'deeper emotional/psychological themes', "
+            "or sanitizing stigmatizing or sensitive content into abstract 'feelings'. "
+            "Warm, curious, friend-like; no decision recommendations or numbered action plans."
         )
     )
     suggest_decision_navigation: bool = Field(
@@ -29,8 +33,9 @@ class ShadowChatTurn(BaseModel):
     shadow_observation: str = Field(
         default="",
         description=(
-            "At most one short bullet (max 220 chars) noting a behavior or emotional pattern "
-            "you noticed this turn. Empty string if nothing new or uncertain."
+            "Optional ONE concrete note (max 220 chars) tied to this turn's actual content—specific words or pattern. "
+            "FORBIDDEN: generic paraphrases like 'deeper themes' or clinical fluff. "
+            "Use empty string if nothing specific to record."
         ),
     )
 
@@ -47,14 +52,26 @@ def _format_transcript(messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-SHADOW_INSTRUCTIONS = """You are in "Shadow space" — a private reflective chat. Your stance:
-- Like a skilled therapist-researcher who is also a friend: curious, non-judgmental, present.
-- Explore meaning, feelings, and patterns. Short paragraphs; avoid clinical jargon.
-- Do NOT give decisions, rankings, "you should", or step-by-step advice for life choices.
-- If the user asks what to choose between options, or to analyze a decision, you still respond warmly
-  but the structured output will flag that they may want the separate Decision mode — you do not
-  decide for them here.
-- You may notice behavioral or emotional patterns and record ONE concise observation when genuine.
+SHADOW_INSTRUCTIONS = """You are in "Shadow space" — a private, off-the-record reflective chat (not a public assistant).
+
+FAITHFUL LANGUAGE (strict):
+- Respond in direct address (you / I), as a friend and careful listener. Stay on the user's actual topic and wording.
+- Do NOT paraphrase their message into vague psychology or "wellness" speak. Do NOT substitute abstract
+  "emotional themes", "psychological patterns", or "deeper feelings" for what they concretely said.
+- Do NOT write third-person case notes (e.g. "User is expressing…", "The user seems to be navigating…").
+- Do NOT sanitize, soften, or euphemize sensitive, stigmatized, or legally fraught topics if the user named them
+  plainly—you still do not endorse harm; you engage with the real thread they opened without moral laundering
+  through generic reflective filler.
+- Short paragraphs. No clinical jargon unless the user used it first.
+
+WHAT YOU STILL DO NOT DO HERE:
+- No concrete decisions, rankings, "you should", or step-by-step life plans (that is Decision mode elsewhere).
+- If they clearly want option-picking or Foresight-X analysis, reply warmly and set suggest_decision_navigation true;
+  you still do not pick for them in this chat.
+
+OBSERVATION FIELD:
+- shadow_observation: at most one plain, specific line about what you noticed THIS turn (or empty). Never a generic
+  summary like "ties to deeper emotional themes".
 
 Current accumulated notes about this user (may be empty):
 {shadow_block}
@@ -62,7 +79,7 @@ Current accumulated notes about this user (may be empty):
 Full conversation so far:
 {transcript}
 
-Respond according to the schema: your reply, whether to suggest opening Decision mode, and one optional observation bullet."""
+Return JSON matching the schema: reply_to_user (faithful, direct), suggest_decision_navigation, shadow_observation."""
 
 
 def run_shadow_turn(
@@ -103,5 +120,10 @@ def run_shadow_turn(
     else:
         state = state.model_copy(update={"turn_count": state.turn_count + 1})
     save_shadow_self(state, settings=s)
+
+    if recorded:
+        prof = load_user_profile(settings=s)
+        prof = append_inferred_priority_line(prof, recorded)
+        save_user_profile(prof, settings=s)
 
     return reply, flag, state, recorded

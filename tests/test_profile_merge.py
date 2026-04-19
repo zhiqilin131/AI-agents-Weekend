@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from foresight_x.config import Settings
-from foresight_x.profile.merge import append_clarification_to_profile, merge_profile_into_user_state
+from foresight_x.profile.merge import (
+    append_clarification_to_profile,
+    append_inferred_priority_line,
+    merge_profile_into_user_state,
+)
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import Reversibility, TimePressure, UserProfile, UserState
 
@@ -19,6 +23,14 @@ def test_append_clarification_dedupes() -> None:
     assert any("budget sensitivity" in x.lower() for x in u.priorities)
     u2 = append_clarification_to_profile(u, {"budget_sensitivity": "Tight budget"})
     assert u2.priorities == u.priorities
+
+
+def test_append_inferred_dedupes() -> None:
+    p = UserProfile(user_priorities=["mine"], inferred_priorities=[])
+    q = append_inferred_priority_line(p, "likes structure")
+    assert "likes structure" in q.inferred_priorities
+    q2 = append_inferred_priority_line(q, "likes structure")
+    assert q2.inferred_priorities.count("likes structure") == 1
 
 
 def test_merge_priorities_prepend_goals() -> None:
@@ -46,7 +58,11 @@ def test_profile_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     path = save_user_profile(p)
     assert path.is_file()
     loaded = load_user_profile()
-    assert loaded == p
+    assert loaded.stated_priority_lines() == ["a"]
+    assert loaded.about_me == "bio"
+    assert loaded.constraints == ["c1"]
+    assert loaded.values == ["v1"]
+    assert loaded.inferred_priorities == []
 
 
 @pytest.fixture

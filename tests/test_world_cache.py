@@ -10,6 +10,7 @@ from llama_index.core.embeddings import MockEmbedding
 
 from foresight_x.config import Settings
 from foresight_x.retrieval.seed import ingest_world_markdown
+from foresight_x.retrieval.tavily_client import build_tavily_query_for_decision
 from foresight_x.retrieval.world_cache import WorldKnowledge
 from foresight_x.schemas import Fact, Reversibility, TimePressure, UserState
 
@@ -28,6 +29,22 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
 @pytest.fixture
 def embed_model() -> MockEmbedding:
     return MockEmbedding(embed_dim=1536)
+
+
+def test_tavily_query_prioritizes_user_message() -> None:
+    us = UserState(
+        raw_input="Should we pursue intimacy given our boundaries?",
+        goals=["understand tradeoffs"],
+        time_pressure=TimePressure.LOW,
+        stress_level=3,
+        workload=3,
+        current_behavior="deliberate",
+        decision_type="general",
+        reversibility=Reversibility.PARTIAL,
+    )
+    q = build_tavily_query_for_decision(us, "user_stated_priorities career growth " * 20)
+    assert "intimacy" in q.lower() or "boundaries" in q.lower()
+    assert q.startswith("Should we") or "Should we" in q[:120]
 
 
 def test_deprecated_internship_base_rate_filtered(settings: Settings, embed_model: MockEmbedding) -> None:
@@ -74,7 +91,11 @@ def test_cache_only_no_tavily(settings: Settings, embed_model: MockEmbedding) ->
 def test_tavily_supplements_when_sparse(settings: Settings, embed_model: MockEmbedding) -> None:
     mock_gw = MagicMock()
     mock_gw.search_as_facts.return_value = [
-        Fact(text="Live web snippet about recruiting.", source_url="https://x.test", confidence=0.7)
+        Fact(
+            text="Live web snippet about urgent offer comparison and recruiting.",
+            source_url="https://x.test",
+            confidence=0.7,
+        )
     ]
     wk = WorldKnowledge(settings=settings, embed_model=embed_model, tavily=mock_gw)
     state = UserState(
@@ -91,6 +112,6 @@ def test_tavily_supplements_when_sparse(settings: Settings, embed_model: MockEmb
     ev = wk.retrieve(state, min_cache_hits=5, top_k=3)
     assert mock_gw.search_as_facts.called
     br = " ".join(f.text for f in ev.base_rates).lower()
-    assert "live web snippet about recruiting" in br
+    assert "recruiting" in br
     # Tavily hits are not pushed to recent_events (only base_rates).
     assert not any("live web snippet about recruiting" in (f.text or "").lower() for f in ev.recent_events)

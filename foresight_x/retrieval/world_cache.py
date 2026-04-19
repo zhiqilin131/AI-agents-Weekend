@@ -13,8 +13,9 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.retrieval._embeddings import build_openai_embedding
+from foresight_x.retrieval.baseline_relevance import keep_baseline_fact
 from foresight_x.retrieval.query_text import profile_snippet_for_retrieval
-from foresight_x.retrieval.tavily_client import TavilyGateway
+from foresight_x.retrieval.tavily_client import TavilyGateway, build_tavily_query_for_decision
 from foresight_x.schemas import EvidenceBundle, Fact, UserState
 
 
@@ -248,6 +249,8 @@ class WorldKnowledge:
                 user_state.raw_input[:2000],
             ]
         )
+        # Dedicated string for live web search (user question first — avoids irrelevant cached baselines).
+        tavily_query = build_tavily_query_for_decision(user_state, extra)
         fetch_k = min(36, max(top_k * 4, 16))
         retriever = self._index.as_retriever(similarity_top_k=fetch_k)
         raw_nodes = retriever.retrieve(query)
@@ -264,33 +267,32 @@ class WorldKnowledge:
 
         m = self.settings.tavily_min_cache_hits if min_cache_hits is None else min_cache_hits
 
-        # Heuristic: skip Tavily when the local cache already returns enough chunks and the
-        # decision is not time-sensitive — unless ``tavily_always`` or cache is sparse.
-        # Use raw retrieval size (before top_k slice) so "enough hits" reflects the index, not the cap.
-        need_tavily = self._tavily is not None and (
-            self.settings.tavily_always
-            or len(raw_nodes) < m
-            or _time_sensitive(user_state)
-        )
-        if self._tavily is not None and not need_tavily:
-            # If cached hits are mostly placeholders, force a live fetch.
-            non_placeholder = 0
-            for node in raw_nodes:
-                md = _world_node_metadata(node)
-                txt = _world_node_text(node)
-                surl = str(md.get("source_url") or "").strip()
-                if _is_placeholder_source_url(surl):
-                    continue
-                if _is_placeholder_world_fact_text(txt):
-                    continue
-                non_placeholder += 1
-            if non_placeholder < m:
-                need_tavily = True
+        # Default ``tavily_fresh_each_run``: always call Tavily when configured, so baselines match *this*
+        # question instead of skipping because Chroma has unrelated prior ingests (e.g. academic seeds).
+        if self._tavily is None:
+            need_tavily = False
+        elif self.settings.tavily_fresh_each_run or self.settings.tavily_always:
+            need_tavily = True
+        else:
+            need_tavily = len(raw_nodes) < m or _time_sensitive(user_state)
+            if not need_tavily:
+                non_placeholder = 0
+                for node in raw_nodes:
+                    md = _world_node_metadata(node)
+                    txt = _world_node_text(node)
+                    surl = str(md.get("source_url") or "").strip()
+                    if _is_placeholder_source_url(surl):
+                        continue
+                    if _is_placeholder_world_fact_text(txt):
+                        continue
+                    non_placeholder += 1
+                if non_placeholder < m:
+                    need_tavily = True
 
         web_facts: list[Fact] = []
         tavily_urls: set[str] = set()
         if need_tavily:
-            web_facts = self._tavily.search_as_facts(query)
+            web_facts = self._tavily.search_as_facts(tavily_query)
             self._ingest_tavily_facts(web_facts)
             for wf in web_facts:
                 u = (wf.source_url or "").strip()
@@ -298,7 +300,7 @@ class WorldKnowledge:
                     tavily_urls.add(u)
 
         facts: list[Fact] = []
-        base_rates: list[Fact] = []
+        chroma_base_rates: list[Fact] = []
         recent_events: list[Fact] = []
 
         for node in nodes:
@@ -313,36 +315,37 @@ class WorldKnowledge:
             if kind == "base_rate":
                 if _is_removed_packaged_internship_base_rate(fact.text):
                     continue
-                base_rates.append(fact)
+                chroma_base_rates.append(fact)
             elif kind == "web_reference" or _meta_truthy(md.get("from_tavily")):
-                # Live or cached web snippets — baseline / external-reference bucket for the UI.
-                base_rates.append(_tavily_fact_as_base_rate(fact))
+                # Cached web snippets — keep as secondary baselines after this run's fresh Tavily hits.
+                chroma_base_rates.append(_tavily_fact_as_base_rate(fact))
             elif kind in ("recent_event", "event"):
                 surl = str(md.get("source_url") or "").strip()
                 if surl and surl in tavily_urls:
                     continue
                 # Legacy index rows: Tavily used to ingest as ``recent_event``; still treat http(s) as web baselines.
                 if _is_web_source_url(surl):
-                    base_rates.append(_tavily_fact_as_base_rate(fact))
+                    chroma_base_rates.append(_tavily_fact_as_base_rate(fact))
                 else:
                     recent_events.append(fact)
             else:
                 facts.append(fact)
 
-        if self._tavily is not None and not web_facts and not facts and not base_rates and not recent_events:
+        if self._tavily is not None and not web_facts and not facts and not chroma_base_rates and not recent_events:
             # Last-resort freshness guard: local cache returned nothing usable after filtering.
-            web_facts = self._tavily.search_as_facts(query)
+            web_facts = self._tavily.search_as_facts(tavily_query)
             self._ingest_tavily_facts(web_facts)
 
-        if need_tavily:
-            for wf in web_facts:
-                base_rates.append(_tavily_fact_as_base_rate(wf))
-        elif web_facts:
-            for wf in web_facts:
-                base_rates.append(_tavily_fact_as_base_rate(wf))
+        kept_web = [wf for wf in web_facts if keep_baseline_fact(user_state, wf, tavily_query=tavily_query)]
+        fresh_baselines = [_tavily_fact_as_base_rate(wf) for wf in kept_web]
+        chroma_filtered = [
+            f for f in chroma_base_rates if keep_baseline_fact(user_state, f, tavily_query=tavily_query)
+        ]
+        # Fresh Tavily lines first; drop unrelated cached web chunks (e.g. old academic-integrity ingests).
+        base_rates = _dedupe_facts_by_text(fresh_baselines + chroma_filtered)
 
         return EvidenceBundle(
             facts=_dedupe_facts_by_text(facts),
-            base_rates=_dedupe_facts_by_text(base_rates),
+            base_rates=base_rates,
             recent_events=_dedupe_facts_by_text(recent_events),
         )

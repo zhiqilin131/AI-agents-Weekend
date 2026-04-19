@@ -22,6 +22,7 @@ from foresight_x.memory.profile_summarizer import summarize_profile
 from foresight_x.profile.merge import append_clarification_to_profile, merge_profile_into_user_state
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.retrieval.memory import UserMemory
+from foresight_x.retrieval.user_recent_context import merge_user_context_into_evidence
 from foresight_x.retrieval.world_cache import WorldKnowledge
 from foresight_x.schemas import (
     DecisionTrace,
@@ -68,8 +69,10 @@ def retrieve_bundles(
     user_state: UserState,
     ctx: PipelineContext,
 ) -> tuple[MemoryBundle, EvidenceBundle]:
+    settings = ctx.settings or load_settings()
     memory = ctx.user_memory.retrieve(user_state) if ctx.user_memory else _empty_memory()
     evidence = ctx.world.retrieve(user_state) if ctx.world else _empty_evidence()
+    evidence = merge_user_context_into_evidence(evidence, settings)
     return memory, evidence
 
 
@@ -89,10 +92,13 @@ def retrieve_bundles_parallel(
             return ctx.world.retrieve(user_state)
         return _empty_evidence()
 
+    settings = ctx.settings or load_settings()
     with ThreadPoolExecutor(max_workers=2) as pool:
         fut_m = pool.submit(mem)
         fut_e = pool.submit(ev)
-        return fut_m.result(), fut_e.result()
+        memory_bundle, evidence_bundle = fut_m.result(), fut_e.result()
+    evidence_bundle = merge_user_context_into_evidence(evidence_bundle, settings)
+    return memory_bundle, evidence_bundle
 
 
 def step_infer(

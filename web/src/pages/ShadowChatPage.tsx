@@ -97,7 +97,7 @@ export default function ShadowChatPage() {
           >
             <p className="text-xs font-semibold text-purple-900 uppercase tracking-wide">Recorded</p>
             <p className="text-sm text-gray-800 mt-1 leading-snug line-clamp-4">
-              Noted for your shadow profile: {shadowToast.text}
+              Saved to Shadow notes and to Profile → Inferred priorities: {shadowToast.text}
             </p>
           </div>
         </div>

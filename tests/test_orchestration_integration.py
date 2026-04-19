@@ -330,7 +330,11 @@ def test_tavily_mock_injects_recent_events_in_trace(
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     mock_gw = MagicMock()
     mock_gw.search_as_facts.return_value = [
-        Fact(text="External labor market note 2026.", source_url="https://example.test/a", confidence=0.72)
+        Fact(
+            text="Urgent career offer: external labor market note 2026 for tight deadlines.",
+            source_url="https://example.test/a",
+            confidence=0.72,
+        )
     ]
     world = WorldKnowledge(settings=chroma_settings, embed_model=embed_model, tavily=mock_gw)
 

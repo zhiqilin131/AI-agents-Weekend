@@ -23,6 +23,8 @@ def load_user_profile(settings: Settings | None = None) -> UserProfile:
 def save_user_profile(profile: UserProfile, settings: Settings | None = None) -> Path:
     s = settings or load_settings()
     s.profile_dir.mkdir(parents=True, exist_ok=True)
+    stated = profile.stated_priority_lines()
+    profile = profile.model_copy(update={"user_priorities": stated, "priorities": stated})
     path = profile_path(s)
     path.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
     return path

@@ -7,8 +7,10 @@ from foresight_x.schemas import UserState
 
 def profile_snippet_for_retrieval(user_state: UserState) -> str:
     parts: list[str] = []
-    if user_state.profile_priorities:
-        parts.append("priorities " + " ".join(user_state.profile_priorities))
+    if user_state.profile_user_priorities:
+        parts.append("user_stated_priorities " + " ".join(user_state.profile_user_priorities))
+    if user_state.profile_inferred_priorities:
+        parts.append("system_inferred_priorities " + " ".join(user_state.profile_inferred_priorities))
     if user_state.profile_about_me.strip():
         parts.append("about_me " + user_state.profile_about_me.strip()[:2000])
     if user_state.profile_constraints:

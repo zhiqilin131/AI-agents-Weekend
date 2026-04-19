@@ -23,7 +23,13 @@ class Settings(BaseSettings):
     )
     #: Call Tavily on every run (when API key is set), not only when the cache is sparse.
     tavily_always: bool = Field(default=False, validation_alias=AliasChoices("tavily_always", "TAVILY_ALWAYS"))
-    #: If local Chroma has fewer than this many hits, run Tavily (unless ``tavily_always``).
+    #: When True (default), always run a fresh Tavily search for this decision instead of skipping because
+    #: Chroma already has enough unrelated cached chunks (avoids stale academic/demo baselines).
+    tavily_fresh_each_run: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("tavily_fresh_each_run", "TAVILY_FRESH_EACH_RUN"),
+    )
+    #: If local Chroma has fewer than this many hits, run Tavily (unless ``tavily_always`` / ``tavily_fresh_each_run``).
     tavily_min_cache_hits: int = Field(default=3, ge=0, validation_alias=AliasChoices("tavily_min_cache_hits", "TAVILY_MIN_CACHE_HITS"))
 
     chroma_persist_dir: Path = Field(

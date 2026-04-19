@@ -7,7 +7,7 @@ from typing import Any, Protocol
 from tavily import TavilyClient
 
 from foresight_x.config import Settings, load_settings
-from foresight_x.schemas import Fact
+from foresight_x.schemas import Fact, UserState
 
 # https://docs.tavily.com/ — API rejects queries over 400 characters.
 TAVILY_MAX_QUERY_CHARS = 400
@@ -18,6 +18,31 @@ def _truncate_tavily_query(q: str) -> str:
     if len(s) <= TAVILY_MAX_QUERY_CHARS:
         return s
     return s[: TAVILY_MAX_QUERY_CHARS - 1].rstrip() + "…"
+
+
+def build_tavily_query_for_decision(user_state: UserState, profile_extra: str = "") -> str:
+    """Build a Tavily query aligned to *this* decision.
+
+    Puts the user's actual question first so live search is not dominated by profile text or old
+    demo embeddings. Chroma retrieval may still use a broader query string separately.
+    """
+    raw = (user_state.raw_input or "").strip()
+    goals = " ".join((user_state.goals or [])[:12])
+    dt = (user_state.decision_type or "general").strip()
+    prof = (profile_extra or "").strip()
+    if len(prof) > 260:
+        prof = prof[:257] + "..."
+    parts: list[str] = []
+    if raw:
+        parts.append(raw)
+    if goals:
+        parts.append(goals)
+    if dt and dt != "general":
+        parts.append(dt)
+    if prof:
+        parts.append(prof)
+    q = " ".join(parts) if parts else raw or goals or dt
+    return _truncate_tavily_query(q)
 
 
 class TavilySearchClient(Protocol):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from foresight_x.prompts.faithful_decision import ANALYTICAL_FAITHFULNESS
 from foresight_x.prompts.profile_instructions import PROFILE_MUST_CONSIDER
 from foresight_x.schemas import EvidenceBundle, MemoryBundle, Option, UserState
 
@@ -28,6 +29,7 @@ def future_simulator_prompt(
     return (
         "You are the Future Simulator of Foresight-X.\n"
         + PROFILE_MUST_CONSIDER
+        + ANALYTICAL_FAITHFULNESS
         + mem_block
         + "Objective: for the given option, describe best / base / worst plausible futures over ONE concrete time horizon.\n"
         "Calibration:\n"

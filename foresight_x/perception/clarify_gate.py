@@ -70,8 +70,13 @@ def run_clarify_gate(
 
     prof_bits = ""
     if profile:
-        if profile.priorities:
-            prof_bits += f"Known priorities: {profile.priorities}\n"
+        if profile.stated_priority_lines():
+            prof_bits += f"User-stated priorities (authoritative): {profile.stated_priority_lines()}\n"
+        if profile.inferred_priorities:
+            prof_bits += (
+                f"System-inferred priority hints (may be revised, lower weight): "
+                f"{profile.inferred_priorities}\n"
+            )
         if profile.constraints:
             prof_bits += f"Known constraints: {profile.constraints}\n"
 

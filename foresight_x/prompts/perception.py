@@ -7,7 +7,8 @@ from foresight_x.schemas import UserProfile
 
 def _profile_nonempty(profile: UserProfile) -> bool:
     return bool(
-        profile.priorities
+        profile.stated_priority_lines()
+        or profile.inferred_priorities
         or profile.about_me.strip()
         or profile.constraints
         or profile.values
@@ -25,6 +26,9 @@ def perception_prompt(raw_input: str, profile: UserProfile | None = None) -> str
         "You are the Perception module of Foresight-X.\n"
         "Objective: convert the user's free-form decision text into a UserState JSON object.\n"
         "Constraints:\n"
+        "- The `goals` field must reflect what the user actually wants to decide or optimize—including "
+        "sensitive or stigmatized objectives if explicitly stated—NOT sanitized substitutes like "
+        "\"seek professional help\" unless they asked for that.\n"
         "- Infer stress_level and workload from language cues if not explicit.\n"
         "- Keep goals concrete and user-centric.\n"
         "- Use one of: time_pressure={low,medium,high}.\n"

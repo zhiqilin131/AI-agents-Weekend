@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TimePressure(str, Enum):
@@ -53,10 +53,35 @@ class UserProfile(BaseModel):
     last_updated: str = ""
     confidence: float = Field(ge=0, le=1, default=0.0)
 
-    # Legacy profile fields still used by current backend/frontend wiring.
+    # ---------- data/profile (form + shadow) ----------
+    user_priorities: list[str] = Field(
+        default_factory=list,
+        description="Priorities the user set in Profile or via clarification. Authoritative; not auto-edited by shadow.",
+    )
+    inferred_priorities: list[str] = Field(
+        default_factory=list,
+        description="Priorities inferred by the system (shadow chat, etc.). May be revised or replaced by newer inference.",
+    )
+    # Legacy mirror of user_priorities for older JSON files; kept in sync on save.
     priorities: list[str] = Field(default_factory=list)
     about_me: str = ""
     constraints: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_priorities_into_user(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("user_priorities") and d.get("priorities"):
+            d["user_priorities"] = list(d["priorities"])
+        return d
+
+    def stated_priority_lines(self) -> list[str]:
+        """User-owned priority lines (excludes inferred)."""
+        if self.user_priorities:
+            return list(self.user_priorities)
+        return list(self.priorities)
 
 
 class UserState(BaseModel):
@@ -70,7 +95,12 @@ class UserState(BaseModel):
     reversibility: Reversibility
     deadline_hint: str | None = None
     # Filled from persisted UserProfile for retrieval + LLM prompts (defaults keep older traces valid).
-    profile_priorities: list[str] = Field(default_factory=list)
+    profile_priorities: list[str] = Field(
+        default_factory=list,
+        description="Combined user-stated + inferred priorities for backward-compatible consumers.",
+    )
+    profile_user_priorities: list[str] = Field(default_factory=list)
+    profile_inferred_priorities: list[str] = Field(default_factory=list)
     profile_about_me: str = ""
     profile_constraints: list[str] = Field(default_factory=list)
     profile_values: list[str] = Field(default_factory=list)
