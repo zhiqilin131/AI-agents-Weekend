@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from foresight_x.config import Settings, load_settings
-from foresight_x.harness.improvement_loop import apply_outcome_to_memory
-from foresight_x.retrieval.memory import UserMemory
 from foresight_x.schemas import DecisionOutcome
+
+if TYPE_CHECKING:
+    from foresight_x.retrieval.memory import UserMemory
 
 
 def _utc_now() -> str:
@@ -54,12 +55,30 @@ def load_decision_outcome(
     return DecisionOutcome.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def load_decision_outcome_optional(
+    decision_id: str,
+    *,
+    settings: Settings | None = None,
+    outcomes_dir: Path | None = None,
+) -> DecisionOutcome | None:
+    """Return persisted outcome if present and valid, else ``None``."""
+    s = settings or load_settings()
+    root = outcomes_dir if outcomes_dir is not None else s.outcomes_dir
+    path = root / f"{decision_id}.json"
+    if not path.is_file():
+        return None
+    try:
+        return DecisionOutcome.model_validate_json(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def ask_outcome(
     decision_id: str,
     *,
     settings: Settings | None = None,
     input_fn: Callable[[str], str] = input,
-    user_memory: UserMemory | None = None,
+    user_memory: "UserMemory | None" = None,
     apply_improvement: bool = True,
 ) -> DecisionOutcome:
     """Interactive CLI-style outcome capture and optional memory write-back."""
@@ -79,6 +98,8 @@ def ask_outcome(
     )
     save_decision_outcome(outcome, settings=s)
     if apply_improvement:
+        from foresight_x.harness.improvement_loop import apply_outcome_to_memory
+
         apply_outcome_to_memory(
             decision_id,
             outcome,

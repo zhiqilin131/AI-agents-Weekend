@@ -202,6 +202,10 @@ export default function HomePage() {
         let path: string | null = null;
 
         const consume = (data: Record<string, unknown>) => {
+          if (data.event === 'error') {
+            const d = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+            throw new Error(d || 'Pipeline error');
+          }
           if (data.event === 'notes' && Array.isArray(data.notes)) {
             gotNotes = data.notes as string[];
           }
@@ -336,11 +340,68 @@ export default function HomePage() {
     setError(null);
     setClarifyGateHint(null);
     setLoadingStage(null);
+    setCommitInfo(null);
+    setCommitError(null);
     if (routeTraceId) navigate('/', { replace: true });
   };
 
   const decisionId =
-    fullTrace && typeof fullTrace.decision_id === 'string' ? fullTrace.decision_id : null;
+    (fullTrace && typeof fullTrace.decision_id === 'string' ? fullTrace.decision_id : null) ??
+    (liveTrace && typeof liveTrace.decision_id === 'string' ? liveTrace.decision_id : null);
+
+  type CommitInfo = { chosen_option_id: string; matches_recommendation: boolean; committed_at: string };
+  const [commitInfo, setCommitInfo] = useState<CommitInfo | null>(null);
+  const [commitBusy, setCommitBusy] = useState(false);
+  const [commitError, setCommitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!decisionId || state !== 'result') {
+      setCommitInfo(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(apiUrl(`/api/commits/${encodeURIComponent(decisionId)}`));
+        if (cancelled) return;
+        if (res.status === 404) {
+          setCommitInfo(null);
+          return;
+        }
+        if (!res.ok) return;
+        const data = (await res.json()) as CommitInfo;
+        setCommitInfo(data);
+      } catch {
+        if (!cancelled) setCommitInfo(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [decisionId, state, fullTrace]);
+
+  const handleCommitAdopt = useCallback(
+    async (chosenOptionId: string) => {
+      if (!decisionId) return;
+      setCommitBusy(true);
+      setCommitError(null);
+      try {
+        const res = await fetch(apiUrl('/api/commit-decision'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision_id: decisionId, chosen_option_id: chosenOptionId }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const gr = await fetch(apiUrl(`/api/commits/${encodeURIComponent(decisionId)}`));
+        if (gr.ok) setCommitInfo((await gr.json()) as CommitInfo);
+      } catch (e) {
+        setCommitError(e instanceof Error ? e.message : 'Commit failed');
+      } finally {
+        setCommitBusy(false);
+      }
+    },
+    [decisionId],
+  );
 
   const nav = <MainNavButtons />;
 
@@ -414,6 +475,11 @@ export default function HomePage() {
             onToggleJson={() => setShowJson(!showJson)}
             onShowOutcome={() => setShowOutcome(true)}
             canRecordOutcome={Boolean(decisionId)}
+            decisionId={decisionId}
+            commitInfo={commitInfo}
+            onCommitAdopt={handleCommitAdopt}
+            commitBusy={commitBusy}
+            commitError={commitError}
             runProgress={runProgress}
             runStageLabel={runStageLabel}
           />

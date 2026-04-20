@@ -305,13 +305,15 @@ def test_workflow_class_matches_routing_pipeline(tmp_path: Path, monkeypatch: py
     _freeze_time(monkeypatch)
     monkeypatch.setenv("TAVILY_API_KEY", "")
     settings = Settings(foresight_data_dir=tmp_path)
-    llm = RoutingLLM()
-    ctx = PipelineContext(settings=settings, llm=llm)
-
-    trace_p = run_pipeline(ctx, "x", decision_id="wcmp-1", persist_trace=False)
+    # Fresh RoutingLLM per run so OptionEvaluation index state does not leak between pipeline and workflow.
+    llm_p = RoutingLLM()
+    ctx_p = PipelineContext(settings=settings, llm=llm_p)
+    trace_p = run_pipeline(ctx_p, "x", decision_id="wcmp-1", persist_trace=False)
 
     async def _run() -> DecisionTrace:
-        wf = ForesightWorkflow(ctx, timeout=120.0)
+        llm_w = RoutingLLM()
+        ctx_w = PipelineContext(settings=settings, llm=llm_w)
+        wf = ForesightWorkflow(ctx_w, timeout=120.0)
         return await wf.run(
             start_event=ForesightStartEvent(raw_input="x", decision_id="wcmp-1", persist_trace=False)
         )

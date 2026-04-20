@@ -7,6 +7,53 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+# Provenance for each priority row (API + UI + writers).
+ProfileLineChannel = Literal["profile", "clarification", "shadow", "personalize", "legacy"]
+
+
+class ProfileLine(BaseModel):
+    """One user-stated or system-recorded priority line, with source channel."""
+
+    id: str = Field(default="", description="UUID when created in-app; empty for legacy imports.")
+    text: str = Field(min_length=1)
+    origin: Literal["user", "system"] = "system"
+    channel: ProfileLineChannel = "legacy"
+    created_at: str = Field(default="", description="ISO-8601 UTC when known.")
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _strip_text(cls, v: Any) -> str:
+        return str(v or "").strip()
+
+
+class MemoryFactCategory(str, Enum):
+    """Bucket for durable profile facts (concrete, not therapist paraphrases)."""
+
+    IDENTITY = "identity"
+    VIEWS = "views"
+    BEHAVIOR = "behavior"
+    GOALS = "goals"
+    CONSTRAINTS = "constraints"
+    OTHER = "other"
+
+
+MemoryFactSource = Literal["shadow", "personalize", "clarification", "user", "import", "legacy"]
+
+
+class ProfileMemoryFact(BaseModel):
+    """Structured memory used by Shadow + decision prompts; user can delete rows in Profile."""
+
+    id: str = Field(default="", description="UUID; assigned on load if missing.")
+    category: MemoryFactCategory = MemoryFactCategory.OTHER
+    text: str = Field(min_length=1, description="Concrete fact, e.g. party affiliation or a named preference.")
+    source: MemoryFactSource = "shadow"
+    created_at: str = Field(default="", description="ISO-8601 UTC when known.")
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _strip_fact_text(cls, v: Any) -> str:
+        return str(v or "").strip()
+
 
 class TimePressure(str, Enum):
     LOW = "low"
@@ -54,34 +101,130 @@ class UserProfile(BaseModel):
     confidence: float = Field(ge=0, le=1, default=0.0)
 
     # ---------- data/profile (form + shadow) ----------
+    priority_lines: list[ProfileLine] = Field(
+        default_factory=list,
+        description="Canonical rows with provenance; flat user_priorities/inferred_priorities stay in sync.",
+    )
     user_priorities: list[str] = Field(
         default_factory=list,
-        description="Priorities the user set in Profile or via clarification. Authoritative; not auto-edited by shadow.",
+        description="Mirror of priority_lines with origin=user (Profile UI, clarification).",
     )
     inferred_priorities: list[str] = Field(
         default_factory=list,
-        description="Priorities inferred by the system (shadow chat, etc.). May be revised or replaced by newer inference.",
+        description="Mirror of priority_lines with origin=system (shadow, personalize, …).",
     )
     # Legacy mirror of user_priorities for older JSON files; kept in sync on save.
     priorities: list[str] = Field(default_factory=list)
     about_me: str = ""
     constraints: list[str] = Field(default_factory=list)
+    memory_facts: list[ProfileMemoryFact] = Field(
+        default_factory=list,
+        description="Categorized concrete facts (identity, views, behavior, …) — preferred over vague one-line summaries.",
+    )
 
     @model_validator(mode="before")
     @classmethod
-    def _migrate_legacy_priorities_into_user(cls, data: Any) -> Any:
+    def _sync_priority_lines_and_flat_lists(cls, data: Any) -> Any:
+        """Migrate legacy flat lists into priority_lines, or sync mirrors from priority_lines (before init)."""
         if not isinstance(data, dict):
             return data
         d = dict(data)
         if not d.get("user_priorities") and d.get("priorities"):
             d["user_priorities"] = list(d["priorities"])
+        pl_raw = d.get("priority_lines")
+        if pl_raw is not None and len(pl_raw) > 0:
+            users: list[str] = []
+            inferred: list[str] = []
+            for row in pl_raw:
+                if not isinstance(row, dict):
+                    continue
+                o = row.get("origin")
+                t = str(row.get("text") or "").strip()
+                if not t:
+                    continue
+                if o == "user":
+                    users.append(t)
+                elif o == "system":
+                    inferred.append(t)
+            d["user_priorities"] = users
+            d["priorities"] = list(users)
+            d["inferred_priorities"] = inferred
+            return d
+        u_raw = list(d.get("user_priorities") or [])
+        if not u_raw and d.get("priorities"):
+            u_raw = list(d["priorities"])
+        i_raw = list(d.get("inferred_priorities") or [])
+        if not u_raw and not i_raw:
+            return d
+        new_lines: list[dict[str, Any]] = []
+        for t in u_raw:
+            tt = str(t).strip()
+            if tt:
+                new_lines.append({"text": tt, "origin": "user", "channel": "profile", "id": "", "created_at": ""})
+        for t in i_raw:
+            tt = str(t).strip()
+            if tt:
+                new_lines.append({"text": tt, "origin": "system", "channel": "legacy", "id": "", "created_at": ""})
+        d["priority_lines"] = new_lines
+        d["user_priorities"] = [x["text"] for x in new_lines if x["origin"] == "user"]
+        d["priorities"] = list(d["user_priorities"])
+        d["inferred_priorities"] = [x["text"] for x in new_lines if x["origin"] == "system"]
         return d
 
     def stated_priority_lines(self) -> list[str]:
         """User-owned priority lines (excludes inferred)."""
+        if self.priority_lines:
+            return [x.text for x in self.priority_lines if x.origin == "user"]
         if self.user_priorities:
             return list(self.user_priorities)
         return list(self.priorities)
+
+    def profile_channel_priority_texts(self) -> list[str]:
+        """Lines authored in Profile only (excludes clarification modal rows)."""
+        if self.priority_lines:
+            return [x.text for x in self.priority_lines if x.origin == "user" and x.channel == "profile"]
+        return [t for t in self.stated_priority_lines() if t]
+
+    def clarification_priority_texts(self) -> list[str]:
+        """Multiple-choice clarification answers saved as user rows."""
+        if self.priority_lines:
+            return [x.text for x in self.priority_lines if x.origin == "user" and x.channel == "clarification"]
+        return []
+
+
+def rebuild_priority_lines_from_flat(
+    profile: UserProfile,
+    *,
+    system_channel: ProfileLineChannel = "legacy",
+) -> UserProfile:
+    """Rebuild priority_lines from flat lists (e.g. after bulk LLM merge). All system rows share ``system_channel``."""
+    import uuid
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    u_src = list(profile.user_priorities) if profile.user_priorities else list(profile.priorities)
+    inf = list(profile.inferred_priorities)
+    lines: list[ProfileLine] = []
+    for t in u_src:
+        tt = str(t).strip()
+        if tt:
+            lines.append(ProfileLine(id=str(uuid.uuid4()), text=tt, origin="user", channel="profile", created_at=ts))
+    for t in inf:
+        tt = str(t).strip()
+        if tt:
+            lines.append(
+                ProfileLine(id=str(uuid.uuid4()), text=tt, origin="system", channel=system_channel, created_at=ts)
+            )
+    u = [x.text for x in lines if x.origin == "user"]
+    i = [x.text for x in lines if x.origin == "system"]
+    return profile.model_copy(
+        update={
+            "priority_lines": lines,
+            "user_priorities": u,
+            "priorities": u,
+            "inferred_priorities": i,
+        }
+    )
 
 
 class UserState(BaseModel):
@@ -100,7 +243,12 @@ class UserState(BaseModel):
         description="Combined user-stated + inferred priorities for backward-compatible consumers.",
     )
     profile_user_priorities: list[str] = Field(default_factory=list)
+    profile_clarification_priorities: list[str] = Field(
+        default_factory=list,
+        description="Structured clarification answers (user-chosen), distinct from free-form priorities.",
+    )
     profile_inferred_priorities: list[str] = Field(default_factory=list)
+    profile_memory_facts: list[ProfileMemoryFact] = Field(default_factory=list)
     profile_about_me: str = ""
     profile_constraints: list[str] = Field(default_factory=list)
     profile_values: list[str] = Field(default_factory=list)
@@ -246,3 +394,14 @@ class TraceListItem(BaseModel):
     timestamp: str
     decision_type: str
     preview: str
+    has_outcome: bool = False
+    has_commit: bool = False
+
+
+class DecisionCommit(BaseModel):
+    """User explicitly chose an option (adopt) before optional outcome recording."""
+
+    decision_id: str
+    chosen_option_id: str
+    matches_recommendation: bool = True
+    committed_at: str

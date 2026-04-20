@@ -4,12 +4,14 @@
 :func:`foresight_x.harness.improvement_loop.apply_outcome_to_memory` (not at raw
 trace save time).
 
-Retrieval uses a **vector candidate set**, then **re-ranks** by combining:
-embedding relevance, **exponential time decay** on ``timestamp``, and a simple
-**priority overlap** boost from :func:`profile_snippet_for_retrieval` vs document
-text. This pattern aligns with production hybrid systems (e.g. RRF-style rank
-fusion, temporal decay, multi-signal ranking); see Reciprocal Rank Fusion and
-learning-to-rank over multi-channel retrieval for background.
+Retrieval uses a **structured embedding query** from
+:func:`foresight_x.retrieval.memory_query.build_memory_retrieval_query`, then a
+**vector candidate set**, then **re-ranks** by combining: embedding relevance,
+**exponential time decay** on ``timestamp``, a **priority overlap** boost from
+:func:`profile_snippet_for_retrieval` vs document text, optional **same-domain**
+boost when stored ``decision_type`` matches the current ``UserState``, and
+packaged-seed downranking. This pattern aligns with hybrid retrieval systems
+(RRF-style fusion, temporal decay, multi-signal ranking).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.retrieval._embeddings import build_openai_embedding
+from foresight_x.retrieval.memory_query import build_memory_retrieval_query
 from foresight_x.retrieval.query_text import profile_snippet_for_retrieval
 from foresight_x.schemas import (
     DecisionOutcome,
@@ -101,6 +104,17 @@ def _is_packaged_seed_meta(md: dict[str, Any]) -> bool:
         return True
     did = str(md.get("decision_id", "") or "")
     return did.startswith("seed-")
+
+
+def _domain_match_multiplier(user_state: UserState, md: dict[str, Any]) -> float:
+    """Soft boost when indexed episode domain matches current decision type (no hard filter)."""
+    stored = str(md.get("decision_type", "") or "").strip().lower()
+    current = (user_state.decision_type or "").strip().lower()
+    if not stored or not current:
+        return 1.0
+    if stored == current:
+        return 1.12
+    return 1.0
 
 
 def _packaged_seed_memory_multiplier(user_state: UserState, md: dict[str, Any]) -> float:
@@ -184,11 +198,17 @@ class UserMemory:
         *,
         behavioral_patterns: list[str] | None = None,
         packaged_seed: bool = False,
+        decision_type: str | None = None,
     ) -> None:
-        lines = [
-            past.situation_summary,
-            f"Chosen option: {past.chosen_option}",
-        ]
+        lines: list[str] = []
+        if decision_type and str(decision_type).strip():
+            lines.append(f"Decision domain: {str(decision_type).strip()}")
+        lines.extend(
+            [
+                past.situation_summary,
+                f"Chosen option: {past.chosen_option}",
+            ]
+        )
         if past.outcome:
             lines.append(f"Outcome: {past.outcome}")
         text = "\n".join(lines)
@@ -201,6 +221,8 @@ class UserMemory:
             "outcome_quality": past.outcome_quality if past.outcome_quality is not None else -1,
             "timestamp": past.timestamp,
         }
+        if decision_type and str(decision_type).strip():
+            meta["decision_type"] = str(decision_type).strip()
         if behavioral_patterns:
             meta["behavioral_patterns_json"] = json.dumps(behavioral_patterns, ensure_ascii=False)
         if packaged_seed:
@@ -221,7 +243,11 @@ class UserMemory:
             timestamp=outcome.timestamp if outcome else trace.timestamp,
         )
         patterns = list(trace.memory.behavioral_patterns) if trace.memory else []
-        self.add_past_decision(past, behavioral_patterns=patterns or None)
+        self.add_past_decision(
+            past,
+            behavioral_patterns=patterns or None,
+            decision_type=trace.user_state.decision_type or None,
+        )
 
     def list_all_past_decisions(self) -> list[PastDecision]:
         """Return all persisted past decisions for this user, newest first."""
@@ -271,15 +297,7 @@ class UserMemory:
 
     def retrieve(self, user_state: UserState, top_k: int = 5) -> MemoryBundle:
         extra = profile_snippet_for_retrieval(user_state)
-        query = " ".join(
-            [
-                user_state.decision_type,
-                " ".join(user_state.goals),
-                user_state.current_behavior,
-                extra,
-                user_state.raw_input[:1500],
-            ]
-        )
+        query = build_memory_retrieval_query(user_state)
         fetch_k = min(48, max(top_k * 6, top_k + 12))
         retriever = self._index.as_retriever(similarity_top_k=fetch_k)
         raw_nodes = retriever.retrieve(query)
@@ -304,8 +322,9 @@ class UserMemory:
             )
             pov = _priority_word_overlap(extra, doc_bits)
             seed_m = _packaged_seed_memory_multiplier(user_state, md0)
-            # Relevance × time decay × (1 + priority alignment) × seed-topic match
-            fuse = sim * (0.42 + 0.58 * rec) * (1.0 + 0.38 * pov) * seed_m
+            domain_m = _domain_match_multiplier(user_state, md0)
+            # Relevance × time decay × (1 + priority alignment) × seed-topic × domain match
+            fuse = sim * (0.42 + 0.58 * rec) * (1.0 + 0.38 * pov) * seed_m * domain_m
             combined.append((fuse, node))
 
         combined.sort(key=lambda x: x[0], reverse=True)

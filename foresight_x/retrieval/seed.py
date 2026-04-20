@@ -27,7 +27,14 @@ def ingest_memory_json(user_memory: UserMemory, path: Path | None = None) -> int
         payload = {k: row[k] for k in allowed if k in row}
         past = PastDecision.model_validate(payload)
         extra = list(row.get("behavioral_patterns") or []) + global_patterns
-        user_memory.add_past_decision(past, behavioral_patterns=extra or None, packaged_seed=True)
+        dt = row.get("decision_type")
+        decision_type = str(dt).strip() if dt is not None and str(dt).strip() else None
+        user_memory.add_past_decision(
+            past,
+            behavioral_patterns=extra or None,
+            packaged_seed=True,
+            decision_type=decision_type,
+        )
         count += 1
     return count
 

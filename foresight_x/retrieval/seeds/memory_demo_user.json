@@ -6,6 +6,7 @@
   "past_decisions": [
     {
       "decision_id": "seed-001",
+      "decision_type": "career",
       "situation_summary": "Two internship offers: a well-known tech company with a generic rotation program versus a smaller startup with direct mentorship.",
       "chosen_option": "Accepted the brand-name internship.",
       "outcome": "Learned enterprise process but felt under-challenged; mentor time was sparse.",
@@ -15,6 +16,7 @@
     },
     {
       "decision_id": "seed-002",
+      "decision_type": "career",
       "situation_summary": "Deadline to confirm a return offer while still interviewing elsewhere.",
       "chosen_option": "Asked for a 5-day extension; used the time to finish one more interview round.",
       "outcome": "Secured a better fit; no bridge burned with the first employer.",
@@ -23,6 +25,7 @@
     },
     {
       "decision_id": "seed-003",
+      "decision_type": "academic",
       "situation_summary": "Whether to drop a heavy course mid-semester after poor midterm.",
       "chosen_option": "Stayed in the course, increased office hours usage.",
       "outcome": "Recovered to a B; high stress but avoided transcript penalty.",
@@ -31,6 +34,7 @@
     },
     {
       "decision_id": "seed-004",
+      "decision_type": "financial",
       "situation_summary": "Lease renewal vs. moving to a cheaper shared apartment farther from campus.",
       "chosen_option": "Renewed current lease for stability during recruiting season.",
       "outcome": "Higher rent but saved commute time during interviews.",
@@ -39,6 +43,7 @@
     },
     {
       "decision_id": "seed-005",
+      "decision_type": "academic",
       "situation_summary": "Conflict with a project teammate; escalate to professor or resolve directly.",
       "chosen_option": "Scheduled a direct conversation with clear agenda before involving staff.",
       "outcome": "Resolved scope split; avoided formal escalation.",

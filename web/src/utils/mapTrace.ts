@@ -29,14 +29,18 @@ interface TraceEvaluation {
   goal_alignment_score: number;
 }
 
+/**
+ * Must match ``composite_score`` + ``DEFAULT_EVALUATION_WEIGHTS`` in
+ * ``foresight_x/decision/recommender.py`` so option sort / tier labels align with the chosen recommendation.
+ */
 function compositeImportance(ev: TraceEvaluation | undefined): number {
   if (!ev) return -Infinity;
   return (
-    ev.goal_alignment_score +
-    ev.expected_value_score -
-    0.45 * ev.risk_score -
-    0.25 * ev.regret_score -
-    0.15 * ev.uncertainty_score
+    0.25 * ev.expected_value_score +
+    -0.15 * ev.risk_score +
+    -0.15 * ev.regret_score +
+    -0.15 * ev.uncertainty_score +
+    0.25 * ev.goal_alignment_score
   );
 }
 
@@ -95,6 +99,10 @@ export function mapTraceToReport(trace: Record<string, unknown>): DecisionReport
   const evalById = new Map(evaluations.map((e) => [e.option_id, e]));
 
   const chosenId = typeof rec?.chosen_option_id === 'string' ? rec.chosen_option_id.trim() : '';
+  const chosenName =
+    chosenId && options.length
+      ? options.find((o) => o.option_id === chosenId)?.name?.trim() || chosenId
+      : chosenId;
 
   const sortedForImportance = [...options].sort((a, b) => {
     const ca = compositeImportance(evalById.get(a.option_id));
@@ -172,6 +180,7 @@ export function mapTraceToReport(trace: Record<string, unknown>): DecisionReport
     recommendation: {
       reasoning: rec?.reasoning ?? '',
       chosenOption: rec?.chosen_option_id ?? '',
+      chosenOptionName: chosenName || undefined,
     },
     actions: (rec?.next_actions ?? []).map((a) => ({
       text: a.action,

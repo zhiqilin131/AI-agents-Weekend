@@ -11,7 +11,6 @@ import {
   Sparkles,
   Star,
   Undo2,
-  Wand2,
 } from 'lucide-react';
 import type { DecisionReport } from '../model';
 import {
@@ -20,10 +19,11 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from './ui/accordion';
-import { ScenarioOutcomeCard } from './ScenarioOutcomeCard';
+import { SimulatedFuturesPanel } from './SimulatedFuturesPanel';
 import { TradeoffsRadarChart } from './TradeoffsRadarChart';
 import { TypewriterText } from './TypewriterText';
 import { cn } from './ui/utils';
+import { apiUrl } from '../../utils/apiOrigin';
 
 function optionTierSurface(tier: 'high' | 'medium' | 'low'): string {
   switch (tier) {
@@ -98,12 +98,58 @@ interface ReportCompactProps {
   isStreaming?: boolean;
 }
 
+type CoachMessage = { role: 'user' | 'assistant'; content: string };
+
 export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: ReportCompactProps) {
   const futures = (fullTrace?.futures as TraceFuture[]) ?? [];
   const evidence = fullTrace?.evidence as TraceEvidence | undefined;
   const hasRec = Boolean(report.recommendation.reasoning || report.recommendation.chosenOption);
   const chosenOptionId = report.recommendation.chosenOption?.trim() ?? '';
   const optionTitleById = new Map(report.options.map((o) => [o.id, o.name]));
+  const decisionId = typeof fullTrace?.decision_id === 'string' ? fullTrace.decision_id : '';
+  const [coachOption, setCoachOption] = useState<{ id: string; name: string } | null>(null);
+  const [coachQuestion, setCoachQuestion] = useState('');
+  const [coachThreads, setCoachThreads] = useState<Record<string, CoachMessage[]>>({});
+  const [coachBusy, setCoachBusy] = useState(false);
+  const [coachError, setCoachError] = useState<string | null>(null);
+  const activeThread: CoachMessage[] = coachOption ? (coachThreads[coachOption.id] ?? []) : [];
+
+  const askOptionCoach = async () => {
+    if (!coachOption || !decisionId || !coachQuestion.trim() || coachBusy) return;
+    const optionId = coachOption.id;
+    const question = coachQuestion.trim();
+    const history = activeThread;
+    const nextThread = [...history, { role: 'user' as const, content: question }];
+    setCoachThreads((prev) => ({ ...prev, [optionId]: nextThread }));
+    setCoachQuestion('');
+    setCoachBusy(true);
+    setCoachError(null);
+    try {
+      const res = await fetch(apiUrl('/api/option-chat'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decision_id: decisionId,
+          option_id: optionId,
+          question,
+          chat_history: history,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const data = (await res.json()) as { answer?: string };
+      const ans = (data.answer ?? '').trim();
+      setCoachThreads((prev) => ({
+        ...prev,
+        [optionId]: [...(prev[optionId] ?? nextThread), { role: 'assistant', content: ans }],
+      }));
+    } catch (e) {
+      setCoachError(e instanceof Error ? e.message : 'Failed to get follow-up guidance');
+    } finally {
+      setCoachBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -118,7 +164,10 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
               Recommendation
             </p>
             <p className="text-lg text-gray-900 leading-snug" style={{ fontWeight: 700 }}>
-              {report.recommendation.chosenOption || '…'}
+              {report.recommendation.chosenOptionName ||
+                optionTitleById.get(chosenOptionId) ||
+                report.recommendation.chosenOption ||
+                '…'}
             </p>
           </div>
         </div>
@@ -293,6 +342,19 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
                         ))}
                       </ul>
                     )}
+                    {!!decisionId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCoachOption({ id: o.id, name: o.name });
+                          setCoachError(null);
+                        }}
+                        className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border border-purple-200 bg-white/85 text-purple-800 hover:bg-purple-50"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" aria-hidden />
+                        Ask how to execute this option
+                      </button>
+                    )}
                   </div>
                 );
               })}
@@ -321,54 +383,11 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
             {futures.length === 0 ? (
               <p className="text-sm text-gray-500">…</p>
             ) : (
-              <div className="space-y-4">
-                <p className="text-[11px] text-gray-600 leading-relaxed flex gap-2 items-start border-b border-gray-200/50 pb-3">
-                  <Wand2 className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" aria-hidden />
-                  <span>
-                    <span style={{ fontWeight: 700 }}>Agent simulation:</span> below are forward-looking stories for each
-                    option—what life could look like if you take that path, with branching outcomes and rough
-                    probabilities. This is model-generated foresight, not a guarantee.
-                  </span>
-                </p>
-                {futures.map((f) => {
-                  const isChosenFuture = Boolean(chosenOptionId && f.option_id === chosenOptionId);
-                  const displayTitle = optionTitleById.get(f.option_id) ?? f.option_id;
-                  const scenarios = [...(f.scenarios ?? [])].sort((a, b) => b.probability - a.probability);
-                  return (
-                    <div
-                      key={f.option_id}
-                      className="rounded-xl border border-gray-200/70 p-4 bg-white/80 space-y-3"
-                    >
-                      <div className="flex items-start gap-2 min-w-0">
-                        {isChosenFuture ? (
-                          <Star
-                            className="w-5 h-5 shrink-0 mt-0.5 text-amber-500 fill-amber-400"
-                            strokeWidth={1.25}
-                            aria-label="Same option as recommendation"
-                          />
-                        ) : (
-                          <span className="w-5 shrink-0" aria-hidden />
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm text-gray-900 leading-snug" style={{ fontWeight: 700 }}>
-                            {displayTitle}
-                          </p>
-                          <p className="text-[11px] text-gray-500 mt-0.5 font-mono">{f.option_id}</p>
-                        </div>
-                      </div>
-                      <p className="text-xs text-purple-900/90 bg-purple-50/80 border border-purple-100/80 rounded-lg px-2.5 py-1.5 inline-block">
-                        <span style={{ fontWeight: 700 }}>Horizon: </span>
-                        {f.time_horizon}
-                      </p>
-                      <div className="space-y-3">
-                        {scenarios.map((s) => (
-                          <ScenarioOutcomeCard key={`${f.option_id}-${s.label}`} scenario={s} />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+              <SimulatedFuturesPanel
+                futures={futures}
+                optionTitleById={optionTitleById}
+                chosenOptionId={chosenOptionId || undefined}
+              />
             )}
           </AccordionContent>
         </AccordionItem>
@@ -382,6 +401,58 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
           </AccordionContent>
         </AccordionItem>
       </Accordion>
+
+      {coachOption && (
+        <div className="fixed bottom-5 right-5 z-[75] w-[min(92vw,28rem)] rounded-2xl border border-purple-200/80 bg-white/95 shadow-2xl shadow-purple-500/20 backdrop-blur-sm">
+          <div className="px-4 py-3 border-b border-purple-100/80 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-wide text-purple-800 font-bold">Option Coach</p>
+              <p className="text-sm text-gray-800 truncate">{coachOption.name}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCoachOption(null)}
+              className="text-xs text-gray-500 hover:text-gray-800"
+            >
+              Close
+            </button>
+          </div>
+          <div className="p-4 space-y-3">
+            <div className="max-h-52 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-2 space-y-2">
+              {activeThread.length === 0 ? (
+                <p className="text-xs text-gray-500">
+                  Ask follow-up questions about this option. Context is retained in this thread.
+                </p>
+              ) : (
+                activeThread.map((m, i) => (
+                  <div key={`${m.role}-${i}`} className="space-y-1">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-500 font-bold">
+                      {m.role === 'user' ? 'You' : 'Coach'}
+                    </p>
+                    <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{m.content}</p>
+                  </div>
+                ))
+              )}
+            </div>
+            <textarea
+              value={coachQuestion}
+              onChange={(e) => setCoachQuestion(e.target.value)}
+              placeholder="Ask specifics, e.g. exact message template, first 3 steps, what to say if they push back..."
+              rows={3}
+              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white"
+            />
+            <button
+              type="button"
+              onClick={() => void askOptionCoach()}
+              disabled={!coachQuestion.trim() || coachBusy}
+              className="px-4 py-2 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-semibold disabled:opacity-40"
+            >
+              {coachBusy ? 'Thinking…' : 'Ask'}
+            </button>
+            {coachError && <p className="text-xs text-red-700 whitespace-pre-wrap">{coachError}</p>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -748,7 +819,8 @@ function SnippetList({
   items: EvidenceItem[];
   variant?: 'fact' | 'baseline' | 'recent';
 }) {
-  const deduped = _dedupeSnippets(items, 5);
+  // Recent events bundle profile + shadow + decision history; show more than facts/base_rates.
+  const deduped = _dedupeSnippets(items, variant === 'recent' ? 14 : 5);
 
   const shell =
     variant === 'baseline'

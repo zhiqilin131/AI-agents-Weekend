@@ -123,7 +123,9 @@ class ForesightWorkflow(Workflow):
 
     @step
     async def retrieve(self, ev: PerceivedEvent) -> RetrievedEvent:
-        memory, evidence = retrieve_bundles_parallel(ev.user_state, self.pipe_ctx)
+        memory, evidence = retrieve_bundles_parallel(
+            ev.user_state, self.pipe_ctx, exclude_decision_id=ev.decision_id
+        )
         return RetrievedEvent(
             user_state=ev.user_state,
             decision_id=ev.decision_id,

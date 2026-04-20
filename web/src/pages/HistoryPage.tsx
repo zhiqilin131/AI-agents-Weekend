@@ -10,6 +10,8 @@ interface TraceRow {
   timestamp: string;
   decision_type: string;
   preview: string;
+  has_outcome?: boolean;
+  has_commit?: boolean;
 }
 
 export default function HistoryPage() {
@@ -60,9 +62,8 @@ export default function HistoryPage() {
           Decision history
         </h1>
         <p className="text-gray-600 mb-8 text-sm">
-          Traces stored under <code className="text-xs bg-white/80 px-1 rounded">data/traces</code>. Open a row to see
-          the same result view as when you first ran the decision. Deleting a trace also removes a matching outcome in{' '}
-          <code className="text-xs bg-white/80 px-1 rounded">data/outcomes</code> if present.
+          Traces live under <code className="text-xs bg-white/80 px-1 rounded">data/traces</code>. Adoptions and outcomes
+          improve future suggestions. Deleting a row also removes its outcome and adoption record when present.
         </p>
 
         {error && <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>}
@@ -77,7 +78,23 @@ export default function HistoryPage() {
               className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-white/60 border border-white/80 shadow-sm"
             >
               <Link to={`/trace/${encodeURIComponent(r.decision_id)}`} className="min-w-0 flex-1 text-left group">
-                <div className="text-xs font-mono text-gray-400 mb-1">{r.decision_id}</div>
+                <div className="flex flex-wrap items-center gap-2 mb-1">
+                  <span className="text-xs font-mono text-gray-400">{r.decision_id}</span>
+                  {r.has_commit && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-900 border border-violet-200/80" style={{ fontWeight: 600 }}>
+                      Adopted
+                    </span>
+                  )}
+                  {r.has_outcome ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-200/80" style={{ fontWeight: 600 }}>
+                      Outcome saved
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200/70" style={{ fontWeight: 600 }}>
+                      Outcome pending
+                    </span>
+                  )}
+                </div>
                 <div className="text-sm text-gray-800 group-hover:text-purple-800 transition-colors">
                   {r.preview || '(empty)'}
                 </div>

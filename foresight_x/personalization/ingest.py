@@ -11,7 +11,7 @@ from foresight_x.config import Settings, load_settings
 from foresight_x.memory.profile_store import empty_profile, load_profile as load_tier3_profile, save_profile as save_tier3_profile
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.profile.store import load_user_profile, save_user_profile
-from foresight_x.schemas import UserProfile
+from foresight_x.schemas import UserProfile, rebuild_priority_lines_from_flat
 from foresight_x.structured_predict import structured_predict
 
 MAX_INGEST_CHARS = 80_000
@@ -156,6 +156,7 @@ def ingest_personalization_text(raw: str, *, settings: Settings | None = None) -
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     base = load_user_profile(settings=s)
     merged = _merge_profiles(base, ext, stamp=stamp)
+    merged = rebuild_priority_lines_from_flat(merged, system_channel="personalize")
 
     uid = (s.foresight_user_id or "demo_user").strip() or "demo_user"
     merged = merged.model_copy(update={"user_id": merged.user_id or uid})
@@ -178,6 +179,7 @@ def ingest_personalization_text(raw: str, *, settings: Settings | None = None) -
             "last_updated": merged.last_updated,
             "user_priorities": merged.user_priorities,
             "priorities": merged.priorities,
+            "priority_lines": merged.priority_lines,
             "constraints": merged.constraints,
             "n_decisions_summarized": n_sum,
         }

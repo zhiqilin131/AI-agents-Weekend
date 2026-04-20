@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiUrl } from '../../utils/apiOrigin';
+import { OutcomeSummaryVisual } from './OutcomeSummaryVisual';
 
 type OutcomePayload = {
   decision_id: string;
@@ -86,30 +87,7 @@ export function SavedOutcomeModal({ decisionId, onClose }: SavedOutcomeModalProp
           </div>
         )}
 
-        {!loading && outcome && (
-          <dl className="space-y-3 text-sm">
-            <div>
-              <dt className="text-gray-500 text-xs mb-0.5">Recorded at</dt>
-              <dd className="text-gray-900">{outcome.timestamp}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500 text-xs mb-0.5">Took recommended action</dt>
-              <dd className="text-gray-900">{outcome.user_took_recommended_action ? 'Yes' : 'No'}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500 text-xs mb-0.5">What happened</dt>
-              <dd className="text-gray-900 whitespace-pre-wrap">{outcome.actual_outcome}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500 text-xs mb-0.5">Quality (1–5)</dt>
-              <dd className="text-gray-900">{outcome.user_reported_quality}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500 text-xs mb-0.5">Reversed later</dt>
-              <dd className="text-gray-900">{outcome.reversed_later ? 'Yes' : 'No'}</dd>
-            </div>
-          </dl>
-        )}
+        {!loading && outcome && <OutcomeSummaryVisual outcome={outcome} />}
       </div>
     </div>
   );

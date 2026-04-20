@@ -20,13 +20,14 @@ def _us(raw: str) -> UserState:
 
 
 def test_drops_academic_integrity_when_question_not_academic() -> None:
-    us = _us("怎么处理尸体现场")
+    q = "how to handle a crime scene body disposal"
+    us = _us(q)
     fact = Fact(
         text="Academic Integrity: Policies for students who violate the honor code.",
         source_url="https://example.edu",
         confidence=0.7,
     )
-    assert not keep_baseline_fact(us, fact, tavily_query="怎么处理尸体现场")
+    assert not keep_baseline_fact(us, fact, tavily_query=q)
 
 
 def test_keeps_overlap_on_topic() -> None:

@@ -8,6 +8,7 @@ from foresight_x.schemas import UserProfile
 def _profile_nonempty(profile: UserProfile) -> bool:
     return bool(
         profile.stated_priority_lines()
+        or profile.memory_facts
         or profile.inferred_priorities
         or profile.about_me.strip()
         or profile.constraints

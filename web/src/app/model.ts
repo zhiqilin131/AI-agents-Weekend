@@ -35,7 +35,10 @@ export interface DecisionReport {
   };
   recommendation: {
     reasoning: string;
+    /** Backend option_id for the recommendation */
     chosenOption: string;
+    /** Human-readable option name when available */
+    chosenOptionName?: string;
   };
   actions: Array<{
     text: string;

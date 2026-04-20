@@ -127,9 +127,9 @@ def recommend(
     try:
         raw = structured_predict(llm, Recommendation, prompt)
         rec = raw if isinstance(raw, Recommendation) else Recommendation.model_validate(raw)
-        valid_ids = {o.option_id for o in options}
-        if rec.chosen_option_id not in valid_ids:
-            rec = rec.model_copy(update={"chosen_option_id": chosen.option_id})
+        # Always use the composite-score winner so UI ordering (same weights in mapTrace) matches the highlight.
+        # The LLM only supplies reasoning and next_actions; it may mis-emit chosen_option_id.
+        rec = rec.model_copy(update={"chosen_option_id": chosen.option_id})
         return normalize_recommendation_deadlines(rec, anchor)
     except Exception:
         return normalize_recommendation_deadlines(

@@ -14,6 +14,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from foresight_x.config import Settings, load_settings
 from foresight_x.retrieval._embeddings import build_openai_embedding
 from foresight_x.retrieval.baseline_relevance import keep_baseline_fact
+from foresight_x.retrieval.memory_query import build_unified_vector_query
 from foresight_x.retrieval.query_text import profile_snippet_for_retrieval
 from foresight_x.retrieval.tavily_client import TavilyGateway, build_tavily_query_for_decision
 from foresight_x.schemas import EvidenceBundle, Fact, UserState
@@ -241,14 +242,8 @@ class WorldKnowledge:
         top_k: int = 8,
     ) -> EvidenceBundle:
         extra = profile_snippet_for_retrieval(user_state)
-        query = " ".join(
-            [
-                user_state.decision_type,
-                " ".join(user_state.goals),
-                extra,
-                user_state.raw_input[:2000],
-            ]
-        )
+        # Same embedding query string as ``UserMemory`` (Chroma alignment).
+        query = build_unified_vector_query(user_state)
         # Dedicated string for live web search (user question first — avoids irrelevant cached baselines).
         tavily_query = build_tavily_query_for_decision(user_state, extra)
         fetch_k = min(36, max(top_k * 4, 16))

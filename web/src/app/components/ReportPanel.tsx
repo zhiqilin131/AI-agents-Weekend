@@ -2,6 +2,7 @@ import { AppState, DecisionReport } from '../model';
 import { LoadingState } from './LoadingState';
 import { EmptyState } from './EmptyState';
 import { ReportCompact } from './ReportCompact';
+import { CommitAdoptPanel } from './CommitAdoptPanel';
 
 interface ReportPanelProps {
   state: AppState;
@@ -27,6 +28,11 @@ interface ReportPanelProps {
   onToggleJson: () => void;
   onShowOutcome: () => void;
   canRecordOutcome: boolean;
+  decisionId?: string | null;
+  commitInfo?: { chosen_option_id: string; matches_recommendation: boolean; committed_at: string } | null;
+  onCommitAdopt?: (chosenOptionId: string) => Promise<void>;
+  commitBusy?: boolean;
+  commitError?: string | null;
   runProgress?: number;
   runStageLabel?: string;
   /** True while SSE is still streaming after first partial payload. */
@@ -42,6 +48,11 @@ export function ReportPanel({
   onToggleJson,
   onShowOutcome,
   canRecordOutcome,
+  decisionId = null,
+  commitInfo = null,
+  onCommitAdopt,
+  commitBusy = false,
+  commitError = null,
   runProgress = 0,
   runStageLabel = 'Working…',
   isStreaming = false,
@@ -92,6 +103,17 @@ export function ReportPanel({
           tier3Profile={tier3Profile}
           isStreaming={false}
         />
+
+        {decisionId && onCommitAdopt && (
+          <CommitAdoptPanel
+            report={report}
+            decisionId={decisionId}
+            commitInfo={commitInfo}
+            onCommit={onCommitAdopt}
+            busy={commitBusy}
+            error={commitError}
+          />
+        )}
 
         <div className="flex flex-wrap gap-4">
           <button

@@ -73,10 +73,13 @@ def test_list_and_delete_trace_and_outcome(iso: Settings) -> None:
     assert len(rows) == 1
     assert rows[0].decision_id == "tid-1"
     assert "hello" in rows[0].preview
+    assert rows[0].has_outcome is True
+    assert rows[0].has_commit is False
 
-    td, od = delete_trace("tid-1", settings=iso)
+    td, od, cd = delete_trace("tid-1", settings=iso)
     assert td is True
     assert od is True
+    assert cd is False
     assert not (iso.traces_dir / "tid-1.json").exists()
     assert not (iso.outcomes_dir / "tid-1.json").exists()
     assert list_traces(settings=iso) == []

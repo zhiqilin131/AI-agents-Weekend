@@ -21,8 +21,9 @@ class EnhancedDecisionText(BaseModel):
     enhanced_question: str = Field(
         description=(
             "Exactly ONE decision question string for downstream analysis. "
-            "Must preserve every substantive detail from the user (stakes, options, domain terms, numbers, names). "
-            "Do not refuse, sanitize topics, or replace the user's framing with a 'safer' generic question."
+            "Preserve the user's information content: entities, quantities, constraints, and trade-offs they relied on "
+            "to pose the decision. Do not replace a detailed message with a short generic question. "
+            "Do not refuse, sanitize topics, or substitute a bland paraphrase for their framing."
         )
     )
 
@@ -44,10 +45,6 @@ _REFUSAL_HINTS: tuple[str, ...] = (
     "refuse to",
     "inappropriate content",
     "harmful content",
-    "抱歉",
-    "无法提供",
-    "不能协助",
-    "无法协助",
 )
 
 
@@ -66,6 +63,25 @@ def _likely_stripped_too_much(body: str, enhanced: str) -> bool:
     return len(e) < 100 and len(body) > 280
 
 
+def _enhancement_drops_too_much_substance(body: str, enhanced: str) -> bool:
+    """Reject rewrites that are much shorter than the user text — models often drop decision-relevant specifics."""
+    b = body.strip()
+    e = (enhanced or "").strip()
+    if not e:
+        return True
+    lb, le = len(b), len(e)
+    if lb < 150:
+        return False
+    # For medium+ prompts, require roughly half the length (after strip) so key specifics survive.
+    min_acceptable = max(140, int(lb * 0.50))
+    if le < min_acceptable:
+        return True
+    # Very long narratives: also reject if the model collapsed to a single short paragraph.
+    if lb >= 650 and le < int(lb * 0.45):
+        return True
+    return False
+
+
 def _pick_enhanced_or_raw(body: str, enhanced: str) -> str:
     e = (enhanced or "").strip()
     if not e:
@@ -73,6 +89,8 @@ def _pick_enhanced_or_raw(body: str, enhanced: str) -> str:
     if _looks_like_refusal(e):
         return body
     if _likely_stripped_too_much(body, e):
+        return body
+    if _enhancement_drops_too_much_substance(body, e):
         return body
     return e
 
@@ -94,13 +112,18 @@ def prepare_decision_text(
     prof = ""
     if profile:
         bits: list[str] = []
-        if profile.stated_priority_lines():
-            bits.append(
-                "User-stated priorities (authoritative): " + "; ".join(profile.stated_priority_lines()[:12])
-            )
+        pp = profile.profile_channel_priority_texts()
+        if pp:
+            bits.append("User-authored priorities (Profile only, authoritative): " + "; ".join(pp[:12]))
+        clar = profile.clarification_priority_texts()
+        if clar:
+            bits.append("Saved clarification choices: " + "; ".join(clar[:12]))
+        if profile.memory_facts:
+            fact_lines = [f"{f.category.value}: {f.text}" for f in profile.memory_facts[:20]]
+            bits.append("Structured memory facts: " + " | ".join(fact_lines))
         if profile.inferred_priorities:
             bits.append(
-                "System-inferred priorities (may be revised): "
+                "Legacy system-inferred lines (may be revised): "
                 + "; ".join(profile.inferred_priorities[:12])
             )
         if profile.constraints:
@@ -110,21 +133,23 @@ def prepare_decision_text(
     body = raw.strip()
     prompt = (
         "You are a technical editor for a private decision-support tool (Foresight-X).\n"
-        "Your ONLY job: turn the user's text into ONE clear, analyzable decision question.\n\n"
-        "RULES (strict):\n"
-        "- PRESERVE the user's substance: keep their domain, options, tensions, numbers, names, and any sensitive or "
-        "stigmatized topic if it is central to the decision. Do NOT sanitize, soften, moralize, or replace their "
-        "stakes with generic 'responsible' wording.\n"
-        "- Do NOT delete material content. If the message is long, you may tighten phrasing but must not drop "
-        "constraints or options the user named.\n"
-        "- Do NOT refuse, hedge with ethics lectures, or output disclaimers — output ONLY the single reformulated "
-        "question string (no preamble, no bullet list).\n"
-        "- Legally or socially sensitive domains can still be legitimate decision contexts; treat them like any other "
-        "trade-off analysis subject.\n"
-        "- You may clarify vague grammar and structure. You may restate implied stakes or timeframe ONLY when clearly "
-        "implied by the user text or profile below.\n"
-        "- Do NOT invent budgets, deadlines, preferences, or priorities not present in the message or profile.\n"
-        "- If the message is already one clear question, change at most light copy-editing (typos, punctuation).\n\n"
+        "Output ONE decision question string that downstream analysis will use as its sole description of the problem.\n"
+        "Fidelity beats brevity: if you remove details the user treated as part of the decision, the analysis will be "
+        "wrong.\n\n"
+        "General principles (any domain):\n"
+        "- **Information preservation**: Keep the same level of specificity the user supplied—identifiers they used, "
+        "numbers, time bounds, options, and constraints. Do not summarize rich input into a thin generic question.\n"
+        "- **Proportional length**: High-detail messages should yield high-detail questions (after removing stutter, "
+        "typos, and exact duplicate lines). Do not merge distinct points into one vague phrase.\n"
+        "- **When to edit lightly**: If the text is already a clear question with sufficient context, change at most "
+        "grammar, spelling, and punctuation.\n"
+        "- **When to reshape more**: If the text is rambling or unclear, you may reorder and clarify, but every "
+        "substantive claim the user made about the situation must remain available to the reader—nothing important "
+        "dropped for tone or concision.\n"
+        "- **No invention**: Do not add budgets, deadlines, preferences, or facts not in the message or profile below.\n"
+        "- **No refusal or softening**: Do not refuse, moralize, sanitize away the user's topic, or add disclaimers. "
+        "Sensitive or socially loaded content is still a valid decision context if the user raised it.\n"
+        "- **Output format**: Single question string only—no preamble, no bullets, no labels.\n\n"
         f"{prof}"
         "USER MESSAGE:\n---\n"
         f"{body}\n"

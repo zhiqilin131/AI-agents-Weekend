@@ -18,6 +18,7 @@ export default function ShadowChatPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [readingMemory, setReadingMemory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [decisionModal, setDecisionModal] = useState(false);
   const [shadowToast, setShadowToast] = useState<ShadowToastState | null>(null);
@@ -48,6 +49,7 @@ export default function ShadowChatPage() {
     const next: Msg[] = [...before, { role: 'user', content: text }];
     setMessages(next);
     setSending(true);
+    setReadingMemory(true);
     try {
       const res = await fetch(apiUrl('/api/shadow/chat'), {
         method: 'POST',
@@ -63,17 +65,28 @@ export default function ShadowChatPage() {
       const data = (await res.json()) as {
         reply: string;
         suggest_decision_navigation?: boolean;
+        memory_facts_recorded?: string[];
+        memory_used_facts?: string[];
         recorded_observation?: string | null;
       };
+      setReadingMemory(false);
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }]);
       if (data.suggest_decision_navigation) setDecisionModal(true);
-      if (data.recorded_observation && data.recorded_observation.trim()) {
-        showRecordedToast(data.recorded_observation.trim());
+      const recorded =
+        (data.memory_facts_recorded && data.memory_facts_recorded.length > 0
+          ? data.memory_facts_recorded.join(' · ')
+          : data.recorded_observation) || '';
+      if (recorded.trim()) {
+        showRecordedToast(recorded.trim());
+      }
+      if (data.memory_used_facts && data.memory_used_facts.length > 0) {
+        showRecordedToast(`Used memory: ${data.memory_used_facts.join(' · ')}`);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Request failed');
       setMessages(before);
     } finally {
+      setReadingMemory(false);
       setSending(false);
     }
   }, [input, messages, sending, showRecordedToast]);
@@ -97,7 +110,7 @@ export default function ShadowChatPage() {
           >
             <p className="text-xs font-semibold text-purple-900 uppercase tracking-wide">Recorded</p>
             <p className="text-sm text-gray-800 mt-1 leading-snug line-clamp-4">
-              Saved to Shadow notes and to Profile → Inferred priorities: {shadowToast.text}
+              Saved to shadow notes and Profile → structured memory: {shadowToast.text}
             </p>
           </div>
         </div>
@@ -110,8 +123,9 @@ export default function ShadowChatPage() {
             Shadow space
           </h1>
           <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-            Talk with your shadow self — the voice that names what you sidestep and the tension under your story. Not
-            therapy. No option-picking here — patterns may be noted in your shadow profile.
+            A mirror for your own words — not a generic assistant. Your shadow remembers structured facts you state
+            (identity, views, …) and speaks in continuity with that memory. Nothing here picks options for you;
+            concrete details can be saved to Profile for decision mode.
           </p>
         </header>
 
@@ -124,7 +138,7 @@ export default function ShadowChatPage() {
         <div className="rounded-3xl border border-white/80 bg-white/60 backdrop-blur-sm p-4 min-h-[320px] max-h-[55vh] overflow-y-auto mb-4 space-y-4">
           {messages.length === 0 && (
             <p className="text-sm text-gray-500 text-center py-12">
-              Say what you're carrying — your shadow self answers from here.
+              Say what you&apos;re carrying — the voice that answers is yours, reflected.
             </p>
           )}
           {messages.map((m, i) => (
@@ -139,14 +153,24 @@ export default function ShadowChatPage() {
                     : 'bg-white border border-gray-100 text-gray-800 rounded-bl-md shadow-sm'
                 }`}
               >
-                {m.content}
+                {m.role === 'assistant' ? (
+                  <span>
+                    <span className="text-[10px] uppercase tracking-wide text-purple-600/90 font-bold block mb-1.5">
+                      Shadow
+                    </span>
+                    {m.content}
+                  </span>
+                ) : (
+                  m.content
+                )}
               </div>
             </div>
           ))}
           {sending && (
             <div className="flex justify-start">
-              <div className="rounded-2xl px-4 py-2 bg-white/80 border border-gray-100 text-xs text-gray-500">
-                …
+              <div className="rounded-2xl px-4 py-2 bg-white/80 border border-gray-100 text-xs text-gray-500 flex items-center gap-2">
+                <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-purple-300 border-t-purple-600 animate-spin" />
+                {readingMemory ? 'Reading memory…' : 'Drafting reply…'}
               </div>
             </div>
           )}

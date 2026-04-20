@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from foresight_x.config import Settings, load_settings
+from foresight_x.harness.decision_commit import delete_commit
 from foresight_x.schemas import TraceListItem
 
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
@@ -42,13 +43,15 @@ def list_traces(*, settings: Settings | None = None) -> list[TraceListItem]:
                 timestamp=ts,
                 decision_type=str(dt) if dt else "unknown",
                 preview=preview,
+                has_outcome=(s.outcomes_dir / f"{did}.json").is_file(),
+                has_commit=(s.commits_dir / f"{did}.json").is_file(),
             )
         )
     return out
 
 
-def delete_trace(decision_id: str, *, settings: Settings | None = None) -> tuple[bool, bool]:
-    """Remove ``data/traces/{id}.json`` and ``data/outcomes/{id}.json`` if present. Returns (trace_deleted, outcome_deleted)."""
+def delete_trace(decision_id: str, *, settings: Settings | None = None) -> tuple[bool, bool, bool]:
+    """Remove trace, outcome, and commit files if present. Returns (trace_deleted, outcome_deleted, commit_deleted)."""
     _validate_decision_id(decision_id)
     s = settings or load_settings()
     trace_path = s.traces_dir / f"{decision_id}.json"
@@ -61,4 +64,5 @@ def delete_trace(decision_id: str, *, settings: Settings | None = None) -> tuple
     if outcome_path.is_file():
         outcome_path.unlink()
         od = True
-    return td, od
+    cd = delete_commit(decision_id, settings=s)
+    return td, od, cd

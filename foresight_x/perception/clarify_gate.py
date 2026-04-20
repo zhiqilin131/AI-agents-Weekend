@@ -70,12 +70,19 @@ def run_clarify_gate(
 
     prof_bits = ""
     if profile:
-        if profile.stated_priority_lines():
-            prof_bits += f"User-stated priorities (authoritative): {profile.stated_priority_lines()}\n"
+        pp = profile.profile_channel_priority_texts()
+        if pp:
+            prof_bits += f"User-authored priorities (authoritative): {pp}\n"
+        clar = profile.clarification_priority_texts()
+        if clar:
+            prof_bits += f"Saved clarification choices: {clar}\n"
+        if profile.memory_facts:
+            prof_bits += "Structured memory facts: " + " | ".join(
+                f"{f.category.value}: {f.text}" for f in profile.memory_facts[:16]
+            ) + "\n"
         if profile.inferred_priorities:
             prof_bits += (
-                f"System-inferred priority hints (may be revised, lower weight): "
-                f"{profile.inferred_priorities}\n"
+                f"Legacy system-inferred lines (lower weight): {profile.inferred_priorities}\n"
             )
         if profile.constraints:
             prof_bits += f"Known constraints: {profile.constraints}\n"

@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     def outcomes_dir(self) -> Path:
         return self.foresight_data_dir / "outcomes"
 
+    @property
+    def commits_dir(self) -> Path:
+        return self.foresight_data_dir / "commits"
+
+    @property
+    def evaluation_logs_dir(self) -> Path:
+        return self.foresight_data_dir / "evaluation_logs"
+
 
 def load_settings() -> Settings:
     return Settings()

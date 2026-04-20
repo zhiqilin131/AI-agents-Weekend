@@ -82,10 +82,6 @@ def _stale_academic_blob_not_in_question(fact_text: str, needle: str) -> bool:
         "exam",
         "homework",
         "thesis",
-        "论文",
-        "学业",
-        "考试",
-        "大学",
     )
     if any(h in n for h in school_hints):
         return False
