@@ -113,6 +113,7 @@ class ForesightWorkflow(Workflow):
         original, enhanced = prepare_decision_text(ev.raw_input, self.pipe_ctx.llm, profile=profile)
         user_state = build_user_state(enhanced, self.pipe_ctx.llm, profile=profile)
         user_state = merge_profile_into_user_state(user_state, profile)
+        user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
         return PerceivedEvent(
             user_state=user_state,
             decision_id=uid,

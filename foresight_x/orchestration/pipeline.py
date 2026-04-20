@@ -226,6 +226,7 @@ def iter_pipeline_events(
     yield {"event": "stage", "stage": "perceive"}
     user_state = build_user_state(enhanced, ctx.llm, profile=profile)
     user_state = merge_profile_into_user_state(user_state, profile)
+    user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
     yield {
         "event": "partial",
         "stage": "perceive",
@@ -327,6 +328,7 @@ def run_pipeline(
         )
     user_state = build_user_state(enhanced, ctx.llm, profile=profile)
     user_state = merge_profile_into_user_state(user_state, profile)
+    user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
     memory_bundle, evidence_bundle = retrieve_bundles_parallel(
         user_state, ctx, exclude_decision_id=did
     )

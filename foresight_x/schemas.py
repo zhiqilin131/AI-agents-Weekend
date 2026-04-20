@@ -229,6 +229,10 @@ def rebuild_priority_lines_from_flat(
 
 class UserState(BaseModel):
     raw_input: str
+    active_user_id: str = Field(
+        default="",
+        description="Runtime persona/user id used to scope traces, memory and profile in UI/API.",
+    )
     goals: list[str]
     time_pressure: TimePressure
     stress_level: int = Field(ge=0, le=10)

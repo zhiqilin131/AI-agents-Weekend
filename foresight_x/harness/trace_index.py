@@ -21,6 +21,7 @@ def _validate_decision_id(decision_id: str) -> None:
 def list_traces(*, settings: Settings | None = None) -> list[TraceListItem]:
     s = settings or load_settings()
     root = s.traces_dir
+    current_user = (s.foresight_user_id or "").strip()
     if not root.is_dir():
         return []
     out: list[TraceListItem] = []
@@ -34,6 +35,11 @@ def list_traces(*, settings: Settings | None = None) -> list[TraceListItem]:
         us = data.get("user_state") or {}
         if not isinstance(did, str) or not isinstance(ts, str):
             continue
+        if isinstance(us, dict):
+            trace_user = str(us.get("active_user_id", "") or "").strip()
+            # New traces are scoped by active_user_id. Legacy traces without user id stay visible.
+            if trace_user and current_user and trace_user != current_user:
+                continue
         raw = us.get("raw_input") if isinstance(us, dict) else ""
         preview = (raw or "")[:160].replace("\n", " ")
         dt = us.get("decision_type", "") if isinstance(us, dict) else ""

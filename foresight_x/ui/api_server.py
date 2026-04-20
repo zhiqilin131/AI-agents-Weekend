@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 
 import io
 import logging
+import re
+from pathlib import Path
+from threading import Lock
 
+import chromadb
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -30,6 +34,7 @@ from foresight_x.schemas import DecisionCommit, DecisionOutcome, ProfileLine, Us
 from foresight_x.ui.cli import _build_context
 from foresight_x.memory.profile_store import empty_profile as load_tier3_empty_profile
 from foresight_x.memory.profile_store import load_profile as load_tier3_profile
+from foresight_x.memory.profile_store import save_profile as save_tier3_profile
 from foresight_x.personalization.ingest import ingest_personalization_text, preview_extract_summary
 from foresight_x.shadow.chat import run_shadow_turn
 from foresight_x.structured_predict import structured_predict
@@ -45,6 +50,139 @@ def _utc_now() -> str:
 def _sse_chunk(obj: dict) -> str:
     """SSE line; ``default=str`` avoids rare non-JSON-native values aborting the stream."""
     return f"data: {json.dumps(obj, ensure_ascii=False, default=str)}\n\n"
+
+
+class PersonaItem(BaseModel):
+    user_id: str = Field(min_length=1)
+    created_at: str = Field(default="")
+
+
+class PersonaRegistry(BaseModel):
+    current_user_id: str
+    users: list[PersonaItem]
+
+
+class PersonaCreateRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+
+
+class PersonaSwitchRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+
+
+_USER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$")
+_PERSONA_LOCK = Lock()
+
+
+def _validate_user_id_or_400(user_id: str) -> str:
+    uid = (user_id or "").strip()
+    if not _USER_ID_RE.match(uid):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid user_id. Use 2-64 chars: letters, numbers, underscore, hyphen.",
+        )
+    return uid
+
+
+def _default_user_id(settings=None) -> str:
+    s = settings or load_settings()
+    return (s.foresight_user_id or "demo_user").strip() or "demo_user"
+
+
+def _sanitize_mem_collection_suffix(user_id: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", user_id.strip())[:120]
+
+
+def _persona_registry_path(settings=None) -> Path:
+    s = settings or load_settings()
+    return s.foresight_data_dir / "personas_registry.json"
+
+
+def _ensure_registry(settings=None) -> PersonaRegistry:
+    s = settings or load_settings()
+    p = _persona_registry_path(s)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.is_file():
+        try:
+            data = PersonaRegistry.model_validate_json(p.read_text(encoding="utf-8"))
+            if data.users:
+                return data
+        except Exception:
+            pass
+    now = _utc_now()
+    default_uid = _default_user_id(s)
+    data = PersonaRegistry(
+        current_user_id=default_uid,
+        users=[PersonaItem(user_id=default_uid, created_at=now)],
+    )
+    p.write_text(data.model_dump_json(indent=2), encoding="utf-8")
+    return data
+
+
+def _save_registry(reg: PersonaRegistry, settings=None) -> Path:
+    s = settings or load_settings()
+    p = _persona_registry_path(s)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(reg.model_dump_json(indent=2), encoding="utf-8")
+    return p
+
+
+def _active_user_id(settings=None) -> str:
+    reg = _ensure_registry(settings)
+    uid = (reg.current_user_id or "").strip()
+    return uid or _default_user_id(settings)
+
+
+def _settings_for_active_user():
+    s = load_settings()
+    uid = _active_user_id(s)
+    return s.model_copy(update={"foresight_user_id": uid})
+
+
+def _persona_settings(user_id: str):
+    s = load_settings()
+    return s.model_copy(update={"foresight_user_id": user_id})
+
+
+def _delete_persona_data(user_id: str, settings=None) -> None:
+    s = settings or load_settings()
+    paths = [
+        s.profile_dir / f"{user_id}.json",
+        s.foresight_data_dir / "profiles" / f"{user_id}.json",
+        s.foresight_data_dir / "shadow_self" / f"{user_id}.json",
+    ]
+    for p in paths:
+        if p.is_file():
+            p.unlink()
+    try:
+        client = chromadb.PersistentClient(path=str(s.chroma_persist_dir))
+        client.delete_collection(name=f"fx_mem_{_sanitize_mem_collection_suffix(user_id)}")
+    except Exception:
+        # Missing collection is fine.
+        pass
+
+
+def _trace_user_id(trace: dict | object) -> str:
+    try:
+        us = getattr(trace, "user_state", None)
+        if us is not None:
+            return str(getattr(us, "active_user_id", "") or "").strip()
+        if isinstance(trace, dict):
+            us_raw = trace.get("user_state") or {}
+            if isinstance(us_raw, dict):
+                return str(us_raw.get("active_user_id", "") or "").strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _trace_visible_to_current(trace_user_id: str, current_user_id: str) -> bool:
+    owner = (trace_user_id or "").strip()
+    current = (current_user_id or "").strip()
+    if owner:
+        return owner == current
+    # Legacy traces without owner stay with demo_user for backward compatibility.
+    return current == "demo_user"
 
 
 app = FastAPI(title="Foresight-X API", version="0.1.0")
@@ -97,6 +235,8 @@ def root() -> dict[str, object]:
         "status": "ok",
         "routes": [
             "/api/health",
+            "/api/personas",
+            "/api/personas/switch",
             "/api/run",
             "/api/run/stream",
             "/api/profile",
@@ -123,6 +263,60 @@ def health_alias() -> dict[str, str]:
     return health()
 
 
+@app.get("/api/personas")
+def list_personas() -> dict:
+    with _PERSONA_LOCK:
+        reg = _ensure_registry()
+    return reg.model_dump(mode="json")
+
+
+@app.post("/api/personas")
+def create_persona(body: PersonaCreateRequest) -> dict:
+    uid = _validate_user_id_or_400(body.user_id)
+    with _PERSONA_LOCK:
+        reg = _ensure_registry()
+        if any(x.user_id == uid for x in reg.users):
+            raise HTTPException(status_code=409, detail="persona_exists")
+        reg.users.append(PersonaItem(user_id=uid, created_at=_utc_now()))
+        if not reg.current_user_id:
+            reg.current_user_id = uid
+        _save_registry(reg)
+    ps = _persona_settings(uid)
+    # Initialize empty profile files so the persona starts clean and visible.
+    save_user_profile(UserProfile(user_id=uid), settings=ps)
+    save_tier3_profile(load_tier3_empty_profile(uid))
+    return {"ok": True, "current_user_id": reg.current_user_id, "created_user_id": uid}
+
+
+@app.post("/api/personas/switch")
+def switch_persona(body: PersonaSwitchRequest) -> dict:
+    uid = _validate_user_id_or_400(body.user_id)
+    with _PERSONA_LOCK:
+        reg = _ensure_registry()
+        if not any(x.user_id == uid for x in reg.users):
+            raise HTTPException(status_code=404, detail="persona_not_found")
+        reg.current_user_id = uid
+        _save_registry(reg)
+    return {"ok": True, "current_user_id": uid}
+
+
+@app.delete("/api/personas/{user_id}")
+def delete_persona(user_id: str) -> dict:
+    uid = _validate_user_id_or_400(user_id)
+    with _PERSONA_LOCK:
+        reg = _ensure_registry()
+        if not any(x.user_id == uid for x in reg.users):
+            raise HTTPException(status_code=404, detail="persona_not_found")
+        if len(reg.users) <= 1:
+            raise HTTPException(status_code=400, detail="cannot_delete_last_persona")
+        reg.users = [x for x in reg.users if x.user_id != uid]
+        if reg.current_user_id == uid:
+            reg.current_user_id = reg.users[0].user_id
+        _save_registry(reg)
+    _delete_persona_data(uid)
+    return {"ok": True, "current_user_id": reg.current_user_id, "deleted_user_id": uid}
+
+
 def _client_anchor_iso(client_now_iso: str | None) -> str | None:
     if not client_now_iso or not str(client_now_iso).strip():
         return None
@@ -132,7 +326,7 @@ def _client_anchor_iso(client_now_iso: str | None) -> str | None:
 
 @app.post("/api/run", response_model=RunResponse)
 def run_decision(body: RunRequest) -> RunResponse:
-    settings = load_settings()
+    settings = _settings_for_active_user()
     ctx, notes = _build_context(settings)
     trace = run_pipeline(
         ctx,
@@ -155,7 +349,7 @@ def run_decision(body: RunRequest) -> RunResponse:
 def run_decision_stream(body: RunRequest) -> StreamingResponse:
     """SSE: notes, meta, per-stage ``partial`` payloads, then ``complete`` with full ``DecisionTrace``."""
 
-    settings = load_settings()
+    settings = _settings_for_active_user()
     ctx, notes = _build_context(settings)
 
     def gen():
@@ -197,13 +391,15 @@ def run_decision_alias(body: RunRequest) -> RunResponse:
 
 @app.get("/api/profile")
 def get_profile() -> dict:
-    return load_user_profile().model_dump(mode="json")
+    settings = _settings_for_active_user()
+    return load_user_profile(settings).model_dump(mode="json")
 
 
 @app.put("/api/profile")
 def put_profile(body: UserProfile) -> dict:
     """Update user-editable profile fields; keeps system lines + clarification rows; replaces Profile-authored priorities."""
-    existing = load_user_profile()
+    settings = _settings_for_active_user()
+    existing = load_user_profile(settings)
     existing = UserProfile.model_validate(existing.model_dump(mode="json"))
     stated_raw = body.user_priorities or body.priorities
     stated = list(stated_raw) if stated_raw else existing.profile_channel_priority_texts()
@@ -239,34 +435,36 @@ def put_profile(body: UserProfile) -> dict:
             "values": list(body.values),
         }
     )
-    path = save_user_profile(merged)
+    path = save_user_profile(merged, settings=settings)
     return {"ok": True, "path": str(path)}
 
 
 @app.delete("/api/profile/priority-line/{line_id}")
 def delete_priority_line(line_id: str) -> dict:
-    existing = load_user_profile()
+    settings = _settings_for_active_user()
+    existing = load_user_profile(settings)
     updated = delete_priority_line_by_id(existing, line_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="priority_line_not_found")
-    path = save_user_profile(updated)
+    path = save_user_profile(updated, settings=settings)
     return {"ok": True, "path": str(path)}
 
 
 @app.delete("/api/profile/memory-fact/{fact_id}")
 def delete_memory_fact(fact_id: str) -> dict:
-    existing = load_user_profile()
+    settings = _settings_for_active_user()
+    existing = load_user_profile(settings)
     updated = delete_memory_fact_by_id(existing, fact_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="memory_fact_not_found")
-    path = save_user_profile(updated)
+    path = save_user_profile(updated, settings=settings)
     return {"ok": True, "path": str(path)}
 
 
 @app.get("/api/profile/tier3")
 def get_tier3_profile() -> dict:
     """Tier 3 profile consumed by the recommender prompt."""
-    s = load_settings()
+    s = _settings_for_active_user()
     p = load_tier3_profile(s.foresight_user_id) or load_tier3_empty_profile(s.foresight_user_id)
     return {
         "profile": p.model_dump(mode="json"),
@@ -279,7 +477,7 @@ def get_tier3_profile() -> dict:
 @app.post("/api/clarify")
 def clarify(body: ClarifyRequest) -> dict:
     """Return optional multiple-choice questions before running the full pipeline."""
-    settings = load_settings()
+    settings = _settings_for_active_user()
     ctx, _notes = _build_context(settings)
     profile = load_user_profile(settings)
     result = run_clarify_gate(body.raw_input.strip(), ctx.llm, profile=profile)
@@ -288,14 +486,36 @@ def clarify(body: ClarifyRequest) -> dict:
 
 @app.get("/api/traces")
 def get_traces() -> list[dict]:
-    return [t.model_dump(mode="json") for t in list_traces()]
+    settings = _settings_for_active_user()
+    items = list_traces(settings=settings)
+    # Keep newly created personas clean: hide legacy traces with unknown owner.
+    if settings.foresight_user_id != "demo_user":
+        out: list[dict] = []
+        for t in items:
+            try:
+                tr = load_decision_trace(t.decision_id, settings=settings)
+            except FileNotFoundError:
+                continue
+            owner = _trace_user_id(tr)
+            if owner == settings.foresight_user_id:
+                out.append(t.model_dump(mode="json"))
+        return out
+    return [t.model_dump(mode="json") for t in items]
 
 
 @app.get("/api/outcomes/{decision_id}")
 def get_outcome(decision_id: str) -> dict:
     """Return saved outcome JSON for ``decision_id``, or 404 if none."""
+    settings = _settings_for_active_user()
     try:
-        o = load_decision_outcome(decision_id)
+        trace = load_decision_trace(decision_id, settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="trace_not_found") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail="no_outcome")
+    try:
+        o = load_decision_outcome(decision_id, settings=settings)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="no_outcome") from None
     return o.model_dump(mode="json")
@@ -330,7 +550,7 @@ class PersonalizationIngestRequest(BaseModel):
 @app.post("/api/personalization/ingest")
 def personalization_ingest(body: PersonalizationIngestRequest) -> dict:
     """Analyze pasted/exported chat or email text; merge behavioral insights into UserProfile (+ Tier 3)."""
-    settings = load_settings()
+    settings = _settings_for_active_user()
     if not (settings.openai_api_key or "").strip():
         raise HTTPException(status_code=503, detail="Personalization ingest requires OPENAI_API_KEY")
     try:
@@ -353,7 +573,7 @@ def personalization_ingest(body: PersonalizationIngestRequest) -> dict:
 @app.post("/api/shadow/chat")
 def shadow_chat(body: ShadowChatRequest) -> dict:
     """Dialogue with the user's shadow self (not a therapist); no decisions. Updates shadow-self notes."""
-    settings = load_settings()
+    settings = _settings_for_active_user()
     if not (settings.openai_api_key or "").strip():
         raise HTTPException(status_code=503, detail="Shadow chat requires OPENAI_API_KEY")
     try:
@@ -378,13 +598,16 @@ def shadow_chat(body: ShadowChatRequest) -> dict:
 @app.post("/api/option-chat")
 def option_chat(body: OptionChatRequest) -> dict:
     """Follow-up Q&A for one option card, grounded in the already-generated decision trace."""
-    settings = load_settings()
+    settings = _settings_for_active_user()
     if not (settings.openai_api_key or "").strip():
         raise HTTPException(status_code=503, detail="Option follow-up chat requires OPENAI_API_KEY")
     try:
-        trace = load_decision_trace(body.decision_id.strip())
+        trace = load_decision_trace(body.decision_id.strip(), settings=settings)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="trace_not_found") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail="trace_not_found")
 
     option = next((o for o in trace.options if o.option_id == body.option_id.strip()), None)
     if option is None:
@@ -442,7 +665,7 @@ def option_chat(body: OptionChatRequest) -> dict:
 @app.post("/api/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)) -> dict:
     """Speech-to-text via OpenAI Whisper (same key as chat)."""
-    settings = load_settings()
+    settings = _settings_for_active_user()
     if not (settings.openai_api_key or "").strip():
         raise HTTPException(status_code=503, detail="Transcription requires OPENAI_API_KEY")
     try:
@@ -470,21 +693,31 @@ async def transcribe_audio(file: UploadFile = File(...)) -> dict:
 
 @app.get("/api/traces/{decision_id}")
 def get_trace(decision_id: str) -> dict:
+    settings = _settings_for_active_user()
     try:
-        trace = load_decision_trace(decision_id)
+        trace = load_decision_trace(decision_id, settings=settings)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}")
     return trace.model_dump(mode="json")
 
 
 @app.delete("/api/traces/{decision_id}")
 def remove_trace(decision_id: str) -> dict:
+    settings = _settings_for_active_user()
     try:
-        trace_deleted, outcome_deleted, commit_deleted = delete_trace(decision_id)
+        trace = load_decision_trace(decision_id, settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}")
+    try:
+        trace_deleted, outcome_deleted, commit_deleted = delete_trace(decision_id, settings=settings)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    if not trace_deleted:
-        raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}")
     return {
         "ok": True,
         "trace_deleted": trace_deleted,
@@ -520,11 +753,14 @@ class CommitDecisionResponse(BaseModel):
 @app.post("/api/commit-decision", response_model=CommitDecisionResponse)
 def commit_decision(body: CommitDecisionRequest) -> CommitDecisionResponse:
     """Record which option the user adopts (before or without outcome)."""
-    settings = load_settings()
+    settings = _settings_for_active_user()
     try:
-        trace = load_decision_trace(body.decision_id)
+        trace = load_decision_trace(body.decision_id, settings=settings)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Trace not found for decision_id={body.decision_id}") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail=f"Trace not found for decision_id={body.decision_id}")
     valid_ids = {o.option_id for o in trace.options}
     if body.chosen_option_id not in valid_ids:
         raise HTTPException(
@@ -545,7 +781,15 @@ def commit_decision(body: CommitDecisionRequest) -> CommitDecisionResponse:
 
 @app.get("/api/commits/{decision_id}")
 def get_commit(decision_id: str) -> dict:
-    c = load_commit(decision_id)
+    settings = _settings_for_active_user()
+    try:
+        trace = load_decision_trace(decision_id, settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="no_commit") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail="no_commit")
+    c = load_commit(decision_id, settings=settings)
     if c is None:
         raise HTTPException(status_code=404, detail="no_commit")
     return c.model_dump(mode="json")
@@ -553,9 +797,13 @@ def get_commit(decision_id: str) -> dict:
 
 @app.post("/api/record-outcome", response_model=RecordOutcomeResponse)
 def record_outcome(body: RecordOutcomeRequest) -> RecordOutcomeResponse:
-    settings = load_settings()
-    trace_path = settings.traces_dir / f"{body.decision_id}.json"
-    if not trace_path.exists():
+    settings = _settings_for_active_user()
+    try:
+        trace = load_decision_trace(body.decision_id, settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Trace not found for decision_id={body.decision_id}")
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
         raise HTTPException(status_code=404, detail=f"Trace not found for decision_id={body.decision_id}")
     outcome = DecisionOutcome(
         decision_id=body.decision_id,
@@ -569,8 +817,7 @@ def record_outcome(body: RecordOutcomeRequest) -> RecordOutcomeResponse:
     apply_outcome_to_memory(body.decision_id, outcome, settings=settings)
     eval_appended = False
     try:
-        trace = load_decision_trace(body.decision_id)
-        commit = load_commit(body.decision_id)
+        commit = load_commit(body.decision_id, settings=settings)
         row = build_evaluation_record(trace, outcome, commit=commit)
         append_evaluation_log(row, settings=settings)
         eval_appended = True
