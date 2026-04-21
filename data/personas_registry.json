@@ -1,0 +1,21 @@
+{
+  "current_user_id": "Bob",
+  "users": [
+    {
+      "user_id": "demo_user",
+      "created_at": "2026-04-20T20:03:32Z"
+    },
+    {
+      "user_id": "persona_alex",
+      "created_at": "2026-04-20T20:04:24Z"
+    },
+    {
+      "user_id": "persona_chris",
+      "created_at": "2026-04-20T20:04:24Z"
+    },
+    {
+      "user_id": "Bob",
+      "created_at": "2026-04-20T20:19:34Z"
+    }
+  ]
+}
