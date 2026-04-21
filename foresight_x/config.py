@@ -55,6 +55,36 @@ class Settings(BaseSettings):
     tier3_auto_update_every: int = Field(default=5, ge=0, validation_alias=AliasChoices("tier3_auto_update_every", "TIER3_AUTO_UPDATE_EVERY"))
     #: Require at least this many decisions before Tier 3 auto-refresh can run.
     tier3_min_decisions: int = Field(default=3, ge=1, validation_alias=AliasChoices("tier3_min_decisions", "TIER3_MIN_DECISIONS"))
+    #: Enable temporal graph memory augmentation on top of vector retrieval.
+    graph_enabled: bool = Field(default=False, validation_alias=AliasChoices("graph_enabled", "GRAPH_ENABLED"))
+    #: Blend ratio for graph surfaced episodes in retrieval [0..1].
+    graph_fusion_weight: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices("graph_fusion_weight", "GRAPH_FUSION_WEIGHT"),
+    )
+    #: PPR damping for graph activation.
+    graph_ppr_damping: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=0.99,
+        validation_alias=AliasChoices("graph_ppr_damping", "GRAPH_PPR_DAMPING"),
+    )
+    #: Iteration cap for PageRank convergence.
+    graph_ppr_iterations: int = Field(
+        default=40,
+        ge=5,
+        le=200,
+        validation_alias=AliasChoices("graph_ppr_iterations", "GRAPH_PPR_ITERATIONS"),
+    )
+    #: Minimum score for including influence explanations in the report.
+    graph_min_influence_score: float = Field(
+        default=0.02,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices("graph_min_influence_score", "GRAPH_MIN_INFLUENCE_SCORE"),
+    )
 
     @property
     def memory_dir(self) -> Path:
@@ -83,6 +113,10 @@ class Settings(BaseSettings):
     @property
     def evaluation_logs_dir(self) -> Path:
         return self.foresight_data_dir / "evaluation_logs"
+
+    @property
+    def graph_dir(self) -> Path:
+        return self.foresight_data_dir / "graph"
 
 
 def load_settings() -> Settings:

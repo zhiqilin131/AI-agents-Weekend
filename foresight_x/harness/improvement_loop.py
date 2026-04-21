@@ -6,6 +6,7 @@ from pathlib import Path
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.harness.trace import load_decision_trace
+from foresight_x.memory_graph import TemporalGraphMemory
 from foresight_x.memory.profile_store import load_profile as load_tier3_profile
 from foresight_x.memory.profile_summarizer import summarize_profile
 from foresight_x.orchestration.llm_factory import build_openai_llm
@@ -53,5 +54,10 @@ def apply_outcome_to_memory(
     memory = user_memory or UserMemory(s.foresight_user_id, settings=s)
     memory.remove_by_decision_id(decision_id)
     memory.add_decision(trace, outcome=outcome)
+    if s.graph_enabled:
+        try:
+            TemporalGraphMemory(s.foresight_user_id, settings=s).record_outcome(trace, outcome)
+        except Exception:
+            pass
     _maybe_refresh_tier3_profile(memory, s)
     return trace

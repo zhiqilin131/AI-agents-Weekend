@@ -46,13 +46,25 @@ def composite_score(evaluation: OptionEvaluation, weights: dict[str, float]) -> 
     return total
 
 
-def _fallback_recommendation(chosen: Option, composite_by_option_id: dict[str, float]) -> Recommendation:
+def _fallback_recommendation(
+    chosen: Option,
+    composite_by_option_id: dict[str, float],
+    *,
+    memory: MemoryBundle,
+) -> Recommendation:
+    influence_line = ""
+    if memory.graph_influence and memory.graph_influence.top_nodes:
+        tops = ", ".join(
+            f"{n.label} ({n.score:.2f})" for n in memory.graph_influence.top_nodes[:3]
+        )
+        influence_line = f" Graph influence suggests these surfaced strongly: {tops}."
     return Recommendation(
         chosen_option_id=chosen.option_id,
         reasoning=(
             f"Selected {chosen.name} with highest weighted composite score among options "
             f"(scores: {composite_by_option_id}). "
             "Weights favor expected value and goal alignment; penalize risk, regret, and uncertainty."
+            + influence_line
         ),
         next_actions=[
             NextAction(
@@ -109,7 +121,7 @@ def recommend(
 
     if llm is None:
         return normalize_recommendation_deadlines(
-            _fallback_recommendation(chosen, composite_by_option_id),
+            _fallback_recommendation(chosen, composite_by_option_id, memory=memory),
             anchor,
         )
 
@@ -133,6 +145,6 @@ def recommend(
         return normalize_recommendation_deadlines(rec, anchor)
     except Exception:
         return normalize_recommendation_deadlines(
-            _fallback_recommendation(chosen, composite_by_option_id),
+            _fallback_recommendation(chosen, composite_by_option_id, memory=memory),
             anchor,
         )

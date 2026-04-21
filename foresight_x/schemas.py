@@ -298,10 +298,32 @@ class PastDecision(BaseModel):
     timestamp: str
 
 
+class InfluenceNode(BaseModel):
+    """Activated memory-graph node used for explanation."""
+
+    node_id: str
+    label: str
+    node_type: str
+    layer: Literal["event", "concept"]
+    score: float = Field(ge=0)
+    why: str = ""
+
+
+class GraphInfluenceBundle(BaseModel):
+    """Optional graph-memory signal fused into retrieval."""
+
+    algorithm: str = "ppr_decay_v1"
+    seed_nodes: list[str] = Field(default_factory=list)
+    top_nodes: list[InfluenceNode] = Field(default_factory=list)
+    surfaced_decision_ids: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class MemoryBundle(BaseModel):
     similar_past_decisions: list[PastDecision]
     behavioral_patterns: list[str]
     prior_outcomes_summary: str
+    graph_influence: GraphInfluenceBundle | None = None
 
 
 class Fact(BaseModel):

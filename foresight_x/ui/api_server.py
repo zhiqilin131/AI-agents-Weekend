@@ -32,6 +32,7 @@ from foresight_x.profile.merge import delete_memory_fact_by_id, delete_priority_
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import DecisionCommit, DecisionOutcome, ProfileLine, UserProfile
 from foresight_x.ui.cli import _build_context
+from foresight_x.memory_graph import TemporalGraphMemory
 from foresight_x.memory.profile_store import empty_profile as load_tier3_empty_profile
 from foresight_x.memory.profile_store import load_profile as load_tier3_profile
 from foresight_x.memory.profile_store import save_profile as save_tier3_profile
@@ -207,6 +208,12 @@ class RunRequest(BaseModel):
     preserve_raw_input: bool = Field(default=False)
 
 
+class ExternalEventRequest(BaseModel):
+    text: str = Field(min_length=1)
+    event_type: str = Field(default="external_event", min_length=1)
+    timestamp: str | None = Field(default=None)
+
+
 class ClarifyRequest(BaseModel):
     raw_input: str = Field(min_length=1)
 
@@ -254,6 +261,7 @@ def root() -> dict[str, object]:
             "/api/option-chat",
             "/api/transcribe",
             "/api/personalization/ingest",
+            "/api/memory-graph/external-event",
         ],
     }
 
@@ -261,6 +269,23 @@ def root() -> dict[str, object]:
 @app.get("/health")
 def health_alias() -> dict[str, str]:
     return health()
+
+
+@app.post("/api/memory-graph/external-event")
+def add_external_event(body: ExternalEventRequest) -> dict:
+    """Optional hook: append an external event into the temporal event DAG."""
+    settings = _settings_for_active_user()
+    if not settings.graph_enabled:
+        return {"ok": False, "reason": "graph_disabled"}
+    try:
+        TemporalGraphMemory(settings.foresight_user_id, settings=settings).record_external_event(
+            body.text.strip(),
+            timestamp=body.timestamp,
+            event_type=body.event_type.strip() or "external_event",
+        )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"external_event_ingest_failed: {e!s}") from e
 
 
 @app.get("/api/personas")

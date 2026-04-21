@@ -1,4 +1,4 @@
-import { useState, type ComponentType } from 'react';
+import { useMemo, useState, type ComponentType } from 'react';
 import {
   AlertTriangle,
   Brain,
@@ -74,6 +74,24 @@ interface TraceMemoryBlock {
     timestamp?: string;
   }>;
   prior_outcomes_summary?: string;
+  graph_influence?: TraceGraphInfluence;
+}
+
+interface TraceGraphInfluenceNode {
+  node_id?: string;
+  label?: string;
+  node_type?: string;
+  layer?: 'event' | 'concept';
+  score?: number;
+  why?: string;
+}
+
+interface TraceGraphInfluence {
+  algorithm?: string;
+  seed_nodes?: string[];
+  surfaced_decision_ids?: string[];
+  notes?: string[];
+  top_nodes?: TraceGraphInfluenceNode[];
 }
 
 interface ReportCompactProps {
@@ -103,6 +121,8 @@ type CoachMessage = { role: 'user' | 'assistant'; content: string };
 export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: ReportCompactProps) {
   const futures = (fullTrace?.futures as TraceFuture[]) ?? [];
   const evidence = fullTrace?.evidence as TraceEvidence | undefined;
+  const memoryTrace = fullTrace?.memory as TraceMemoryBlock | undefined;
+  const graphInfluence = memoryTrace?.graph_influence;
   const hasRec = Boolean(report.recommendation.reasoning || report.recommendation.chosenOption);
   const chosenOptionId = report.recommendation.chosenOption?.trim() ?? '';
   const optionTitleById = new Map(report.options.map((o) => [o.id, o.name]));
@@ -256,6 +276,8 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
         </section>
       )}
 
+      <GraphInfluenceVisualizer graph={graphInfluence} />
+
       {tier3Profile?.profile && (
         <Tier3ProfileBlock tier3Profile={tier3Profile} fullTrace={fullTrace} />
       )}
@@ -370,7 +392,7 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
             <EvidenceBlock
               evidence={evidence}
               patterns={report.insights.memoryPatterns}
-              memoryTrace={fullTrace?.memory as TraceMemoryBlock | undefined}
+              memoryTrace={memoryTrace}
             />
           </AccordionContent>
         </AccordionItem>
@@ -699,6 +721,229 @@ function EvidenceBlock({
       <SnippetList variant="baseline" title="Base rates" items={rates} />
       <SnippetList variant="recent" title="Recent events" items={recent} />
     </div>
+  );
+}
+
+function GraphInfluenceVisualizer({ graph }: { graph?: TraceGraphInfluence }) {
+  const nodes = useMemo(
+    () =>
+      (graph?.top_nodes ?? [])
+        .filter((x) => typeof x?.label === 'string' && typeof x?.score === 'number')
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+        .slice(0, 12),
+    [graph?.top_nodes],
+  );
+  const [open, setOpen] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const selected = nodes[selectedIdx] ?? nodes[0];
+
+  const cx = 150;
+  const cy = 130;
+  const orbit = 84;
+  const placed = nodes.map((n, i) => {
+    const a = (-Math.PI / 2) + (2 * Math.PI * i) / Math.max(1, nodes.length);
+    const x = cx + orbit * Math.cos(a);
+    const y = cy + orbit * Math.sin(a);
+    const score = Math.max(0.01, Math.min(1, n.score ?? 0));
+    const r = 8 + score * 14;
+    return { ...n, x, y, r, i, score };
+  });
+
+  const topSummary = nodes.slice(0, 3);
+  const empty = nodes.length === 0;
+  const prettyLabel = (raw?: string): string => {
+    const src = (raw || '').trim();
+    if (!src) return 'Unknown node';
+    const [prefix, restRaw] = src.includes(':') ? src.split(':', 2) : ['', src];
+    const rest = (restRaw || src).replace(/\|/g, ' ').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!prefix) return rest;
+    const p = prefix.trim();
+    const title = p.slice(0, 1).toUpperCase() + p.slice(1);
+    return `${title}: ${rest}`;
+  };
+  const shortLabel = (raw?: string): string => {
+    const full = prettyLabel(raw);
+    return full.length > 30 ? `${full.slice(0, 27)}...` : full;
+  };
+
+  return (
+    <section className="rounded-2xl border border-indigo-200/85 bg-gradient-to-br from-indigo-50/75 via-white/92 to-purple-50/70 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 className="text-sm text-gray-900 flex items-center gap-2" style={{ fontWeight: 700 }}>
+            <Layers className="w-4 h-4 text-indigo-600" aria-hidden />
+            Graph influence map
+          </h3>
+          <p className="text-[11px] text-gray-600 mt-1">
+            Why memories surfaced for this decision ({graph?.algorithm || 'ppr_decay_v1'}).
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          disabled={empty}
+          className="px-3 py-1.5 rounded-full text-[11px] bg-indigo-600 text-white disabled:opacity-40"
+          style={{ fontWeight: 700 }}
+        >
+          Open interactive view
+        </button>
+      </div>
+
+      {empty ? (
+        <div className="rounded-xl border border-dashed border-indigo-300/80 bg-white/80 p-4">
+          <p className="text-sm text-gray-800" style={{ fontWeight: 700 }}>
+            No graph influence returned in this run yet.
+          </p>
+          <ul className="mt-2 text-xs text-gray-600 list-disc ml-4 space-y-1">
+            <li>Make sure backend `.env` has `GRAPH_ENABLED=true` and restart API.</li>
+            <li>Run one new decision so graph events are written.</li>
+            <li>Record one outcome to strengthen event-to-outcome links.</li>
+          </ul>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-indigo-100/90 bg-white/85 p-3">
+          <p className="text-[11px] text-gray-600 mb-2">
+            Top influencers (click <span style={{ fontWeight: 700 }}>Open interactive view</span> for network details)
+          </p>
+          <ul className="space-y-2">
+            {topSummary.map((n, i) => (
+              <li key={`${n.node_id ?? n.label ?? i}-${i}`} className="rounded-lg border border-indigo-100 bg-white px-2.5 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-gray-900 truncate" style={{ fontWeight: 700 }}>
+                    {i + 1}. {n.label}
+                  </span>
+                  <span className="text-[11px] font-mono text-indigo-900">{n.score?.toFixed(2)}</span>
+                </div>
+                <p className="text-[10px] text-gray-600 mt-1">
+                  {(n.layer || 'concept')} · {(n.node_type || 'unknown')}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {open && !empty && (
+        <div className="fixed inset-0 z-[120] bg-black/45 flex items-center justify-center p-4">
+          <div className="w-[min(960px,96vw)] max-h-[90vh] overflow-auto rounded-2xl bg-white border border-indigo-100 shadow-2xl">
+            <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-indigo-100 px-4 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-900" style={{ fontWeight: 700 }}>
+                  Graph influence details
+                </p>
+                <p className="text-[11px] text-gray-600">
+                  Click a circle node to inspect why it influenced this decision.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="px-3 py-1.5 rounded-full border border-gray-200 text-xs text-gray-700 hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="p-4 grid lg:grid-cols-[420px,1fr] gap-4">
+              <div className="rounded-xl border border-indigo-100/90 bg-indigo-50/50 p-3">
+                <svg viewBox="0 0 300 260" className="w-full h-auto">
+                  <defs>
+                    <radialGradient id="nowGlowCompact" cx="50%" cy="50%" r="60%">
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity="0.35" />
+                      <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
+                    </radialGradient>
+                  </defs>
+                  <circle cx={cx} cy={cy} r={92} fill="none" stroke="#c7d2fe" strokeDasharray="4 4" />
+                  <circle cx={cx} cy={cy} r={34} fill="url(#nowGlowCompact)" />
+                  {placed.map((n, i) => (
+                    <g key={`${n.node_id ?? n.label ?? i}-${i}`}>
+                      <line
+                        x1={cx}
+                        y1={cy}
+                        x2={n.x}
+                        y2={n.y}
+                        stroke={selectedIdx === i ? '#4f46e5' : '#a5b4fc'}
+                        strokeOpacity={0.35 + n.score * 0.45}
+                        strokeWidth={selectedIdx === i ? 2.2 : 1.1 + n.score * 1.6}
+                      />
+                      <circle
+                        cx={n.x}
+                        cy={n.y}
+                        r={n.r}
+                        fill={n.layer === 'event' ? '#38bdf8' : '#818cf8'}
+                        fillOpacity={selectedIdx === i ? 0.95 : 0.8}
+                        stroke={selectedIdx === i ? '#312e81' : '#ffffff'}
+                        strokeWidth={selectedIdx === i ? 2 : 1.1}
+                        className="cursor-pointer transition-all duration-200"
+                        onClick={() => setSelectedIdx(i)}
+                      >
+                        <title>{prettyLabel(n.label)} ({n.score.toFixed(2)})</title>
+                      </circle>
+                      <text
+                        x={n.x}
+                        y={n.y + 3}
+                        textAnchor="middle"
+                        fontSize="8"
+                        fill="white"
+                        style={{ fontWeight: 800, pointerEvents: 'none' }}
+                      >
+                        {(n.score * 100).toFixed(0)}
+                      </text>
+                    </g>
+                  ))}
+                  <circle cx={cx} cy={cy} r={15} fill="#312e81" />
+                  <text x={cx} y={cy + 3.5} textAnchor="middle" fontSize="8" fill="#fff" style={{ fontWeight: 800 }}>
+                    NOW
+                  </text>
+                </svg>
+                <p className="mt-2 text-[11px] text-gray-600">
+                  Circle size = influence score. Click a circle to inspect details.
+                </p>
+              </div>
+
+              <div className="space-y-2.5">
+                <div className="rounded-xl border border-indigo-100 bg-white/90 px-3 py-2.5">
+                  <p className="text-[10px] uppercase text-indigo-900 mb-1" style={{ fontWeight: 800 }}>
+                    Selected node
+                  </p>
+                  <p className="text-sm text-gray-900" style={{ fontWeight: 700 }}>
+                    {prettyLabel(selected?.label)}
+                  </p>
+                  <p className="text-[11px] text-gray-600 mt-0.5">
+                    {(selected?.layer || 'concept')} · {(selected?.node_type || 'unknown')} · influence {(selected?.score ?? 0).toFixed(2)}
+                  </p>
+                  {(selected?.why || '').trim().length > 0 && (
+                    <p className="text-xs text-gray-700 mt-2 leading-relaxed">{selected?.why}</p>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-indigo-100 bg-white/90 px-3 py-2.5">
+                  <p className="text-[10px] uppercase text-gray-600 mb-1" style={{ fontWeight: 700 }}>
+                    Top influencers
+                  </p>
+                  <div className="space-y-1 text-xs text-gray-700">
+                    {placed.map((n, i) => (
+                      <button
+                        key={`${n.node_id ?? n.label ?? i}-legend-${i}`}
+                        type="button"
+                        onClick={() => setSelectedIdx(i)}
+                        className={cn(
+                          'w-full text-left rounded-md px-2 py-1.5 border',
+                          selectedIdx === i ? 'border-indigo-300 bg-indigo-50' : 'border-gray-100 bg-white',
+                        )}
+                      >
+                        <span style={{ fontWeight: 700 }}>{i + 1}. {shortLabel(n.label)}</span>
+                        <span className="ml-2 text-gray-500">({n.score.toFixed(2)})</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

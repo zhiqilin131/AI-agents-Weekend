@@ -4,9 +4,10 @@ import { apiUrl } from '../../utils/apiOrigin';
 interface OutcomeHarnessProps {
   decisionId: string;
   onClose: () => void;
+  onSaved?: () => void;
 }
 
-export function OutcomeHarness({ decisionId, onClose }: OutcomeHarnessProps) {
+export function OutcomeHarness({ decisionId, onClose, onSaved }: OutcomeHarnessProps) {
   const [followedRecommendation, setFollowedRecommendation] = useState<boolean | null>(null);
   const [whatHappened, setWhatHappened] = useState('');
   const [outcomeQuality, setOutcomeQuality] = useState<number | null>(null);
@@ -41,6 +42,7 @@ export function OutcomeHarness({ decisionId, onClose }: OutcomeHarnessProps) {
         const text = await res.text();
         throw new Error(text || res.statusText);
       }
+      onSaved?.();
       onClose();
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Save failed');

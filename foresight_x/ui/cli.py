@@ -61,6 +61,10 @@ def render_trace_sections(trace: DecisionTrace) -> str:
         insights.append("Bias risks: " + ", ".join(trace.rationality.detected_biases))
     if trace.memory.behavioral_patterns:
         insights.append("Memory patterns: " + "; ".join(trace.memory.behavioral_patterns[:3]))
+    gi = trace.memory.graph_influence
+    if gi and gi.top_nodes:
+        tops = ", ".join(f"{n.label}({n.score:.2f})" for n in gi.top_nodes[:3])
+        insights.append(f"Why surfaced (graph influence): {tops}")
 
     options_block = "\n".join(
         f"- [{o.option_id}] {o.name}: {o.description}" for o in trace.options

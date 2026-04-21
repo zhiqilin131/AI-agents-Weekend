@@ -1,13 +1,21 @@
 {
   "user_id": "Bob",
   "values": [],
-  "risk_posture": "unknown",
-  "recurring_themes": [],
-  "current_goals": [],
-  "known_constraints": [],
-  "n_decisions_summarized": 0,
-  "last_updated": "2026-04-20T20:19:34.994976",
-  "confidence": 0.0,
+  "risk_posture": "risk-seeking",
+  "recurring_themes": [
+    "tends to delay commitments when uncertain",
+    "values social enjoyment over specific activities"
+  ],
+  "current_goals": [
+    "explore alternative educational paths",
+    "diversify involvement in projects"
+  ],
+  "known_constraints": [
+    "lack of financial support"
+  ],
+  "n_decisions_summarized": 5,
+  "last_updated": "2026-04-21T03:44:44.726364",
+  "confidence": 0.6,
   "priority_lines": [],
   "user_priorities": [],
   "inferred_priorities": [],

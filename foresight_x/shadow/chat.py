@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.extraction.atomic_claims import run_atomic_claims
+from foresight_x.memory_graph import TemporalGraphMemory
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.profile.memory_structured import active_memory_facts, format_stored_fact_bullet, render_triple_line
 from foresight_x.profile.merge import append_profile_memory_records
@@ -343,5 +344,11 @@ def run_shadow_turn(
     )
     if used:
         memory_used.extend(used)
+
+    if s.graph_enabled:
+        try:
+            TemporalGraphMemory(s.foresight_user_id, settings=s).record_shadow_event(last_user_text, reply)
+        except Exception:
+            pass
 
     return reply, flag, state, recorded, memory_used

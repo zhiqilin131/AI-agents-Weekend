@@ -135,6 +135,10 @@ export default function HistoryPage() {
         <OutcomeHarness
           decisionId={outcomeForId}
           onClose={() => setOutcomeForId(null)}
+          onSaved={() => {
+            setOutcomeForId(null);
+            void load();
+          }}
         />
       )}
 

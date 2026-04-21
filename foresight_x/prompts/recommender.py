@@ -26,6 +26,8 @@ def recommender_prompt(
         + "Objective: justify the chosen option and list concrete next actions.\n"
         "Constraints:\n"
         "- reasoning must reference memory patterns, evidence, and simulation scores at a high level.\n"
+        "- if MemoryBundle.graph_influence is present, include a brief 'why this memory surfaced' explanation "
+        "using top node labels and influence scores.\n"
         "- next_actions must be specific (drafts, meetings, checklists) with optional deadlines.\n"
         "- reassessment_triggers are observable events that should prompt a re-run.\n"
         "- Do not invent facts outside EvidenceBundle.\n"

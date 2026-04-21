@@ -19,6 +19,7 @@ from foresight_x.perception.layer import build_user_state
 from foresight_x.perception.query_enhance import prepare_decision_text
 from foresight_x.profile.merge import append_clarification_to_profile, merge_profile_into_user_state
 from foresight_x.profile.store import load_user_profile, save_user_profile
+from foresight_x.memory_graph import TemporalGraphMemory
 from foresight_x.retrieval.memory import UserMemory
 from foresight_x.retrieval.user_recent_context import merge_user_context_into_evidence
 from foresight_x.retrieval.world_cache import WorldKnowledge
@@ -72,6 +73,7 @@ def retrieve_bundles(
     settings = ctx.settings or load_settings()
     memory = ctx.user_memory.retrieve(user_state) if ctx.user_memory else _empty_memory()
     evidence = ctx.world.retrieve(user_state) if ctx.world else _empty_evidence()
+    memory = _augment_memory_with_graph(memory, user_state, settings=settings)
     evidence = merge_user_context_into_evidence(
         evidence,
         settings,
@@ -105,6 +107,7 @@ def retrieve_bundles_parallel(
         fut_m = pool.submit(mem)
         fut_e = pool.submit(ev)
         memory_bundle, evidence_bundle = fut_m.result(), fut_e.result()
+    memory_bundle = _augment_memory_with_graph(memory_bundle, user_state, settings=settings)
     evidence_bundle = merge_user_context_into_evidence(
         evidence_bundle,
         settings,
@@ -113,6 +116,42 @@ def retrieve_bundles_parallel(
         exclude_decision_id=exclude_decision_id,
     )
     return memory_bundle, evidence_bundle
+
+
+def _augment_memory_with_graph(
+    memory_bundle: MemoryBundle,
+    user_state: UserState,
+    *,
+    settings: Settings,
+) -> MemoryBundle:
+    """Attach graph influence signal while keeping vector retrieval as fallback baseline."""
+    if not settings.graph_enabled:
+        return memory_bundle
+    try:
+        g = TemporalGraphMemory(settings.foresight_user_id, settings=settings)
+        influence = g.influence_for(user_state)
+        if influence is None:
+            return memory_bundle
+        ranked = list(memory_bundle.similar_past_decisions)
+        if influence.surfaced_decision_ids and ranked:
+            by_id = {p.decision_id: p for p in ranked}
+            surfaced = [by_id[d] for d in influence.surfaced_decision_ids if d in by_id]
+            surfaced_ids = {p.decision_id for p in surfaced}
+            ranked = surfaced + [p for p in ranked if p.decision_id not in surfaced_ids]
+        top_line = ", ".join(f"{n.label} ({n.score:.2f})" for n in influence.top_nodes[:4])
+        merged_patterns = list(memory_bundle.behavioral_patterns)
+        if top_line:
+            merged_patterns.append(f"Graph influence: {top_line}")
+        return memory_bundle.model_copy(
+            update={
+                "similar_past_decisions": ranked,
+                "behavioral_patterns": merged_patterns[:24],
+                "graph_influence": influence,
+            }
+        )
+    except Exception:
+        # Hard fallback to existing retrieval path.
+        return memory_bundle
 
 
 def step_infer(
@@ -179,6 +218,11 @@ def finalize_trace(
     trace = trace.model_copy(update={"reflection": reflection})
     if persist_trace:
         save_decision_trace(trace, settings=settings)
+        if settings.graph_enabled:
+            try:
+                TemporalGraphMemory(settings.foresight_user_id, settings=settings).record_decision_trace(trace)
+            except Exception:
+                pass
         # Vector memory is written only when an outcome is recorded (see
         # ``apply_outcome_to_memory``), not here — aligns with "write on outcome" lifecycle.
     return trace
