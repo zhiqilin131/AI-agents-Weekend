@@ -13,6 +13,12 @@ data/outcomes/*.json
 !data/outcomes/.gitkeep
 data/shadow_self/
 chroma.sqlite3
+# Runtime-generated artifacts (keep repo clean/reproducible)
+data/commits/*.json
+data/evaluation_logs/*.jsonl
+data/graph/*.json
+data/profiles/*.json
+data/chat_threads/
 # stray local chroma artifact
 8ab6236a-46d7-40d6-9b65-1d340327115e/
 web/node_modules/

@@ -125,16 +125,17 @@ interface ReportCompactProps {
     source?: string;
   } | null;
   isStreaming?: boolean;
+  /** When set, "Create execution calendar" uses this instead of default router navigation (e.g. preserve Shadow Chat context). */
+  onExecutionCalendarNavigate?: (decisionId: string) => void;
 }
 
 type CoachMessage = { role: 'user' | 'assistant'; content: string };
 
-export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: ReportCompactProps) {
+export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, onExecutionCalendarNavigate }: ReportCompactProps) {
   const navigate = useNavigate();
   const futures = (fullTrace?.futures as TraceFuture[]) ?? [];
   const evidence = fullTrace?.evidence as TraceEvidence | undefined;
   const memoryTrace = fullTrace?.memory as TraceMemoryBlock | undefined;
-  const graphInfluence = memoryTrace?.graph_influence;
   const hasRec = Boolean(report.recommendation.reasoning || report.recommendation.chosenOption);
   const chosenOptionId = report.recommendation.chosenOption?.trim() ?? '';
   const optionTitleById = new Map(report.options.map((o) => [o.id, o.name]));
@@ -144,7 +145,12 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
   const [coachThreads, setCoachThreads] = useState<Record<string, CoachMessage[]>>({});
   const [coachBusy, setCoachBusy] = useState(false);
   const [coachError, setCoachError] = useState<string | null>(null);
+  const [mcdaOptionId, setMcdaOptionId] = useState<string>(chosenOptionId || report.options[0]?.id || '');
   const activeThread: CoachMessage[] = coachOption ? (coachThreads[coachOption.id] ?? []) : [];
+  const selectedTradeoff = useMemo(
+    () => report.tradeoffs?.rows.find((r) => r.optionId === mcdaOptionId) ?? report.tradeoffs?.rows[0],
+    [mcdaOptionId, report.tradeoffs?.rows],
+  );
 
   const askOptionCoach = async () => {
     if (!coachOption || !decisionId || !coachQuestion.trim() || coachBusy) return;
@@ -238,7 +244,11 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
           <div className="mt-4">
             <button
               type="button"
-              onClick={() => navigate(`/execution/${encodeURIComponent(decisionId)}`)}
+              onClick={() =>
+                onExecutionCalendarNavigate
+                  ? onExecutionCalendarNavigate(decisionId)
+                  : navigate(`/execution/${encodeURIComponent(decisionId)}`)
+              }
               className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded-full border border-indigo-200 bg-indigo-600 text-white hover:bg-indigo-700"
             >
               Create execution calendar
@@ -290,22 +300,56 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
       </div>
 
       {report.tradeoffs && report.tradeoffs.rows.length > 0 && (
-        <section className="rounded-2xl bg-white/60 border border-white/80 p-4 shadow-sm">
-          <h3 className="text-sm text-gray-900 mb-2 flex items-center gap-2" style={{ fontWeight: 700 }}>
+        <section className="rounded-2xl bg-white/70 border border-white/80 p-4 shadow-sm space-y-3">
+          <h3 className="text-sm text-gray-900 flex items-center gap-2" style={{ fontWeight: 700 }}>
             <Layers className="w-4 h-4 text-purple-600" aria-hidden />
-            Trade-offs (visual)
+            MCDA option analysis
           </h3>
+          <p className="text-xs text-gray-600 leading-relaxed">
+            Options are compared across EV, Risk, Regret, Uncertainty, and Goal Alignment. Use this panel to inspect each option's profile.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {report.options.map((o) => {
+              const selected = (selectedTradeoff?.optionId || '').trim() === o.id.trim();
+              return (
+                <button
+                  key={`mcda-${o.id}`}
+                  type="button"
+                  onClick={() => setMcdaOptionId(o.id)}
+                  className={cn(
+                    'px-3 py-1.5 rounded-full text-xs border transition-colors',
+                    selected ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-indigo-50',
+                  )}
+                >
+                  {o.name}
+                </button>
+              );
+            })}
+          </div>
+          {selectedTradeoff && (
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+              <p className="text-xs text-indigo-900 mb-2" style={{ fontWeight: 700 }}>
+                Selected: {selectedTradeoff.optionName}
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                {Object.entries(selectedTradeoff.scores).map(([k, v]) => (
+                  <div key={`${selectedTradeoff.optionId}-${k}`} className="rounded-lg bg-white border border-indigo-100 px-2 py-1.5">
+                    <p className="text-[10px] text-gray-500 uppercase" style={{ fontWeight: 700 }}>{k}</p>
+                    <p className="text-sm text-gray-900" style={{ fontWeight: 700 }}>{v}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <TradeoffsRadarChart tradeoffs={report.tradeoffs} />
         </section>
       )}
-
-      <GraphInfluenceVisualizer graph={graphInfluence} />
 
       {tier3Profile?.profile && (
         <Tier3ProfileBlock tier3Profile={tier3Profile} fullTrace={fullTrace} />
       )}
 
-      <Accordion type="multiple" defaultValue={['situation', 'options']} className="rounded-2xl border border-white/80 bg-white/40 px-2">
+      <Accordion type="multiple" defaultValue={['situation', 'options', 'reflection']} className="rounded-2xl border border-white/80 bg-white/50 px-2">
         <AccordionItem value="situation">
           <AccordionTrigger className="text-sm" style={{ fontWeight: 600 }}>
             Situation & goals

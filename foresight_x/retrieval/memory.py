@@ -461,10 +461,11 @@ class UserMemory:
         top_k: int = 5,
         graph_decision_ids: list[str] | None = None,
         graph_scores: dict[str, float] | None = None,
+        fetch_k_override: int | None = None,
     ) -> MemoryBundle:
         extra = profile_snippet_for_retrieval(user_state)
         query = build_memory_retrieval_query(user_state)
-        fetch_k = min(48, max(top_k * 6, top_k + 12))
+        fetch_k = fetch_k_override if fetch_k_override is not None else min(48, max(top_k * 6, top_k + 12))
         retriever = self._index.as_retriever(similarity_top_k=fetch_k)
         raw_nodes = retriever.retrieve(query)
 
@@ -612,4 +613,19 @@ class UserMemory:
             behavioral_patterns=patterns_acc,
             prior_outcomes_summary=summary[:2000],
             memory_evidence=evidence_rows,
+        )
+
+    def retrieve_fast(
+        self,
+        user_state: UserState,
+        top_k: int = 3,
+        fetch_k: int = 12,
+    ) -> MemoryBundle:
+        """Fast retrieval for chat turns; keeps same ranking logic with smaller candidate set."""
+        return self.retrieve(
+            user_state=user_state,
+            top_k=max(1, top_k),
+            fetch_k_override=max(fetch_k, top_k),
+            graph_decision_ids=None,
+            graph_scores=None,
         )

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import { ClarifyDialog, type ClarifyQuestion } from '../app/components/ClarifyDialog';
 import { InputPanel } from '../app/components/InputPanel';
 import { MainNavButtons } from '../app/components/MainNavButtons';
@@ -514,34 +514,17 @@ export default function HomePage() {
                 <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>
               )}
 
-              <InputPanel
-                decisionInput={decisionInput}
-                onInputChange={setDecisionInput}
-                onRun={handleRunDecision}
-                onReset={handleReset}
-                state={state}
-                isClarifyChecking={clarifyChecking}
-                clarifyOpen={clarifyOpen}
-                loadingStage={loadingStage}
-                stageLabel={STAGE_LABEL}
-                onVoiceTranscript={(t) =>
-                  setDecisionInput((s) => {
-                    const x = s.trim();
-                    return x ? `${x} ${t}` : t;
-                  })
-                }
-              />
-
-              <div className="mt-12 text-center max-w-lg mx-auto">
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Personalization</p>
-                <Link
-                  to="/personalize"
-                  className="inline-flex items-center justify-center w-full sm:w-auto px-6 py-3.5 rounded-2xl border border-violet-200/90 bg-white/80 text-violet-900 text-sm font-medium hover:bg-violet-50/90 hover:border-violet-300 transition-colors shadow-sm"
+              <div className="mx-auto max-w-xl text-center">
+                <button
+                  type="button"
+                  onClick={() => navigate('/chat')}
+                  className="inline-flex items-center justify-center px-10 py-4 rounded-full bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 text-white text-lg shadow-[0_14px_40px_rgba(99,102,241,0.35)] hover:shadow-[0_18px_48px_rgba(99,102,241,0.4)] hover:scale-[1.01] active:scale-[0.995] transition-all"
+                  style={{ fontWeight: 600 }}
                 >
-                  Import chats or email (paste / .txt) → teach the model your patterns
-                </Link>
-                <p className="text-xs text-gray-500 mt-3 leading-relaxed">
-                  Optional: stubbed Gmail &amp; Messenger connectors on the next screen — use manual paste for now.
+                  Start Chatting
+                </button>
+                <p className="mt-4 text-sm text-gray-500">
+                  Chat naturally. Foresight-X will detect when you need a decision report.
                 </p>
               </div>
             </div>

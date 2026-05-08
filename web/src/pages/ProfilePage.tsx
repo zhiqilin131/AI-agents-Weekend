@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PageBackButton } from '../app/components/PageBackButton';
 import { apiUrl } from '../utils/apiOrigin';
 
@@ -62,6 +62,15 @@ export default function ProfilePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [memoryEditMode, setMemoryEditMode] = useState(false);
+  const [selectedMemoryCat, setSelectedMemoryCat] = useState<string>('');
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    priorities: true,
+    memory: true,
+    clarifications: true,
+    legacy: true,
+    context: true,
+  });
 
   const load = useCallback(async () => {
     setError(null);
@@ -169,36 +178,80 @@ export default function ProfilePage() {
     }
   };
 
-  const factsByCat = memoryFacts.reduce<Record<string, MemoryFactRow[]>>((acc, f) => {
-    const k = f.category || 'other';
-    if (!acc[k]) acc[k] = [];
-    acc[k].push(f);
-    return acc;
-  }, {});
+  const factsByCat = useMemo(
+    () =>
+      memoryFacts.reduce<Record<string, MemoryFactRow[]>>((acc, f) => {
+        const k = f.category || 'other';
+        if (!acc[k]) acc[k] = [];
+        acc[k].push(f);
+        return acc;
+      }, {}),
+    [memoryFacts],
+  );
+
+  const memoryCatOrder = useMemo(() => {
+    const preferred = ['identity', 'views', 'behavior', 'goals', 'constraints', 'other'];
+    const existing = Object.keys(factsByCat);
+    const inOrder = preferred.filter((k) => existing.includes(k));
+    const rest = existing.filter((k) => !preferred.includes(k)).sort();
+    return [...inOrder, ...rest];
+  }, [factsByCat]);
+
+  useEffect(() => {
+    if (!memoryCatOrder.length) {
+      setSelectedMemoryCat('');
+      return;
+    }
+    if (!selectedMemoryCat || !memoryCatOrder.includes(selectedMemoryCat)) {
+      setSelectedMemoryCat(memoryCatOrder[0] ?? '');
+    }
+  }, [memoryCatOrder, selectedMemoryCat]);
+
+  const toggleSection = (key: keyof typeof openSections) => {
+    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-8 py-16">
-      <div className="max-w-2xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-8 md:px-8 md:py-10">
+      <div className="mx-auto max-w-[1300px]">
         <PageBackButton />
-        <h1 className="text-3xl text-gray-900 mb-2" style={{ fontWeight: 700 }}>
-          Profile
-        </h1>
-        <p className="text-gray-600 mb-8 text-sm leading-relaxed">
-          Stored per <code className="text-xs bg-white/80 px-1 rounded">FORESIGHT_USER_ID</code> under{' '}
-          <code className="text-xs bg-white/80 px-1 rounded">data/profile/</code>.{' '}
-          <strong>Priorities you type below</strong> are only what you author in Profile — not clarification popups or
-          machine notes. Structured <strong>memory facts</strong> (identity, views, …) are captured from Shadow space
-          as concrete lines you can audit or delete.
-        </p>
+        <div className="mt-2 mb-6">
+          <h1 className="text-3xl text-gray-900" style={{ fontWeight: 700 }}>
+            Profile
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-gray-600">
+            Stored per <code className="rounded bg-white/80 px-1 text-xs">FORESIGHT_USER_ID</code> under{' '}
+            <code className="rounded bg-white/80 px-1 text-xs">data/profile/</code>. Keep your own priorities curated,
+            and audit structured memory captured from Shadow chat.
+          </p>
+        </div>
 
-        {error && <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>}
-        {message && <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm">{message}</div>}
+        {error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
+        {message && <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{message}</div>}
 
-        <div className="space-y-6">
-          <div>
+        <div className="space-y-4">
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => void save()}
+              className="rounded-full bg-gradient-to-r from-purple-600 to-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md"
+            >
+              Save profile
+            </button>
+          </div>
+
+          <main className="space-y-4">
+            <section id="profile-priorities" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md">
+            <div className="mb-2 flex items-center justify-between">
             <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 600 }}>
               Your priorities (one per line)
             </label>
+            <button type="button" onClick={() => toggleSection('priorities')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+              {openSections.priorities ? 'Collapse' : 'Expand'}
+            </button>
+            </div>
+            {openSections.priorities ? (
+              <>
             <p className="text-xs text-gray-500 mb-2 leading-relaxed">
               Only rows you enter here. Clarification answers and system-inferred lines are kept separate so nothing
               automatic overwrites this list.
@@ -209,13 +262,106 @@ export default function ProfilePage() {
               className="w-full min-h-[100px] px-4 py-3 rounded-2xl border border-gray-200/80 bg-white/70 text-sm"
               placeholder={'Family first\nCareer growth in AI'}
             />
-          </div>
+              </>
+            ) : null}
+            </section>
 
-          {clarificationRows.length > 0 && (
-            <div>
+            <section id="profile-memory" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md">
+              <div className="mb-3 flex items-center justify-between">
+                <label className="block text-sm text-gray-700" style={{ fontWeight: 600 }}>
+                  Structured memory (from Shadow &amp; imports)
+                </label>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => toggleSection('memory')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+                    {openSections.memory ? 'Collapse' : 'Expand'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMemoryEditMode((v) => !v)}
+                    className={`rounded-full px-3 py-1 text-xs ${memoryEditMode ? 'bg-indigo-600 text-white' : 'border border-gray-200 bg-white text-gray-700'}`}
+                  >
+                    {memoryEditMode ? 'Done' : 'Edit'}
+                  </button>
+                </div>
+              </div>
+              {openSections.memory ? (
+                <>
+              <p className="mb-3 text-xs leading-relaxed text-gray-500">
+                Short, categorized facts — not therapist paraphrases. Delete only in Edit mode.
+              </p>
+              {memoryFacts.length === 0 ? (
+                <div className="rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm text-gray-500">
+                  No structured facts yet — they appear when Shadow chat stores concrete details you stated.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
+                  <div className="rounded-xl border border-gray-200 bg-white/80 p-2">
+                    {memoryCatOrder.map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setSelectedMemoryCat(cat)}
+                        className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${
+                          selectedMemoryCat === cat ? 'bg-indigo-50 text-indigo-900' : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        {MEMORY_CAT_LABEL[cat] || cat}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="space-y-3">
+                    {memoryCatOrder.filter((c) => c === selectedMemoryCat).map((cat) => (
+                      <div key={cat}>
+                        <p className="mb-2 text-[11px] uppercase tracking-wide text-indigo-700" style={{ fontWeight: 700 }}>
+                          {MEMORY_CAT_LABEL[cat] || cat}
+                        </p>
+                        <div className="space-y-2">
+                          {(factsByCat[cat] || []).map((f) => (
+                            <div key={f.id || f.text} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800">
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="min-w-0 leading-snug">{f.text}</span>
+                                {memoryEditMode ? (
+                                  <button
+                                    type="button"
+                                    disabled={deletingId === f.id}
+                                    onClick={() => f.id && void deleteMemoryFact(f.id)}
+                                    className="shrink-0 text-xs text-red-700 hover:underline disabled:opacity-40"
+                                  >
+                                    {deletingId === f.id ? '…' : 'Delete'}
+                                  </button>
+                                ) : null}
+                              </div>
+                              {f.predicate && f.object_value ? (
+                                <p className="mt-1 text-[10px] font-mono leading-tight text-gray-500">
+                                  {(f.subject_ref || 'user').trim()} · {f.predicate} · {f.object_value}
+                                </p>
+                              ) : null}
+                              {f.evidence ? <p className="mt-1 text-[10px] italic text-violet-700/90">Evidence: {f.evidence}</p> : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+                </>
+              ) : null}
+            </section>
+
+            {clarificationRows.length > 0 && (
+              <section id="profile-clarifications" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md">
+              <div className="mb-2 flex items-center justify-between">
               <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 600 }}>
                 From clarification (saved with a decision run)
               </label>
+              <button type="button" onClick={() => toggleSection('clarifications')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+                {openSections.clarifications ? 'Collapse' : 'Expand'}
+              </button>
+              </div>
+              {openSections.clarifications ? (
+                <>
               <p className="text-xs text-gray-500 mb-2 leading-relaxed">
                 These came from multiple-choice prompts — not the same as free-form priorities. You can remove any row.
               </p>
@@ -239,64 +385,22 @@ export default function ProfilePage() {
                   </div>
                 ))}
               </div>
-            </div>
+              </>
+              ) : null}
+              </section>
           )}
 
-          <div>
-            <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 600 }}>
-              Structured memory (from Shadow &amp; imports)
-            </label>
-            <p className="text-xs text-gray-500 mb-2 leading-relaxed">
-              Short, categorized facts — not therapist paraphrases. Delete anything that is wrong or outdated.
-            </p>
-            <div className="w-full min-h-[80px] px-4 py-3 rounded-2xl border border-violet-100 bg-violet-50/40 text-sm text-gray-800 space-y-4">
-              {memoryFacts.length === 0 ? (
-                <span className="text-gray-400 text-sm">
-                  No structured facts yet — they appear when Shadow chat stores concrete details you stated.
-                </span>
-              ) : (
-                Object.entries(factsByCat).map(([cat, rows]) => (
-                  <div key={cat}>
-                    <p className="text-[10px] font-bold uppercase tracking-wide text-violet-800 mb-2">
-                      {MEMORY_CAT_LABEL[cat] || cat}
-                    </p>
-                    <ul className="space-y-2">
-                      {rows.map((f) => (
-                        <li key={f.id || f.text} className="flex items-start justify-between gap-2">
-                          <span className="min-w-0 leading-snug">
-                            {f.text}
-                            {f.predicate && f.object_value ? (
-                              <span className="block text-[10px] text-gray-500 mt-0.5 font-mono leading-tight">
-                                {(f.subject_ref || 'user').trim()} · {f.predicate} · {f.object_value}
-                              </span>
-                            ) : null}
-                            {f.evidence ? (
-                              <span className="block text-[10px] text-violet-700/90 mt-0.5 italic">
-                                Evidence: {f.evidence}
-                              </span>
-                            ) : null}
-                          </span>
-                          <button
-                            type="button"
-                            disabled={deletingId === f.id}
-                            onClick={() => f.id && void deleteMemoryFact(f.id)}
-                            className="shrink-0 text-xs text-red-700 hover:underline disabled:opacity-40"
-                          >
-                            {deletingId === f.id ? '…' : 'Delete'}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div>
+          <section id="profile-legacy" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md">
+            <div className="mb-2 flex items-center justify-between">
             <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 600 }}>
               Legacy system lines (one-line notes)
             </label>
+            <button type="button" onClick={() => toggleSection('legacy')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+              {openSections.legacy ? 'Collapse' : 'Expand'}
+            </button>
+            </div>
+            {openSections.legacy ? (
+              <>
             <p className="text-xs text-gray-500 mb-2 leading-relaxed">
               Older inferred lines (e.g. from Personalize). Prefer structured memory above for new data. You can delete
               rows here.
@@ -325,9 +429,20 @@ export default function ProfilePage() {
                 ))
               )}
             </div>
-          </div>
+            </>
+            ) : null}
+          </section>
 
-          <div>
+          <section id="profile-context" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md space-y-4">
+            <div className="mb-1 flex items-center justify-between">
+              <p className="text-sm text-gray-700" style={{ fontWeight: 600 }}>Personal context</p>
+              <button type="button" onClick={() => toggleSection('context')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+                {openSections.context ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+            {openSections.context ? (
+              <>
+            <div>
             <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>
               About me
             </label>
@@ -337,8 +452,8 @@ export default function ProfilePage() {
               className="w-full min-h-[120px] px-4 py-3 rounded-2xl border border-gray-200/80 bg-white/70 text-sm"
               placeholder="Short narrative: values, risk tolerance, context…"
             />
-          </div>
-          <div>
+            </div>
+            <div>
             <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>
               Constraints (one per line)
             </label>
@@ -348,8 +463,8 @@ export default function ProfilePage() {
               className="w-full min-h-[80px] px-4 py-3 rounded-2xl border border-gray-200/80 bg-white/70 text-sm"
               placeholder="Cannot relocate before 2027&#10;Max 50h weeks"
             />
-          </div>
-          <div>
+            </div>
+            <div>
             <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>
               Values (one per line)
             </label>
@@ -359,14 +474,11 @@ export default function ProfilePage() {
               className="w-full min-h-[80px] px-4 py-3 rounded-2xl border border-gray-200/80 bg-white/70 text-sm"
               placeholder="Honesty&#10;Autonomy"
             />
-          </div>
-          <button
-            type="button"
-            onClick={() => void save()}
-            className="px-8 py-3 rounded-full bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm font-semibold shadow-lg"
-          >
-            Save profile
-          </button>
+            </div>
+            </>
+            ) : null}
+          </section>
+          </main>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import uuid
 from datetime import datetime, timezone
@@ -27,8 +28,12 @@ from foresight_x.harness.evaluation_log import append_evaluation_log, build_eval
 from foresight_x.harness.trace_index import delete_trace, list_traces
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.orchestration.pipeline import PipelineContext, iter_pipeline_events, run_pipeline
-from foresight_x.perception.clarify_gate import run_clarify_gate
-from foresight_x.profile.merge import delete_memory_fact_by_id, delete_priority_line_by_id
+from foresight_x.perception.clarify_gate import merge_clarification_answers, run_clarify_gate
+from foresight_x.profile.merge import (
+    append_clarification_to_profile,
+    delete_memory_fact_by_id,
+    delete_priority_line_by_id,
+)
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import DecisionCommit, DecisionOutcome, ProfileLine, UserProfile
 from foresight_x.ui.cli import _build_context
@@ -39,6 +44,29 @@ from foresight_x.memory.profile_store import save_profile as save_tier3_profile
 from foresight_x.personalization.ingest import ingest_personalization_text, preview_extract_summary
 from foresight_x.shadow.chat import run_shadow_turn
 from foresight_x.structured_predict import structured_predict
+from foresight_x.chat import (
+    append_message,
+    create_thread,
+    delete_thread,
+    detect_chat_intent,
+    detect_chat_mode_intent,
+    list_threads,
+    load_thread,
+    save_thread,
+)
+from foresight_x.decision_algorithms import (
+    build_agility_preview,
+    build_influence_graph_from_trace,
+    evaluate_options_mcda,
+    evaluate_robustness,
+    generate_consequence_scenarios,
+    schedule_with_ortools,
+)
+from foresight_x.decision_algorithms.schemas import (
+    CalendarEvent as AlgoCalendarEvent,
+    ExecutionTask as AlgoExecutionTask,
+    SchedulerOptions as AlgoSchedulerOptions,
+)
 
 
 _log = logging.getLogger(__name__)
@@ -48,9 +76,32 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _trace_artifact_summary(trace: dict | None) -> str:
+    if not trace or not isinstance(trace, dict):
+        return "Generated from this conversation"
+    us = trace.get("user_state")
+    if isinstance(us, dict):
+        s = str(us.get("situation") or "").strip()
+        if s:
+            return (s[:180] + "…") if len(s) > 180 else s
+    return "Generated from this conversation"
+
+
 def _sse_chunk(obj: dict) -> str:
     """SSE line; ``default=str`` avoids rare non-JSON-native values aborting the stream."""
     return f"data: {json.dumps(obj, ensure_ascii=False, default=str)}\n\n"
+
+
+# Uvicorn/proxies may close chunked SSE early without these → browser ERR_INCOMPLETE_CHUNKED_ENCODING.
+_SSE_STREAM_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _sse_streaming_response(body) -> StreamingResponse:
+    return StreamingResponse(body, media_type="text/event-stream", headers=dict(_SSE_STREAM_HEADERS))
 
 
 class PersonaItem(BaseModel):
@@ -260,6 +311,15 @@ def root() -> dict[str, object]:
             "/api/shadow/chat",
             "/api/option-chat",
             "/api/agility-preview",
+            "/api/decision/agility-preview",
+            "/api/decision/schedule",
+            "/api/calendar/parse-ics",
+            "/api/chat/unified",
+            "/api/shadow-chat/threads",
+            "/api/shadow-chat/threads/{thread_id}",
+            "/api/shadow-chat/threads/{thread_id}/messages",
+            "/api/shadow-chat/threads/{thread_id}/stream",
+            "/api/shadow-chat/threads/{thread_id}/decision-report/stream",
             "/api/transcribe",
             "/api/personalization/ingest",
             "/api/memory-graph/external-event",
@@ -399,15 +459,7 @@ def run_decision_stream(body: RunRequest) -> StreamingResponse:
             # Without this, uvicorn closes the socket mid-chunk → browser ERR_INCOMPLETE_CHUNKED_ENCODING / "network error".
             yield _sse_chunk({"event": "error", "detail": f"{type(e).__name__}: {e!s}"})
 
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return _sse_streaming_response(gen())
 
 
 @app.post("/run", response_model=RunResponse)
@@ -593,6 +645,606 @@ class AgilityPreviewResponse(BaseModel):
     review_checkpoint: str
 
 
+class DecisionAgilityPreviewRequest(BaseModel):
+    trace_id: str = Field(min_length=1)
+    selected_option_id: str = Field(min_length=1)
+
+
+class DecisionScheduleRequest(BaseModel):
+    tasks: list[AlgoExecutionTask] = Field(default_factory=list)
+    existing_events: list[AlgoCalendarEvent] = Field(default_factory=list)
+    options: AlgoSchedulerOptions = Field(default_factory=AlgoSchedulerOptions)
+
+
+class CalendarParseIcsRequest(BaseModel):
+    ics_text: str = Field(min_length=1)
+
+
+class UnifiedChatRequest(BaseModel):
+    thread_id: str | None = None
+    message: str = ""
+    mode: str | None = None
+    user_action: str = "send_message"
+    recent_messages: list[dict] = Field(default_factory=list)
+
+
+class ShadowThreadCreateRequest(BaseModel):
+    title: str | None = None
+
+
+class ShadowThreadMessageRequest(BaseModel):
+    message: str = Field(min_length=1)
+    mode: str | None = None
+    user_action: str = "send_message"
+    clarification_answers: dict[str, str] | None = Field(default=None)
+    save_clarification_to_profile: bool = Field(default=False)
+
+
+class ShadowDecisionReportStreamRequest(BaseModel):
+    decision_prompt: str = Field(min_length=1)
+    recent_messages: list[dict] = Field(default_factory=list)
+    clarification_answers: dict[str, str] | None = Field(default=None)
+    save_clarification_to_profile: bool = Field(default=False)
+
+
+class ShadowReportContextRequest(BaseModel):
+    """Pinned decision report for revision follow-ups in Shadow Chat."""
+
+    decision_id: str | None = None
+    mode: str | None = "revision"
+
+
+def _simple_chat_reply(message: str) -> str:
+    text = message.strip()
+    if not text:
+        return "Tell me what is on your mind, and I will help you think it through."
+    return (
+        "I hear you. I can keep chatting normally, or help you structure this when you want. "
+        f"You said: {text}"
+    )
+
+
+@app.post("/api/chat/unified")
+def unified_chat(body: UnifiedChatRequest) -> dict:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = load_thread(body.thread_id, user_id=uid)
+    mode = str(body.mode or thread.get("mode") or "normal")
+    action = (body.user_action or "send_message").strip()
+    message = (body.message or "").strip()
+
+    if action == "enter_role_mode":
+        mode = "roleplay"
+        thread["mode"] = mode
+        save_thread(thread)
+    elif action in {"exit_role_mode", "close_decision_report"}:
+        mode = "normal"
+        thread["mode"] = mode
+        save_thread(thread)
+
+    decision_trace: dict | None = None
+    suggestion: dict | None = None
+    profile_updates: list[str] = []
+    shadow_updates: list[str] = []
+
+    if message:
+        append_message(thread, role="user", content=message, mode=mode)
+        detection = detect_chat_mode_intent(
+            user_message=message,
+            recent_messages=body.recent_messages or thread.get("messages", [])[-8:],
+        )
+    else:
+        detection = detect_chat_mode_intent(user_message="", recent_messages=[])
+
+    if action == "dismiss_suggestion":
+        ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
+        ds["role_mode"] = True
+        ds["decision_report"] = True
+        save_thread(thread)
+
+    assistant_text = ""
+    if action == "generate_decision_report":
+        ctx, _ = _build_context(settings)
+        trace = run_pipeline(message or "Help me decide.", ctx=ctx, save_trace=True)
+        decision_trace = trace.model_dump(mode="json")
+        mode = "decision_report"
+        thread["mode"] = mode
+        append_message(
+            thread,
+            role="assistant",
+            content="I generated a decision report. You can close it and keep chatting here.",
+            mode=mode,
+            decision_id=trace.decision_id,
+        )
+    elif mode == "roleplay":
+        try:
+            msgs = [{"role": m.get("role"), "content": m.get("content")} for m in thread.get("messages", [])[-16:]]
+            reply, _flag, _state, rec, _used = run_shadow_turn(msgs, settings=settings)
+            assistant_text = reply.strip()
+            if rec:
+                profile_updates.extend(rec)
+                shadow_updates.extend(rec)
+        except Exception:
+            assistant_text = _simple_chat_reply(message)
+        append_message(thread, role="assistant", content=assistant_text, mode=mode)
+    else:
+        # Normal mode still uses the existing shadow engine as a passive memory-aware dialogue core,
+        # but does not force users into explicit "ShadowChat page" navigation.
+        try:
+            msgs = [{"role": m.get("role"), "content": m.get("content")} for m in thread.get("messages", [])[-16:]]
+            reply, _flag, _state, rec, _used = run_shadow_turn(msgs, settings=settings)
+            assistant_text = reply.strip()
+            if rec:
+                profile_updates.extend(rec)
+                shadow_updates.extend(rec)
+        except Exception:
+            assistant_text = _simple_chat_reply(message)
+        append_message(thread, role="assistant", content=assistant_text, mode=mode)
+        passive_memory_enabled = os.getenv("ENABLE_UNIFIED_CHAT_PASSIVE_MEMORY", "false").strip().lower() == "true"
+        if message and (settings.openai_api_key or "").strip() and passive_memory_enabled:
+            try:
+                _r, _f, _st, rec, _used = run_shadow_turn(
+                    [{"role": "user", "content": message}],
+                    settings=settings,
+                )
+                if rec:
+                    profile_updates.extend(rec)
+                    shadow_updates.extend(rec)
+            except Exception:
+                pass
+
+    ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
+    if action == "send_message" and message and not ds.get("role_mode", False) and detection.intent == "roleplay_candidate":
+        suggestion = {
+            "type": "role_mode",
+            "title": "Enter Role Mode?",
+            "message": "It looks like you may be starting a roleplay or simulation. Role Mode keeps the story state consistent while preserving this chat history.",
+            "actions": ["enter_role_mode", "continue_normally", "dismiss_suggestion"],
+        }
+    elif action == "send_message" and message and not ds.get("decision_report", False) and detection.intent == "decision_candidate":
+        suggestion = {
+            "type": "decision_report",
+            "title": "Turn this into a decision report?",
+            "message": "I can structure this into options, trade-offs, risks, consequences, and an action plan.",
+            "actions": ["generate_decision_report", "continue_normally"],
+        }
+
+    if action == "close_decision_report":
+        append_message(
+            thread,
+            role="assistant",
+            content="Decision report closed. We can keep chatting from here.",
+            mode="normal",
+        )
+
+    thread = load_thread(thread["thread_id"], user_id=uid)
+    return {
+        "assistant_message": thread.get("messages", [])[-1] if thread.get("messages") else None,
+        "mode": thread.get("mode", "normal"),
+        "suggestion": suggestion,
+        "decision_trace": decision_trace,
+        "profile_updates": profile_updates,
+        "shadow_updates": shadow_updates,
+        "thread_id": thread["thread_id"],
+        "messages": thread.get("messages", []),
+    }
+
+
+def _chunk_text(text: str, *, step: int = 18) -> list[str]:
+    t = text or ""
+    if not t:
+        return []
+    return [t[i : i + step] for i in range(0, len(t), step)]
+
+
+def _should_store_profile_fact(item: str) -> bool:
+    s = (item or "").strip()
+    if len(s) < 8:
+        return False
+    lowered = s.lower()
+    noisy = ["weather", "today", "just now", "lol", "haha"]
+    if any(k in lowered for k in noisy):
+        return False
+    return True
+
+
+def _build_shadow_suggestion(intent: str, *, dismissed: dict) -> dict | None:
+    if intent == "roleplay_candidate" and not dismissed.get("role_mode", False):
+        return {
+            "type": "role_mode",
+            "title": "Enter Role Mode?",
+            "message": "It looks like you may be starting a roleplay or simulation. Role Mode keeps the story state consistent while preserving this chat history.",
+            "actions": ["enter_role_mode", "continue_normally", "dismiss_suggestion"],
+        }
+    if intent == "decision_candidate" and not dismissed.get("decision_report", False):
+        return {
+            "type": "decision_report",
+            "title": "Turn this into a decision report?",
+            "message": "I can structure this into options, trade-offs, risks, consequences, and an action plan.",
+            "actions": ["generate_decision_report", "continue_normally"],
+        }
+    return None
+
+
+@app.get("/api/shadow-chat/threads")
+def shadow_chat_threads() -> dict:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    return {"threads": list_threads(user_id=uid)}
+
+
+@app.post("/api/shadow-chat/threads")
+def create_shadow_chat_thread(body: ShadowThreadCreateRequest | None = None) -> dict:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    t = create_thread(user_id=uid, title=(body.title if body else None))
+    return {"thread": t}
+
+
+@app.get("/api/shadow-chat/threads/{thread_id}")
+def get_shadow_chat_thread(thread_id: str) -> dict:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    t = load_thread(thread_id, user_id=uid)
+    return {"thread": t}
+
+
+@app.delete("/api/shadow-chat/threads/{thread_id}")
+def remove_shadow_chat_thread(thread_id: str) -> dict:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    ok = delete_thread(user_id=uid, thread_id=thread_id)
+    return {"ok": ok}
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/report-context")
+def set_shadow_report_context(thread_id: str, body: ShadowReportContextRequest) -> dict:
+    """Pin or clear active decision report context for revision-style follow-ups."""
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = load_thread(thread_id, user_id=uid)
+    did = (body.decision_id or "").strip()
+    if not did:
+        thread.pop("active_report_context", None)
+    else:
+        thread["active_report_context"] = {
+            "decision_id": did,
+            "mode": (body.mode or "revision").strip() or "revision",
+        }
+    save_thread(thread)
+    return {"ok": True, "thread": load_thread(thread_id, user_id=uid)}
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/messages")
+def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -> dict:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = load_thread(thread_id, user_id=uid)
+    mode = str(body.mode or thread.get("mode") or "normal")
+    msg = body.message.strip()
+    effective_msg = merge_clarification_answers(msg, body.clarification_answers)
+    if body.save_clarification_to_profile and body.clarification_answers:
+        p = append_clarification_to_profile(load_user_profile(settings), body.clarification_answers)
+        save_user_profile(p, settings=settings)
+    intent = detect_chat_intent(msg, thread.get("messages", [])[-8:])
+    append_message(thread, role="user", content=effective_msg, mode=mode, intent=intent.intent)
+
+    suggestion: dict | None = None
+    decision_trace: dict | None = None
+    profile_updates: list[str] = []
+    if body.user_action == "generate_decision_report":
+        ctx, _ = _build_context(settings)
+        trace = run_pipeline(
+            effective_msg,
+            ctx=ctx,
+            save_trace=True,
+            clarification_answers=body.clarification_answers,
+            save_clarification_to_profile=body.save_clarification_to_profile,
+        )
+        decision_trace = trace.model_dump(mode="json")
+        thread["mode"] = "decision_report"
+        tr_dump = trace.model_dump(mode="json")
+        append_message(
+            thread,
+            role="assistant",
+            content="",
+            mode="decision_report",
+            decision_id=trace.decision_id,
+            memory_used=True,
+            metadata_extra={
+                "type": "decision_report_artifact",
+                "title": "Decision Report",
+                "summary": _trace_artifact_summary(tr_dump if isinstance(tr_dump, dict) else {}),
+                "created_at": _utc_now(),
+                "status": "complete",
+            },
+        )
+    else:
+        msgs = [{"role": m.get("role"), "content": m.get("content")} for m in thread.get("messages", [])[-16:]]
+        ar_ctx = thread.get("active_report_context") or {}
+        rev_id: str | None = None
+        if isinstance(ar_ctx, dict) and str(ar_ctx.get("mode") or "") == "revision":
+            d0 = str(ar_ctx.get("decision_id") or "").strip()
+            if d0:
+                rev_id = d0
+        reply, _flag, _state, rec, used = run_shadow_turn(
+            msgs, settings=settings, report_revision_decision_id=rev_id
+        )
+        profile_updates = [x for x in (rec or []) if _should_store_profile_fact(x)]
+        append_message(
+            thread,
+            role="assistant",
+            content=reply.strip(),
+            mode=mode,
+            intent=intent.intent,
+            memory_used=bool(used),
+            profile_updated=bool(profile_updates),
+        )
+        if profile_updates:
+            thread.setdefault("memory_events", []).append(
+                {"kind": "profile_update", "items": profile_updates[:4], "at": _utc_now()}
+            )
+            save_thread(thread)
+        suggestion = _build_shadow_suggestion(
+            intent.intent,
+            dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
+        )
+    refreshed = load_thread(thread_id, user_id=uid)
+    return {
+        "thread": refreshed,
+        "suggestion": suggestion,
+        "decision_trace": decision_trace,
+        "profile_updates": profile_updates,
+    }
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/stream")
+def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -> StreamingResponse:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+
+    def _gen():
+        tid = thread_id
+        try:
+            thread = load_thread(thread_id, user_id=uid)
+            tid = str(thread.get("thread_id") or thread_id)
+            mode = str(body.mode or thread.get("mode") or "normal")
+            message = body.message.strip()
+            effective_message = merge_clarification_answers(message, body.clarification_answers)
+            if body.save_clarification_to_profile and body.clarification_answers:
+                p = append_clarification_to_profile(load_user_profile(settings), body.clarification_answers)
+                save_user_profile(p, settings=settings)
+            t0 = datetime.now(timezone.utc)
+            intent = detect_chat_intent(message, thread.get("messages", [])[-8:])
+            retrieval_mode = "chat_deep" if intent.intent == "decision_candidate" else "chat_fast"
+            append_message(thread, role="user", content=effective_message, mode=mode, intent=intent.intent)
+
+            yield _sse_chunk({"type": "status", "status": "reading_memory", "label": "Reading memory..."})
+            yield _sse_chunk({"type": "status", "status": "thinking", "label": "Thinking..."})
+
+            suggestion = None
+            profile_updates: list[str] = []
+            if body.user_action == "generate_decision_report":
+                ctx, _ = _build_context(settings)
+                trace = run_pipeline(
+                    message,
+                    ctx=ctx,
+                    save_trace=True,
+                    clarification_answers=body.clarification_answers,
+                    save_clarification_to_profile=body.save_clarification_to_profile,
+                )
+                thread["mode"] = "decision_report"
+                tr_dump = trace.model_dump(mode="json")
+                append_message(
+                    thread,
+                    role="assistant",
+                    content="",
+                    mode="decision_report",
+                    decision_id=trace.decision_id,
+                    memory_used=True,
+                    metadata_extra={
+                        "type": "decision_report_artifact",
+                        "title": "Decision Report",
+                        "summary": _trace_artifact_summary(tr_dump if isinstance(tr_dump, dict) else {}),
+                        "created_at": _utc_now(),
+                        "status": "complete",
+                    },
+                )
+                yield _sse_chunk({"type": "status", "status": "report_open", "label": "Decision report ready"})
+                yield _sse_chunk(
+                    {
+                        "type": "done",
+                        "thread_id": thread["thread_id"],
+                        "message": thread.get("messages", [])[-1],
+                        "decision_trace": trace.model_dump(mode="json"),
+                    }
+                )
+                return
+
+            msgs = [{"role": m.get("role"), "content": m.get("content")} for m in thread.get("messages", [])[-16:]]
+            ar_ctx = thread.get("active_report_context") or {}
+            rev_id: str | None = None
+            if isinstance(ar_ctx, dict) and str(ar_ctx.get("mode") or "") == "revision":
+                d0 = str(ar_ctx.get("decision_id") or "").strip()
+                if d0:
+                    rev_id = d0
+            reply, _flag, _state, rec, used = run_shadow_turn(
+                msgs,
+                settings=settings,
+                thread_id=thread_id,
+                retrieval_mode=retrieval_mode,
+                report_revision_decision_id=rev_id,
+            )
+            t_after_reply = datetime.now(timezone.utc)
+            text = reply.strip()
+            yield _sse_chunk({"type": "status", "status": "responding", "label": "Writing response..."})
+            for chunk in _chunk_text(text):
+                yield _sse_chunk({"type": "delta", "content": chunk})
+            profile_updates = [x for x in (rec or []) if _should_store_profile_fact(x)]
+            if profile_updates:
+                yield _sse_chunk({"type": "status", "status": "updating_profile", "label": "Updating profile..."})
+                yield _sse_chunk({"type": "profile_update", "items": profile_updates[:4]})
+            append_message(
+                thread,
+                role="assistant",
+                content=text,
+                mode=mode,
+                intent=intent.intent,
+                memory_used=bool(used),
+                profile_updated=bool(profile_updates),
+            )
+            if profile_updates:
+                thread.setdefault("memory_events", []).append(
+                    {"kind": "profile_update", "items": profile_updates[:4], "at": _utc_now()}
+                )
+                save_thread(thread)
+            suggestion = _build_shadow_suggestion(
+                intent.intent,
+                dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
+            )
+            if suggestion and suggestion.get("type") == "decision_report":
+                yield _sse_chunk({"type": "status", "status": "decision_detected", "label": "Decision detected"})
+                yield _sse_chunk({"type": "decision_suggestion", "suggestion": suggestion})
+            elif suggestion and suggestion.get("type") == "role_mode":
+                yield _sse_chunk({"type": "decision_suggestion", "suggestion": suggestion})
+            t_done = datetime.now(timezone.utc)
+            metrics = {
+                "first_ui_feedback_ms": 0,
+                "memory_retrieve_ms": int((t_after_reply - t0).total_seconds() * 1000),
+                "memory_cache_hit": retrieval_mode == "chat_fast",
+                "intent_detect_ms": 1,
+                "response_first_token_ms": int((t_after_reply - t0).total_seconds() * 1000),
+                "response_total_ms": int((t_done - t0).total_seconds() * 1000),
+                "profile_update_ms": 0 if not profile_updates else 1,
+            }
+            yield _sse_chunk(
+                {
+                    "type": "done",
+                    "thread_id": thread["thread_id"],
+                    "message": thread.get("messages", [])[-1],
+                    "suggestion": suggestion,
+                    "metrics": metrics,
+                }
+            )
+        except Exception as e:
+            _log.exception("stream_shadow_chat_message failed thread_id=%s", thread_id)
+            yield _sse_chunk({"type": "error", "message": str(e)})
+            yield _sse_chunk(
+                {
+                    "type": "done",
+                    "thread_id": tid,
+                    "message": None,
+                    "suggestion": None,
+                    "metrics": {},
+                    "stream_error": True,
+                }
+            )
+
+    return _sse_streaming_response(_gen())
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/decision-report/stream")
+def stream_shadow_decision_report(thread_id: str, body: ShadowDecisionReportStreamRequest) -> StreamingResponse:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+
+    def _gen():
+        t0 = datetime.now(timezone.utc)
+        tid = thread_id
+        try:
+            thread = load_thread(thread_id, user_id=uid)
+            tid = str(thread.get("thread_id") or thread_id)
+            ctx, _ = _build_context(settings)
+            prompt = body.decision_prompt.strip()
+            first_meta_at: datetime | None = None
+            for ev in iter_pipeline_events(
+                ctx,
+                prompt,
+                persist_trace=True,
+                clarification_answers=body.clarification_answers,
+                save_clarification_to_profile=body.save_clarification_to_profile,
+            ):
+                if ev.get("event") == "meta":
+                    first_meta_at = datetime.now(timezone.utc)
+                    yield _sse_chunk({"type": "status", "status": "report_generating", "label": "Structuring decision"})
+                    yield _sse_chunk({"type": "report_event", "event": ev})
+                    continue
+                if ev.get("event") == "stage":
+                    stage = str(ev.get("stage") or "")
+                    label_map = {
+                        "enhance": "Structuring decision",
+                        "perceive": "Reading memory",
+                        "retrieve": "Reading memory",
+                        "infer": "Generating options",
+                        "evaluate": "Evaluating trade-offs",
+                        "simulate": "Simulating consequences",
+                        "finalize": "Finalizing report",
+                    }
+                    yield _sse_chunk({"type": "status", "status": "report_generating", "label": label_map.get(stage, stage)})
+                    yield _sse_chunk({"type": "report_event", "event": ev})
+                    continue
+                if ev.get("event") == "partial":
+                    yield _sse_chunk({"type": "report_event", "event": ev})
+                    continue
+                if ev.get("event") == "complete":
+                    trace = ev.get("trace")
+                    did = str((trace or {}).get("decision_id") or "")
+                    if did:
+                        tr_dict = trace if isinstance(trace, dict) else {}
+                        append_message(
+                            thread,
+                            role="assistant",
+                            content="",
+                            mode="decision_report",
+                            decision_id=did,
+                            memory_used=True,
+                            metadata_extra={
+                                "type": "decision_report_artifact",
+                                "title": "Decision Report",
+                                "summary": _trace_artifact_summary(tr_dict),
+                                "created_at": _utc_now(),
+                                "status": "complete",
+                            },
+                        )
+                    t1 = datetime.now(timezone.utc)
+                    yield _sse_chunk(
+                        {
+                            "type": "done",
+                            "decision_trace": trace,
+                            "decision_id": did,
+                            "metrics": {
+                                "report_stream_first_event_ms": int(((first_meta_at or t1) - t0).total_seconds() * 1000),
+                                "report_total_ms": int((t1 - t0).total_seconds() * 1000),
+                            },
+                        }
+                    )
+                    return
+            yield _sse_chunk({"type": "error", "message": "Pipeline ended without a complete report."})
+            yield _sse_chunk(
+                {
+                    "type": "done",
+                    "decision_trace": None,
+                    "decision_id": "",
+                    "metrics": {},
+                    "stream_error": True,
+                }
+            )
+        except Exception as e:
+            _log.exception("stream_shadow_decision_report failed thread_id=%s", thread_id)
+            yield _sse_chunk({"type": "error", "message": str(e)})
+            yield _sse_chunk(
+                {
+                    "type": "done",
+                    "decision_trace": None,
+                    "decision_id": "",
+                    "metrics": {},
+                    "stream_error": True,
+                }
+            )
+
+    return _sse_streaming_response(_gen())
+
+
 class PersonalizationIngestRequest(BaseModel):
     text: str = Field(min_length=1)
 
@@ -712,6 +1364,39 @@ def option_chat(body: OptionChatRequest) -> dict:
     return {"answer": ans, "decision_id": trace.decision_id, "option_id": option.option_id}
 
 
+def _fallback_parse_ics(ics_text: str) -> list[dict]:
+    events: list[dict] = []
+    cur: dict[str, str] = {}
+    in_event = False
+    for raw in ics_text.splitlines():
+        line = raw.strip()
+        if line == "BEGIN:VEVENT":
+            in_event = True
+            cur = {}
+            continue
+        if line == "END:VEVENT":
+            if cur.get("DTSTART") and cur.get("DTEND"):
+                events.append(
+                    {
+                        "id": cur.get("UID") or f"upl-{len(events)+1}",
+                        "title": cur.get("SUMMARY") or "Imported event",
+                        "start": cur.get("DTSTART"),
+                        "end": cur.get("DTEND"),
+                        "source": "uploaded",
+                        "description": cur.get("DESCRIPTION", ""),
+                        "locked": True,
+                    }
+                )
+            in_event = False
+            cur = {}
+            continue
+        if not in_event or ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        cur[k.split(";")[0]] = v.strip()
+    return events
+
+
 @app.post("/api/agility-preview")
 def agility_preview(body: AgilityPreviewRequest) -> dict:
     """Structured consequence-focused preview for execution planning (no probability language in schema)."""
@@ -787,6 +1472,72 @@ def agility_preview(body: AgilityPreviewRequest) -> dict:
         return AgilityPreviewResponse.model_validate(out).model_dump(mode="json")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"agility_preview_failed: {e!s}") from e
+
+
+@app.post("/api/decision/agility-preview")
+def decision_agility_preview(body: DecisionAgilityPreviewRequest) -> dict:
+    settings = _settings_for_active_user()
+    try:
+        trace = load_decision_trace(body.trace_id.strip(), settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="trace_not_found") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail="trace_not_found")
+
+    graph = build_influence_graph_from_trace(trace)
+    mcda = evaluate_options_mcda(graph.options, method="topsis")
+    selected = next((o for o in graph.options if o.id == body.selected_option_id.strip()), None)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="option_not_found")
+    scenarios = generate_consequence_scenarios(selected, graph, trace=trace, n_scenarios=5)
+    robust = evaluate_robustness(selected, scenarios, mcda_result=mcda)
+    preview = build_agility_preview(selected.id, graph, mcda, robust, trace)
+    return {
+        "influence_graph": graph.model_dump(mode="json"),
+        "mcda_result": mcda.model_dump(mode="json"),
+        "robustness_result": robust.model_dump(mode="json"),
+        "agility_preview": preview.model_dump(mode="json"),
+    }
+
+
+@app.post("/api/decision/schedule")
+def decision_schedule(body: DecisionScheduleRequest) -> dict:
+    result = schedule_with_ortools(body.tasks, body.existing_events, body.options)
+    return result.model_dump(mode="json")
+
+
+@app.post("/api/calendar/parse-ics")
+def parse_calendar_ics(body: CalendarParseIcsRequest) -> dict:
+    text = body.ics_text.strip()
+    try:
+        from icalendar import Calendar  # type: ignore
+
+        cal = Calendar.from_ical(text)
+        events: list[dict] = []
+        for comp in cal.walk():
+            if comp.name != "VEVENT":
+                continue
+            dt_start = comp.get("dtstart")
+            dt_end = comp.get("dtend")
+            if not dt_start or not dt_end:
+                continue
+            start = dt_start.dt.isoformat()
+            end = dt_end.dt.isoformat()
+            events.append(
+                {
+                    "id": str(comp.get("uid") or f"upl-{len(events)+1}"),
+                    "title": str(comp.get("summary") or "Imported event"),
+                    "start": start,
+                    "end": end,
+                    "source": "uploaded",
+                    "description": str(comp.get("description") or ""),
+                    "locked": True,
+                }
+            )
+        return {"events": events, "parser": "icalendar"}
+    except Exception:
+        return {"events": _fallback_parse_ics(text), "parser": "fallback"}
 
 
 @app.post("/api/transcribe")

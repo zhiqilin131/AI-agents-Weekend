@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { addDays, addMinutes, differenceInMinutes, format, isSameDay, parseISO, setHours, setMinutes, startOfDay, startOfWeek } from 'date-fns';
 import { apiUrl } from '../utils/apiOrigin';
 import { MainNavButtons } from '../app/components/MainNavButtons';
 import { buildLocalAgilityPreview, mapPreviewStepsToTasks, type AgilityPreview } from '../utils/agilityPreview';
+import { AgilityPreview as AgilityPreviewCard } from '../app/components/AgilityPreview';
+import { CalendarUpload } from '../app/components/CalendarUpload';
 import {
   hasConflict,
   scheduleTasksIntoFreeSlots,
@@ -37,6 +39,9 @@ const TASKS_STORAGE_KEY = 'fx.execution.tasks.v1';
 
 export default function ExecutionPlannerPage() {
   const { decisionId } = useParams();
+  const [searchParams] = useSearchParams();
+  const shadowThreadId = searchParams.get('threadId');
+  const fromShadow = searchParams.get('from') === 'shadow';
   const [trace, setTrace] = useState<TraceShape | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,13 +93,14 @@ export default function ExecutionPlannerPage() {
         });
         try {
           if (chosenId) {
-            const pRes = await fetch(apiUrl('/api/agility-preview'), {
+            const pRes = await fetch(apiUrl('/api/decision/agility-preview'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ decision_id: t.decision_id, selected_option_id: chosenId }),
+              body: JSON.stringify({ trace_id: t.decision_id, selected_option_id: chosenId }),
             });
             if (pRes.ok) {
-              resolvedPreview = (await pRes.json()) as AgilityPreview;
+              const payload = (await pRes.json()) as { agility_preview?: AgilityPreview };
+              if (payload.agility_preview) resolvedPreview = payload.agility_preview;
             }
           }
         } catch {
@@ -142,6 +148,7 @@ export default function ExecutionPlannerPage() {
   }, [tasks]);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
+  const today = new Date();
   const visibleWeekCount = useMemo(() => {
     const start = startOfWeek(weekStart, { weekStartsOn: 1 });
     return events.filter((ev) => isSameDay(startOfWeek(parseISO(ev.start), { weekStartsOn: 1 }), start)).length;
@@ -209,20 +216,59 @@ export default function ExecutionPlannerPage() {
 
   const runAutoSchedule = () => {
     const visibleWeekStart = setMinutes(setHours(startOfDay(weekStart), SCHEDULER_DAY_START_HOUR), 0);
-    const { scheduled, unscheduled: un } = scheduleTasksIntoFreeSlots(tasks, events, {
-      dayStartHour: SCHEDULER_DAY_START_HOUR,
-      dayEndHour: SCHEDULER_DAY_END_HOUR,
-      slotMinutes: SLOT_MINUTES,
-      startDate: visibleWeekStart,
-      days: 7,
-    });
-    setUnscheduled(un);
-    setEvents((prev) => [...prev.filter((x) => x.source !== 'ai'), ...scheduled]);
-    if (scheduled.length > 0) {
-      setCalendarWarning(`Scheduled ${scheduled.length} task(s) into visible week (${format(weekStart, 'MM/dd')} - ${format(addDays(weekStart, 6), 'MM/dd')}).`);
-    } else if (un.length > 0) {
-      setCalendarWarning('No free slots found in the visible week. Try another week or fewer tasks.');
-    }
+    void (async () => {
+      try {
+        const res = await fetch(apiUrl('/api/decision/schedule'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tasks,
+            existing_events: events,
+            options: {
+              day_start_hour: SCHEDULER_DAY_START_HOUR,
+              day_end_hour: SCHEDULER_DAY_END_HOUR,
+              slot_minutes: SLOT_MINUTES,
+              days: 7,
+            },
+          }),
+        });
+        if (res.ok) {
+          const payload = (await res.json()) as {
+            scheduled_events?: CalendarEvent[];
+            unscheduled_tasks?: ExecutionTask[];
+            warnings?: string[];
+          };
+          const scheduled = payload.scheduled_events ?? [];
+          const un = payload.unscheduled_tasks ?? [];
+          setUnscheduled(un);
+          setEvents((prev) => [...prev.filter((x) => x.source !== 'ai'), ...scheduled]);
+          if (scheduled.length > 0) {
+            setCalendarWarning(
+              `Scheduled ${scheduled.length} task(s) into visible week (${format(weekStart, 'MM/dd')} - ${format(addDays(weekStart, 6), 'MM/dd')}).`,
+            );
+          } else if (un.length > 0) {
+            setCalendarWarning(payload.warnings?.[0] || 'No free slots found in the visible week.');
+          }
+          return;
+        }
+      } catch {
+        // fallback below
+      }
+      const { scheduled, unscheduled: un } = scheduleTasksIntoFreeSlots(tasks, events, {
+        dayStartHour: SCHEDULER_DAY_START_HOUR,
+        dayEndHour: SCHEDULER_DAY_END_HOUR,
+        slotMinutes: SLOT_MINUTES,
+        startDate: visibleWeekStart,
+        days: 7,
+      });
+      setUnscheduled(un);
+      setEvents((prev) => [...prev.filter((x) => x.source !== 'ai'), ...scheduled]);
+      if (scheduled.length > 0) {
+        setCalendarWarning(`Scheduled ${scheduled.length} task(s) into visible week (${format(weekStart, 'MM/dd')} - ${format(addDays(weekStart, 6), 'MM/dd')}).`);
+      } else if (un.length > 0) {
+        setCalendarWarning('No free slots found in the visible week. Try another week or fewer tasks.');
+      }
+    })();
   };
 
   const selectedEvent = events.find((x) => x.id === selectedEventId && x.source === 'ai') || null;
@@ -359,249 +405,339 @@ export default function ExecutionPlannerPage() {
   if (error) return <div className="p-6 text-red-700">Failed: {error}</div>;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff]">
-      <div className="max-w-[1400px] mx-auto px-6 py-6 space-y-4">
-        <MainNavButtons />
-        <div className="flex items-center justify-between rounded-[24px] border border-white/90 bg-white/70 p-5 shadow-[0_8px_40px_rgba(0,0,0,0.05)] backdrop-blur-md">
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">Agility / Execution Calendar</h1>
-            <p className="text-sm text-gray-500 mt-1">Plan, schedule, and adjust execution blocks anytime.</p>
-          </div>
-          {trace?.decision_id ? (
-            <Link to={`/trace/${trace.decision_id}`} className="text-sm text-indigo-700 hover:underline">
-              Back to decision report
-            </Link>
-          ) : (
-            <Link to="/" className="text-sm text-indigo-700 hover:underline">
-              Back to home
-            </Link>
-          )}
-        </div>
-        <div className="flex items-center gap-2 text-xs">
-          <button
-            className="px-3 py-1.5 rounded-full border border-gray-200 bg-white/80"
-            onClick={() => setWeekStart((w) => addDays(w, -7))}
-          >
-            Previous week
-          </button>
-          <button
-            className="px-3 py-1.5 rounded-full border border-gray-200 bg-white/80"
-            onClick={() => setWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}
-          >
-            This week
-          </button>
-          <button
-            className="px-3 py-1.5 rounded-full border border-gray-200 bg-white/80"
-            onClick={() => setWeekStart((w) => addDays(w, 7))}
-          >
-            Next week
-          </button>
-          <span className="text-gray-600 ml-1">
-            Showing {format(weekStart, 'MMM dd')} - {format(addDays(weekStart, 6), 'MMM dd')}
-          </span>
-          <span className="text-gray-500 ml-2">Events this week: {visibleWeekCount}</span>
-        </div>
-      </div>
-
-      {preview && (
-        <section className="max-w-[1400px] mx-auto rounded-[24px] border border-white/90 bg-gradient-to-br from-white/80 to-purple-50/55 p-5 shadow-[0_8px_40px_rgba(0,0,0,0.04)] backdrop-blur-md space-y-2">
-          <h2 className="text-sm font-semibold text-indigo-900">Agility Preview</h2>
-          <p className="text-sm text-gray-800">{preview.summary}</p>
-          <p className="text-sm text-gray-700"><span className="font-semibold">Workload:</span> {preview.workload_impact}</p>
-          <p className="text-sm text-gray-700"><span className="font-semibold">Review checkpoint:</span> {preview.review_checkpoint}</p>
-          <ul className="list-disc ml-5 text-sm text-gray-700">
-            {preview.likely_consequences.slice(0, 3).map((x, i) => <li key={i}>{x}</li>)}
-          </ul>
-        </section>
-      )}
-
-      <section className="max-w-[1400px] mx-auto rounded-[24px] border border-white/90 bg-white/75 p-5 shadow-[0_8px_40px_rgba(0,0,0,0.04)] backdrop-blur-md space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="text-xs px-3 py-2 rounded-full border border-indigo-200 cursor-pointer bg-indigo-50 text-indigo-800 hover:bg-indigo-100">
-            Upload .ics calendar
-            <input
-              className="hidden"
-              type="file"
-              accept=".ics,text/calendar"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void onUploadIcs(file);
-              }}
-            />
-          </label>
-          <span className="text-xs text-gray-500">
-            Uploaded events: {events.filter((x) => x.source === 'uploaded').length}
-          </span>
-          <button className="text-xs px-3 py-2 rounded-full bg-indigo-600 text-white" onClick={runAutoSchedule}>
-            Create execution plan
-          </button>
-          <button className="text-xs px-3 py-2 rounded-full border border-gray-200" onClick={exportAiIcs}>
-            Export AI .ics
-          </button>
-          <button
-            className="text-xs px-3 py-2 rounded-full border border-gray-200"
-            onClick={() => {
-              localStorage.removeItem(EVENTS_STORAGE_KEY);
-              localStorage.removeItem(TASKS_STORAGE_KEY);
-              setEvents([]);
-              setTasks([]);
-              setUnscheduled([]);
-              setSelectedEventId(null);
-              setAltSuggestion(null);
-              setCalendarWarning(null);
-            }}
-          >
-            Clear local planner
-          </button>
-          <button className="text-xs px-3 py-2 rounded-full border border-gray-200 opacity-70" disabled>
-            Sync to Google Calendar (coming soon)
-          </button>
-        </div>
-        {unscheduled.length > 0 && (
-          <p className="text-xs text-amber-700">
-            Unscheduled tasks: {unscheduled.map((x) => x.title).join(', ')}
-          </p>
-        )}
-        {uploadNotice && <p className="text-xs text-emerald-700">{uploadNotice}</p>}
-        {visibleWeekCount === 0 && events.length > 0 && (
-          <p className="text-xs text-amber-700">
-            No events in currently visible week. Try Previous/Next week.
-          </p>
-        )}
-        {uploadedPreview.length > 0 && (
-          <div className="rounded-lg border border-gray-200 bg-white/70 px-3 py-2">
-            <p className="text-[11px] text-gray-600 mb-1">Imported event preview (first 6):</p>
-            <ul className="text-[11px] text-gray-700 space-y-0.5">
-              {uploadedPreview.map((line) => (
-                <li key={line} className="truncate">
-                  {line}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {calendarWarning && <p className="text-xs text-rose-700">{calendarWarning}</p>}
-      </section>
-
-      <section className="max-w-[1400px] mx-auto rounded-[24px] border border-white/90 bg-white/75 p-5 shadow-[0_8px_40px_rgba(0,0,0,0.04)] backdrop-blur-md overflow-x-auto">
-        <div className="min-w-[980px]">
-          <div className="grid mb-2" style={{ gridTemplateColumns: '80px repeat(7, minmax(0,1fr))' }}>
-            <div />
-            {days.map((d) => (
-              <div key={d.toISOString()} className="text-xs font-semibold text-gray-700 px-2 py-1">
-                {format(d, 'EEE MM/dd')}
-              </div>
-            ))}
-          </div>
-          <div className="grid" style={{ gridTemplateColumns: '80px 1fr' }}>
-            <div className="relative" style={{ height: `${SLOT_COUNT * SLOT_HEIGHT_PX}px` }}>
-              {Array.from({ length: SLOT_COUNT + 1 }, (_, idx) => {
-                const minutes = idx * SLOT_MINUTES;
-                const hour = VIEW_DAY_START_HOUR + Math.floor(minutes / 60);
-                const minute = minutes % 60;
-                return (
-                  <div
-                    key={`tick-${idx}`}
-                    className="absolute left-0 right-0 text-[11px] text-gray-500"
-                    style={{ top: `${idx * SLOT_HEIGHT_PX - 8}px` }}
-                  >
-                    {`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`}
+    <div className="min-h-screen bg-[#eef2f6]">
+      <div className="max-w-[1600px] mx-auto px-4 pb-8 sm:px-6">
+        <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-[#eef2f6]/90 pt-4 pb-3 backdrop-blur-md">
+          <div className="rounded-xl border border-slate-200/90 bg-white px-3 py-2.5 shadow-sm sm:px-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between lg:gap-6">
+              <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+                <MainNavButtons variant="compact" />
+                <div className="hidden h-8 w-px shrink-0 bg-slate-200 sm:block" aria-hidden />
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-indigo-600">Agility · weekly</p>
+                  <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0">
+                    <h1 className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl">Execution calendar</h1>
+                    <span className="hidden text-xs text-slate-500 md:inline">Drag AI blocks to reschedule</span>
                   </div>
-                );
-              })}
+                </div>
+              </div>
+              <nav className="flex shrink-0 flex-wrap items-center justify-start gap-2 sm:justify-end" aria-label="Page actions">
+                {fromShadow && shadowThreadId ? (
+                  <>
+                    <Link
+                      to={`/chat?thread=${encodeURIComponent(shadowThreadId)}`}
+                      className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-900 hover:bg-indigo-100"
+                    >
+                      Shadow chat
+                    </Link>
+                    {decisionId ? (
+                      <Link
+                        to={`/chat?thread=${encodeURIComponent(shadowThreadId)}&openReport=${encodeURIComponent(decisionId)}`}
+                        className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-900 hover:bg-violet-100"
+                      >
+                        Report
+                      </Link>
+                    ) : null}
+                  </>
+                ) : null}
+                {trace?.decision_id ? (
+                  <Link
+                    to={`/trace/${trace.decision_id}`}
+                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-white"
+                  >
+                    Full trace
+                  </Link>
+                ) : (
+                  <Link
+                    to="/"
+                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-white"
+                  >
+                    Home
+                  </Link>
+                )}
+              </nav>
             </div>
-            <div ref={calendarBodyRef} className="grid border border-gray-100 rounded-xl overflow-hidden" style={{ gridTemplateColumns: 'repeat(7, minmax(0,1fr))' }}>
-              {days.map((day, dayIdx) => (
-                <div
-                  key={`day-col-${day.toISOString()}`}
-                  className="relative border-l border-gray-100 first:border-l-0"
-                  style={{
-                    height: `${SLOT_COUNT * SLOT_HEIGHT_PX}px`,
-                    backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${SLOT_HEIGHT_PX - 1}px, #f1f5f9 ${SLOT_HEIGHT_PX - 1}px, #f1f5f9 ${SLOT_HEIGHT_PX}px)`,
+          </div>
+        </header>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1fr_minmax(280px,340px)] xl:items-start">
+          <div className="min-w-0 space-y-0">
+            <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm">
+              <div className="flex flex-col gap-3 border-b border-slate-100 bg-slate-50/80 px-3 py-3 sm:px-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    onClick={() => setWeekStart((w) => addDays(w, -7))}
+                  >
+                    ← Prev
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-900 hover:bg-indigo-100"
+                    onClick={() => setWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}
+                  >
+                    This week
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    onClick={() => setWeekStart((w) => addDays(w, 7))}
+                  >
+                    Next →
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+                  <span className="font-medium text-slate-800">
+                    {format(weekStart, 'MMM d')} – {format(addDays(weekStart, 6), 'MMM d, yyyy')}
+                  </span>
+                  <span className="rounded-full bg-teal-50 px-2.5 py-0.5 font-medium text-teal-800">{visibleWeekCount} events</span>
+                  <span className="hidden items-center gap-3 sm:inline-flex">
+                    <span className="inline-flex items-center gap-1.5 text-slate-600">
+                      <span className="h-2 w-2 rounded-sm bg-slate-300" aria-hidden />
+                      Uploaded
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 text-slate-600">
+                      <span className="h-2 w-2 rounded-sm bg-indigo-500" aria-hidden />
+                      AI plan
+                    </span>
+                  </span>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto p-3 sm:p-4">
+                <div className="min-w-[980px]">
+                  <div
+                    className="grid mb-2 rounded-lg border border-slate-200 bg-slate-50"
+                    style={{ gridTemplateColumns: '80px repeat(7, minmax(0,1fr))' }}
+                  >
+                    <div />
+                    {days.map((d) => (
+                      <div
+                        key={d.toISOString()}
+                        className={`px-2 py-2 text-center text-xs font-semibold ${
+                          isSameDay(d, today) ? 'bg-indigo-100 text-indigo-900' : 'text-slate-700'
+                        }`}
+                      >
+                        <span className="block text-[10px] font-medium uppercase tracking-wide text-slate-500">{format(d, 'EEE')}</span>
+                        <span className="text-sm tabular-nums">{format(d, 'd')}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid" style={{ gridTemplateColumns: '80px 1fr' }}>
+                    <div
+                      className="relative rounded-l-lg border-y border-l border-slate-200 bg-slate-50"
+                      style={{ height: `${SLOT_COUNT * SLOT_HEIGHT_PX}px` }}
+                    >
+                      {Array.from({ length: SLOT_COUNT + 1 }, (_, idx) => {
+                        const minutes = idx * SLOT_MINUTES;
+                        const hour = VIEW_DAY_START_HOUR + Math.floor(minutes / 60);
+                        const minute = minutes % 60;
+                        return (
+                          <div
+                            key={`tick-${idx}`}
+                            className="absolute left-0 right-0 pl-2 text-[11px] tabular-nums text-slate-400"
+                            style={{ top: `${idx * SLOT_HEIGHT_PX - 8}px` }}
+                          >
+                            {`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div
+                      ref={calendarBodyRef}
+                      className="grid rounded-r-lg border border-slate-200 overflow-hidden"
+                      style={{ gridTemplateColumns: 'repeat(7, minmax(0,1fr))' }}
+                    >
+                      {days.map((day, dayIdx) => (
+                        <div
+                          key={`day-col-${day.toISOString()}`}
+                          className={`relative border-l border-slate-100 first:border-l-0 ${
+                            isSameDay(day, today) ? 'bg-indigo-50/40' : 'bg-white'
+                          }`}
+                          style={{
+                            height: `${SLOT_COUNT * SLOT_HEIGHT_PX}px`,
+                            backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${SLOT_HEIGHT_PX - 1}px, #e2e8f0 ${SLOT_HEIGHT_PX - 1}px, #e2e8f0 ${SLOT_HEIGHT_PX}px)`,
+                          }}
+                        >
+                          {positionedEvents
+                            .filter((ev) => ev.dayIdx === dayIdx)
+                            .map((ev) => {
+                              const isSelected = selectedEventId === ev.id;
+                              const source = ev.source;
+                              return (
+                                <div
+                                  key={ev.id}
+                                  onMouseDown={(event) => {
+                                    if (source !== 'ai') return;
+                                    dragStateRef.current = {
+                                      eventId: ev.id,
+                                      mode: 'move',
+                                      x: event.clientX,
+                                      y: event.clientY,
+                                      start: ev.start,
+                                      end: ev.end,
+                                    };
+                                    setCalendarWarning(null);
+                                  }}
+                                  onClick={() => setSelectedEventId(ev.id)}
+                                  className={`absolute left-1 right-1 z-30 overflow-hidden rounded-md border px-2 py-1 text-left text-[11px] ${
+                                    source === 'uploaded'
+                                      ? 'border-slate-300 bg-slate-200/90 text-slate-800'
+                                      : isSelected
+                                        ? 'cursor-grab border-indigo-800 bg-indigo-700 text-white shadow-md'
+                                        : 'cursor-grab border-indigo-600 bg-indigo-500 text-white shadow-sm'
+                                  }`}
+                                  style={{ top: `${ev.topPct}%`, height: `${Math.max(4, ev.heightPct)}%` }}
+                                >
+                                  <div className="truncate font-semibold">{ev.title}</div>
+                                  <div className="opacity-90">
+                                    {ev.startLabel} – {ev.endLabel}
+                                  </div>
+                                  {source === 'ai' && (
+                                    <div
+                                      onMouseDown={(event) => {
+                                        event.stopPropagation();
+                                        dragStateRef.current = {
+                                          eventId: ev.id,
+                                          mode: 'resize',
+                                          x: event.clientX,
+                                          y: event.clientY,
+                                          start: ev.start,
+                                          end: ev.end,
+                                        };
+                                        setCalendarWarning(null);
+                                      }}
+                                      className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize bg-white/30"
+                                      title="Drag to resize duration"
+                                    />
+                                  )}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside className="min-w-0 space-y-3 xl:sticky xl:top-[5.5rem] xl:self-start">
+            <AgilityPreviewCard preview={preview} variant="sidebar" />
+
+            <section className="space-y-3 rounded-xl border border-slate-200/90 bg-white p-4 shadow-sm">
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-slate-500">Planner</p>
+              <div className="flex flex-wrap gap-2">
+                <CalendarUpload onUpload={onUploadIcs} uploadedCount={events.filter((x) => x.source === 'uploaded').length} />
+                <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                  {events.filter((x) => x.source === 'uploaded').length} uploaded
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-full bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
+                  onClick={runAutoSchedule}
+                >
+                  Create plan
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  onClick={exportAiIcs}
+                >
+                  Export .ics
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  onClick={() => {
+                    localStorage.removeItem(EVENTS_STORAGE_KEY);
+                    localStorage.removeItem(TASKS_STORAGE_KEY);
+                    setEvents([]);
+                    setTasks([]);
+                    setUnscheduled([]);
+                    setSelectedEventId(null);
+                    setAltSuggestion(null);
+                    setCalendarWarning(null);
                   }}
                 >
-                  {positionedEvents
-                    .filter((ev) => ev.dayIdx === dayIdx)
-                    .map((ev) => {
-                      const isSelected = selectedEventId === ev.id;
-                      const source = ev.source;
-                      return (
-                        <div
-                          key={ev.id}
-                          onMouseDown={(event) => {
-                            if (source !== 'ai') return;
-                            dragStateRef.current = {
-                              eventId: ev.id,
-                              mode: 'move',
-                              x: event.clientX,
-                              y: event.clientY,
-                              start: ev.start,
-                              end: ev.end,
-                            };
-                            setCalendarWarning(null);
-                          }}
-                          onClick={() => setSelectedEventId(ev.id)}
-                          className={`absolute left-1 right-1 text-left rounded-md px-2 py-1 text-[11px] overflow-hidden border z-30 ${
-                            source === 'uploaded'
-                              ? 'bg-gray-200/95 border-gray-300 text-gray-800'
-                              : isSelected
-                                ? 'bg-indigo-600 border-indigo-700 text-white cursor-grab'
-                                : 'bg-indigo-500/90 border-indigo-600 text-white cursor-grab'
-                          }`}
-                          style={{ top: `${ev.topPct}%`, height: `${Math.max(4, ev.heightPct)}%` }}
-                        >
-                          <div className="font-semibold truncate">{ev.title}</div>
-                          <div className="opacity-90">{ev.startLabel} - {ev.endLabel}</div>
-                          {source === 'ai' && (
-                            <div
-                              onMouseDown={(event) => {
-                                event.stopPropagation();
-                                dragStateRef.current = {
-                                  eventId: ev.id,
-                                  mode: 'resize',
-                                  x: event.clientX,
-                                  y: event.clientY,
-                                  start: ev.start,
-                                  end: ev.end,
-                                };
-                                setCalendarWarning(null);
-                              }}
-                              className="absolute bottom-0 left-0 right-0 h-2 bg-white/30 cursor-ns-resize"
-                              title="Drag to resize duration"
-                            />
-                          )}
-                        </div>
-                      );
-                    })}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
+                  Clear
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400">Google Calendar sync — coming soon</p>
 
-      {selectedEvent && (
-        <section className="max-w-[1400px] mx-auto rounded-[24px] border border-white/90 bg-white/75 p-5 shadow-[0_8px_40px_rgba(0,0,0,0.04)] backdrop-blur-md space-y-2">
-          <h3 className="text-sm font-semibold text-gray-900">Selected AI block</h3>
-          <p className="text-sm text-gray-700">{selectedEvent.title}</p>
-          <p className="text-xs text-gray-600">{selectedEvent.start} → {selectedEvent.end}</p>
-          <div className="flex gap-2">
-            <button className="text-xs px-3 py-2 rounded-full border border-gray-200" onClick={requestAltSlot}>
-              Suggest another time
-            </button>
-            {altSuggestion && (
-              <>
-                <button className="text-xs px-3 py-2 rounded-full bg-indigo-600 text-white" onClick={acceptAltSlot}>
-                  Accept {format(parseISO(altSuggestion.start), 'EEE HH:mm')}
-                </button>
-                <button className="text-xs px-3 py-2 rounded-full border border-gray-200" onClick={() => setAltSuggestion(null)}>
-                  Cancel
-                </button>
-              </>
+              {unscheduled.length > 0 && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                  <span className="font-medium">Unscheduled:</span> {unscheduled.map((x) => x.title).join(', ')}
+                </p>
+              )}
+              {uploadNotice && (
+                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{uploadNotice}</p>
+              )}
+              {visibleWeekCount === 0 && events.length > 0 && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                  No events this week — use prev/next week.
+                </p>
+              )}
+              {uploadedPreview.length > 0 && (
+                <div className="rounded-lg border border-slate-100 bg-slate-50/80 px-3 py-2">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Import preview</p>
+                  <ul className="space-y-0.5 text-[11px] text-slate-600">
+                    {uploadedPreview.map((line) => (
+                      <li key={line} className="truncate">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {calendarWarning && (
+                <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">{calendarWarning}</p>
+              )}
+            </section>
+
+            {selectedEvent && (
+              <section className="space-y-2 rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-4 shadow-sm">
+                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-indigo-700">Selected block</p>
+                <p className="text-sm font-medium text-slate-900">{selectedEvent.title}</p>
+                <p className="text-xs tabular-nums text-slate-600">
+                  {selectedEvent.start} → {selectedEvent.end}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    onClick={requestAltSlot}
+                  >
+                    Other time
+                  </button>
+                  {altSuggestion && (
+                    <>
+                      <button
+                        type="button"
+                        className="rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+                        onClick={acceptAltSlot}
+                      >
+                        Use {format(parseISO(altSuggestion.start), 'EEE HH:mm')}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        onClick={() => setAltSuggestion(null)}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  )}
+                </div>
+              </section>
             )}
-          </div>
-        </section>
-      )}
+          </aside>
+        </div>
+      </div>
     </div>
   );
 }

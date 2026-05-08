@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import re
+import threading
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -18,6 +21,75 @@ from foresight_x.schemas import MemoryFactCategory, ProfileMemoryFact
 from foresight_x.shadow.decision_context import build_shadow_decision_context_block
 from foresight_x.shadow.store import ShadowSelfState, load_shadow_self, merge_observation, save_shadow_self
 from foresight_x.structured_predict import structured_predict
+
+_log = logging.getLogger(__name__)
+
+_USER_PERSIST_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _persist_lock_for(user_id: str) -> threading.Lock:
+    if user_id not in _USER_PERSIST_LOCKS:
+        _USER_PERSIST_LOCKS[user_id] = threading.Lock()
+    return _USER_PERSIST_LOCKS[user_id]
+
+
+def _shadow_profile_persist_sync_enabled() -> bool:
+    """When true, write shadow notes + profile in the request thread (tests / debugging)."""
+    return os.getenv("SHADOW_PROFILE_PERSIST_SYNC", "").strip().lower() in ("1", "true", "yes")
+
+
+def _persist_shadow_memory_background(
+    settings: Settings,
+    records_payload: list[dict[str, Any]],
+    observation_combined: str,
+    last_user_text: str,
+    reply: str,
+) -> None:
+    """Load-merge-save shadow self + profile; record graph event. Serialized per user."""
+    user_id = (settings.foresight_user_id or "demo_user").strip() or "demo_user"
+    records = [ProfileMemoryFact.model_validate(r) for r in records_payload]
+    lock = _persist_lock_for(user_id)
+    try:
+        with lock:
+            state = load_shadow_self(settings=settings)
+            state = merge_observation(state, observation_combined)
+            save_shadow_self(state, settings=settings)
+            prof = load_user_profile(settings=settings)
+            prof = append_profile_memory_records(prof, records)
+            save_user_profile(prof, settings=settings)
+        if settings.graph_enabled:
+            try:
+                TemporalGraphMemory(user_id, settings=settings).record_shadow_event(last_user_text, reply)
+            except Exception:
+                _log.debug("TemporalGraphMemory.record_shadow_event failed", exc_info=True)
+    except Exception:
+        _log.exception("shadow memory async persist failed user_id=%s", user_id)
+
+
+def _schedule_shadow_memory_persist(
+    settings: Settings,
+    records: list[ProfileMemoryFact],
+    observation_combined: str,
+    last_user_text: str,
+    reply: str,
+) -> None:
+    payload = [r.model_dump(mode="json") for r in records]
+    kwargs: dict[str, Any] = {
+        "settings": settings,
+        "records_payload": payload,
+        "observation_combined": observation_combined,
+        "last_user_text": last_user_text,
+        "reply": reply,
+    }
+    if _shadow_profile_persist_sync_enabled():
+        _persist_shadow_memory_background(**kwargs)
+        return
+    threading.Thread(
+        target=_persist_shadow_memory_background,
+        kwargs=kwargs,
+        daemon=True,
+        name=f"shadow-persist-{settings.foresight_user_id}",
+    ).start()
 
 
 class ShadowMemoryFactDraft(BaseModel):
@@ -231,6 +303,9 @@ def run_shadow_turn(
     messages: list[dict[str, Any]],
     *,
     settings: Settings | None = None,
+    thread_id: str | None = None,
+    retrieval_mode: str = "chat_fast",
+    report_revision_decision_id: str | None = None,
 ) -> tuple[str, bool, ShadowSelfState, list[str] | None, list[str]]:
     """Return (assistant_reply, suggest_decision_navigation, updated_state, recorded_fact_texts_or_none, used_memory_facts)."""
     s = settings or load_settings()
@@ -262,6 +337,8 @@ def run_shadow_turn(
         settings=s,
         profile=prof,
         last_user_message=last_user_text,
+        thread_id=thread_id,
+        retrieval_mode=retrieval_mode,
     )
 
     llm_claims = build_openai_llm(s, temperature=0.12)
@@ -276,6 +353,14 @@ def run_shadow_turn(
         transcript=transcript,
         atomic_claims_block=atomic_claims_block,
     )
+    rid = (report_revision_decision_id or "").strip()
+    if rid:
+        prompt += (
+            "\n\n---\nContext: the user is revising an existing Foresight decision report "
+            f"(decision_id={rid}). They may ask for reframing, emphasis, or action tweaks. "
+            "Respond as shadow: help them articulate changes. You cannot re-score options here; "
+            "if they need a full regenerated report, they should use Generate Decision Report again.\n"
+        )
     turn = structured_predict(llm, ShadowChatTurn, prompt)
 
     reply = turn.reply_to_user.strip()
@@ -327,28 +412,42 @@ def run_shadow_turn(
     recorded: list[str] | None = None
     if records:
         combined = " · ".join(r.text for r in records)
-        state = merge_observation(state, combined)
-        save_shadow_self(state, settings=s)
-
-        prof = append_profile_memory_records(prof, records)
-        save_user_profile(prof, settings=s)
         recorded = [r.text for r in records]
+        # Grounding uses facts already on disk plus this turn's new facts (persist may still be in flight).
+        active_texts = [x.text for x in prof.memory_facts if x.status == "active"]
+        memory_fact_texts_for_grounding = active_texts + recorded
+        reply, used = _ground_reply_with_memory_preferences(
+            reply,
+            user_text=last_user_text,
+            memory_fact_texts=memory_fact_texts_for_grounding,
+        )
+        if used:
+            memory_used.extend(used)
+        # Optimistic in-memory state for callers; disk update runs in background (unless sync env).
+        state = merge_observation(state, combined)
+        _schedule_shadow_memory_persist(
+            s,
+            records,
+            combined,
+            last_user_text,
+            reply,
+        )
     else:
         state = state.model_copy(update={"turn_count": state.turn_count + 1})
         save_shadow_self(state, settings=s)
 
-    reply, used = _ground_reply_with_memory_preferences(
-        reply,
-        user_text=last_user_text,
-        memory_fact_texts=[x.text for x in prof.memory_facts if x.status == "active"],
-    )
-    if used:
-        memory_used.extend(used)
+        reply, used = _ground_reply_with_memory_preferences(
+            reply,
+            user_text=last_user_text,
+            memory_fact_texts=[x.text for x in prof.memory_facts if x.status == "active"],
+        )
+        if used:
+            memory_used.extend(used)
 
-    if s.graph_enabled:
-        try:
-            TemporalGraphMemory(s.foresight_user_id, settings=s).record_shadow_event(last_user_text, reply)
-        except Exception:
-            pass
+        if s.graph_enabled:
+            try:
+                TemporalGraphMemory(s.foresight_user_id, settings=s).record_shadow_event(last_user_text, reply)
+            except Exception:
+                pass
 
     return reply, flag, state, recorded, memory_used

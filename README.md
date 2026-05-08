@@ -25,6 +25,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
+For a repeatable local workflow, use `docs/REPRODUCIBILITY.md` (includes `make setup`, `make doctor`, and consistent run/test commands).
+
 **Environment:** `cp .env.example .env`, then set `OPENAI_API_KEY` and, for live web retrieval, `TAVILY_API_KEY`.  
 If `python` raises `KeyError: 'TAVILY_API_KEY'`, the variable is missing from `.env`.
 

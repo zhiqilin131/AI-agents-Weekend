@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from foresight_x.config import Settings, load_settings
+from foresight_x.chat.memory_cache import get_memory_cache, set_memory_cache, should_use_memory_cache
 from foresight_x.harness.trace import load_decision_trace
 from foresight_x.harness.trace_index import list_traces
 from foresight_x.profile.merge import merge_profile_into_user_state
@@ -101,11 +102,32 @@ def _format_indexed_memory_block(settings: Settings, user_state: UserState) -> s
     )
 
 
+def _format_indexed_memory_block_fast(settings: Settings, user_state: UserState) -> str:
+    try:
+        um = UserMemory(settings.foresight_user_id, settings=settings)
+        mb = um.retrieve_fast(user_state, top_k=3, fetch_k=12)
+    except Exception:
+        return ""
+    if not mb.similar_past_decisions:
+        return ""
+    lines: list[str] = []
+    for p in mb.similar_past_decisions[:3]:
+        summ = (p.situation_summary or "").strip()
+        if len(summ) > 500:
+            summ = summ[:499] + "…"
+        chosen = (p.chosen_option or "").strip()
+        ts = (p.timestamp or "")[:16]
+        lines.append(f"- [{ts}] {chosen}\n  {summ}")
+    return "Fast memory recall:\n" + "\n".join(lines)
+
+
 def build_shadow_decision_context_block(
     *,
     settings: Settings | None = None,
     profile: UserProfile,
     last_user_message: str,
+    thread_id: str | None = None,
+    retrieval_mode: str = "chat_fast",
 ) -> str:
     """Single block for the Shadow system prompt: traces on disk + optional Chroma matches."""
     s = settings or load_settings()
@@ -117,7 +139,33 @@ def build_shadow_decision_context_block(
 
     try:
         us = build_user_state_for_shadow_retrieval(last_user_message, profile)
-        mem_part = _format_indexed_memory_block(s, us)
+        source_version = str(profile.last_updated or "")
+        cache_key_thread = thread_id or "__shadow_default__"
+        cached = get_memory_cache(s.foresight_user_id, cache_key_thread)
+        if (
+            retrieval_mode == "chat_fast"
+            and should_use_memory_cache(
+                last_user_message,
+                None,
+                cached,
+                source_version=source_version,
+            )
+        ):
+            mem_part = cached.memory_block
+        else:
+            if retrieval_mode == "report_full":
+                mem_part = _format_indexed_memory_block(s, us)
+            else:
+                mem_part = _format_indexed_memory_block_fast(s, us)
+            if mem_part:
+                set_memory_cache(
+                    s.foresight_user_id,
+                    cache_key_thread,
+                    memory_block=mem_part,
+                    message=last_user_message,
+                    source_version=source_version,
+                    mode=retrieval_mode,
+                )
         if mem_part:
             parts.append(mem_part)
     except Exception:
