@@ -259,6 +259,7 @@ def root() -> dict[str, object]:
             "/api/outcomes/{decision_id}",
             "/api/shadow/chat",
             "/api/option-chat",
+            "/api/agility-preview",
             "/api/transcribe",
             "/api/personalization/ingest",
             "/api/memory-graph/external-event",
@@ -571,6 +572,27 @@ class OptionChatReply(BaseModel):
     )
 
 
+class AgilityPreviewStep(BaseModel):
+    title: str
+    duration_minutes: int = Field(ge=15, le=8 * 60)
+    deadline_hint: str | None = None
+
+
+class AgilityPreviewRequest(BaseModel):
+    decision_id: str = Field(min_length=1)
+    selected_option_id: str = Field(min_length=1)
+
+
+class AgilityPreviewResponse(BaseModel):
+    summary: str
+    likely_consequences: list[str]
+    workload_impact: str
+    schedule_constraints: list[str]
+    risk_windows: list[str]
+    first_steps: list[AgilityPreviewStep]
+    review_checkpoint: str
+
+
 class PersonalizationIngestRequest(BaseModel):
     text: str = Field(min_length=1)
 
@@ -688,6 +710,83 @@ def option_chat(body: OptionChatRequest) -> dict:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"option_chat_failed: {e!s}") from e
     return {"answer": ans, "decision_id": trace.decision_id, "option_id": option.option_id}
+
+
+@app.post("/api/agility-preview")
+def agility_preview(body: AgilityPreviewRequest) -> dict:
+    """Structured consequence-focused preview for execution planning (no probability language in schema)."""
+    settings = _settings_for_active_user()
+    try:
+        trace = load_decision_trace(body.decision_id.strip(), settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="trace_not_found") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail="trace_not_found")
+
+    selected = next((o for o in trace.options if o.option_id == body.selected_option_id.strip()), None)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="option_not_found")
+
+    next_actions = trace.recommendation.next_actions or []
+    risk_labels = trace.rationality.detected_biases or []
+
+    if not (settings.openai_api_key or "").strip():
+        fallback = AgilityPreviewResponse(
+            summary=(
+                f'If you choose "{selected.name}", early progress depends on protecting focused blocks around existing commitments.'
+            ),
+            likely_consequences=[
+                "Momentum grows when the first task is scheduled in the next 24 hours.",
+                "Execution quality drops when tasks are fragmented into many small gaps.",
+            ],
+            workload_impact="Moderate compression in the first week; reserve focused windows to prevent spillover.",
+            schedule_constraints=[
+                "Protect at least one uninterrupted focus block per day.",
+                "Leave a small buffer before hard deadlines.",
+            ],
+            risk_windows=[f"Watch for {x} under time pressure." for x in risk_labels[:2]]
+            or ["Mid-week drift risk if no review checkpoint is scheduled."],
+            first_steps=[
+                AgilityPreviewStep(
+                    title=(na.action or f"Execution step {i + 1}")[:140],
+                    duration_minutes=60,
+                    deadline_hint=na.deadline or None,
+                )
+                for i, na in enumerate(next_actions[:3])
+            ]
+            or [
+                AgilityPreviewStep(title="Define first executable step and reserve a calendar block", duration_minutes=60),
+                AgilityPreviewStep(title="Prepare required materials and dependencies", duration_minutes=45),
+                AgilityPreviewStep(title="Run first review checkpoint and adjust schedule", duration_minutes=30),
+            ],
+            review_checkpoint="Run a 20-minute review in 72 hours: what moved, what slipped, what to reschedule.",
+        )
+        return fallback.model_dump(mode="json")
+
+    llm = build_openai_llm(settings, temperature=0.45)
+    prompt = (
+        "You are an execution planning assistant.\n"
+        "Return a structured agility preview after the user selected one option.\n"
+        "Do NOT output numeric probability values or percentage language.\n"
+        "Use concise, natural-language consequence preview.\n\n"
+        f"Decision input:\n{trace.user_state.raw_input}\n\n"
+        f"Selected option:\n- id: {selected.option_id}\n- name: {selected.name}\n- description: {selected.description}\n"
+        f"- cost_of_reversal: {selected.cost_of_reversal}\n\n"
+        f"Recommendation reasoning:\n{trace.recommendation.reasoning}\n\n"
+        f"Detected risks:\n{risk_labels}\n\n"
+        f"Existing next_actions:\n{[x.model_dump(mode='json') for x in next_actions]}\n\n"
+        "Return JSON matching this schema:\n"
+        "{summary, likely_consequences[], workload_impact, schedule_constraints[], risk_windows[], "
+        "first_steps[{title,duration_minutes,deadline_hint}], review_checkpoint}"
+    )
+    try:
+        out = structured_predict(llm, AgilityPreviewResponse, prompt)
+        if isinstance(out, AgilityPreviewResponse):
+            return out.model_dump(mode="json")
+        return AgilityPreviewResponse.model_validate(out).model_dump(mode="json")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"agility_preview_failed: {e!s}") from e
 
 
 @app.post("/api/transcribe")

@@ -26,6 +26,7 @@ from foresight_x.retrieval.world_cache import WorldKnowledge
 from foresight_x.schemas import (
     DecisionTrace,
     EvidenceBundle,
+    GraphInfluenceBundle,
     MemoryBundle,
     Option,
     OptionEvaluation,
@@ -71,9 +72,15 @@ def retrieve_bundles(
     exclude_decision_id: str | None = None,
 ) -> tuple[MemoryBundle, EvidenceBundle]:
     settings = ctx.settings or load_settings()
-    memory = ctx.user_memory.retrieve(user_state) if ctx.user_memory else _empty_memory()
+    influence = _graph_influence_for_state(user_state, settings=settings)
+    graph_ids, graph_scores = _graph_retrieval_hints(influence)
+    memory = (
+        ctx.user_memory.retrieve(user_state, graph_decision_ids=graph_ids, graph_scores=graph_scores)
+        if ctx.user_memory
+        else _empty_memory()
+    )
     evidence = ctx.world.retrieve(user_state) if ctx.world else _empty_evidence()
-    memory = _augment_memory_with_graph(memory, user_state, settings=settings)
+    memory = _augment_memory_with_graph(memory, user_state, settings=settings, influence=influence)
     evidence = merge_user_context_into_evidence(
         evidence,
         settings,
@@ -92,9 +99,17 @@ def retrieve_bundles_parallel(
 ) -> tuple[MemoryBundle, EvidenceBundle]:
     """Run memory and world retrieval concurrently (embedding + vector search; thread pool)."""
 
+    settings = ctx.settings or load_settings()
+    influence = _graph_influence_for_state(user_state, settings=settings)
+    graph_ids, graph_scores = _graph_retrieval_hints(influence)
+
     def mem() -> MemoryBundle:
         if ctx.user_memory:
-            return ctx.user_memory.retrieve(user_state)
+            return ctx.user_memory.retrieve(
+                user_state,
+                graph_decision_ids=graph_ids,
+                graph_scores=graph_scores,
+            )
         return _empty_memory()
 
     def ev() -> EvidenceBundle:
@@ -102,12 +117,16 @@ def retrieve_bundles_parallel(
             return ctx.world.retrieve(user_state)
         return _empty_evidence()
 
-    settings = ctx.settings or load_settings()
     with ThreadPoolExecutor(max_workers=2) as pool:
         fut_m = pool.submit(mem)
         fut_e = pool.submit(ev)
         memory_bundle, evidence_bundle = fut_m.result(), fut_e.result()
-    memory_bundle = _augment_memory_with_graph(memory_bundle, user_state, settings=settings)
+    memory_bundle = _augment_memory_with_graph(
+        memory_bundle,
+        user_state,
+        settings=settings,
+        influence=influence,
+    )
     evidence_bundle = merge_user_context_into_evidence(
         evidence_bundle,
         settings,
@@ -123,13 +142,13 @@ def _augment_memory_with_graph(
     user_state: UserState,
     *,
     settings: Settings,
+    influence: GraphInfluenceBundle | None = None,
 ) -> MemoryBundle:
     """Attach graph influence signal while keeping vector retrieval as fallback baseline."""
     if not settings.graph_enabled:
         return memory_bundle
     try:
-        g = TemporalGraphMemory(settings.foresight_user_id, settings=settings)
-        influence = g.influence_for(user_state)
+        influence = influence or TemporalGraphMemory(settings.foresight_user_id, settings=settings).influence_for(user_state)
         if influence is None:
             return memory_bundle
         ranked = list(memory_bundle.similar_past_decisions)
@@ -152,6 +171,36 @@ def _augment_memory_with_graph(
     except Exception:
         # Hard fallback to existing retrieval path.
         return memory_bundle
+
+
+def _graph_influence_for_state(
+    user_state: UserState,
+    *,
+    settings: Settings,
+) -> GraphInfluenceBundle | None:
+    if not settings.graph_enabled:
+        return None
+    try:
+        return TemporalGraphMemory(settings.foresight_user_id, settings=settings).influence_for(user_state)
+    except Exception:
+        return None
+
+
+def _graph_retrieval_hints(influence: GraphInfluenceBundle | None) -> tuple[list[str], dict[str, float]]:
+    if influence is None:
+        return [], {}
+    ids = [str(x).strip() for x in influence.surfaced_decision_ids if str(x).strip()]
+    score_by_id: dict[str, float] = {}
+    for node in influence.top_nodes:
+        nid = (node.node_id or "").strip()
+        did = ""
+        if nid.startswith("event:decision:"):
+            did = nid.split("event:decision:", 1)[-1].strip()
+        if did:
+            score_by_id[did] = max(score_by_id.get(did, 0.0), float(node.score))
+    for did in ids:
+        score_by_id.setdefault(did, 0.0)
+    return ids, score_by_id
 
 
 def step_infer(

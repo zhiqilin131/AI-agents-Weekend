@@ -17,8 +17,10 @@ packaged-seed downranking. This pattern aligns with hybrid retrieval systems
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,6 +30,7 @@ from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from foresight_x.config import Settings, load_settings
+from foresight_x.retrieval.memory_evidence import expand_selected_memories_to_evidence
 from foresight_x.retrieval._embeddings import build_openai_embedding
 from foresight_x.retrieval.memory_query import build_memory_retrieval_query
 from foresight_x.retrieval.query_text import profile_snippet_for_retrieval
@@ -38,6 +41,21 @@ from foresight_x.schemas import (
     PastDecision,
     UserState,
 )
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass
+class MemoryCandidate:
+    decision_id: str | None
+    text: str
+    metadata: dict[str, Any]
+    similarity_score: float
+    fused_score: float
+    theme: str
+    timestamp: str | None
+    outcome_quality: float | None
+    source: str = "vector"
 
 
 def _sanitize_id(user_id: str) -> str:
@@ -157,6 +175,148 @@ def _decode_meta(md: dict[str, Any]) -> dict[str, Any]:
         except json.JSONDecodeError:
             out["behavioral_patterns"] = []
     return out
+
+
+def _candidate_theme(candidate: MemoryCandidate) -> str:
+    """Best-effort theme label from metadata with resilient fallbacks."""
+    md = candidate.metadata or {}
+    for key in ("decision_type", "decision_domain", "domain", "category"):
+        v = str(md.get(key, "") or "").strip().lower()
+        if v:
+            return v
+    for key in ("recurring_themes", "behavioral_patterns"):
+        raw = md.get(key)
+        if isinstance(raw, list) and raw:
+            first = str(raw[0]).strip().lower()
+            if first:
+                return first
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list) and parsed:
+                    first = str(parsed[0]).strip().lower()
+                    if first:
+                        return first
+            except json.JSONDecodeError:
+                pass
+    raw_bp = md.get("behavioral_patterns_json")
+    if isinstance(raw_bp, str) and raw_bp.strip():
+        try:
+            parsed = json.loads(raw_bp)
+            if isinstance(parsed, list) and parsed:
+                first = str(parsed[0]).strip().lower()
+                if first:
+                    return first
+        except json.JSONDecodeError:
+            pass
+    return "general"
+
+
+def _candidate_text_key(text: str) -> str:
+    return " ".join((text or "").strip().lower().split())[:4000]
+
+
+def _dedupe_candidates_by_decision_id(candidates: list[MemoryCandidate]) -> list[MemoryCandidate]:
+    """Keep one candidate per decision_id; fallback dedupe by normalized text."""
+    best_by_key: dict[str, MemoryCandidate] = {}
+    for cand in candidates:
+        did = (cand.decision_id or "").strip()
+        key = f"did:{did}" if did else f"text:{_candidate_text_key(cand.text)}"
+        prev = best_by_key.get(key)
+        if prev is None or cand.fused_score > prev.fused_score:
+            best_by_key[key] = cand
+    out = list(best_by_key.values())
+    out.sort(key=lambda x: x.fused_score, reverse=True)
+    return out
+
+
+def _group_candidates_by_theme(candidates: list[MemoryCandidate]) -> dict[str, list[MemoryCandidate]]:
+    grouped: dict[str, list[MemoryCandidate]] = {}
+    for cand in candidates:
+        th = cand.theme or "general"
+        grouped.setdefault(th, []).append(cand)
+    for th in grouped:
+        grouped[th].sort(key=lambda x: x.fused_score, reverse=True)
+    return grouped
+
+
+def _lexical_similarity(a: str, b: str) -> float:
+    aw = {w for w in re.findall(r"[a-zA-Z]{3,}", (a or "").lower())}
+    bw = {w for w in re.findall(r"[a-zA-Z]{3,}", (b or "").lower())}
+    if not aw or not bw:
+        return 0.0
+    return len(aw & bw) / len(aw | bw)
+
+
+def _select_diverse_memory_candidates(
+    candidates: list[MemoryCandidate],
+    top_k: int,
+    lambda_relevance: float = 0.72,
+    max_per_theme: int = 2,
+) -> list[MemoryCandidate]:
+    """Select relevant + diverse candidates with theme caps and text-similarity penalty."""
+    if top_k <= 0 or not candidates:
+        return []
+    try:
+        ordered = sorted(candidates, key=lambda x: x.fused_score, reverse=True)
+        selected: list[MemoryCandidate] = []
+        theme_counts: dict[str, int] = {}
+        pool = ordered[: min(len(ordered), max(top_k * 6, 18))]
+        while pool and len(selected) < top_k:
+            best_idx = -1
+            best_val = -1.0
+            for idx, cand in enumerate(pool):
+                th = cand.theme or "general"
+                if theme_counts.get(th, 0) >= max_per_theme:
+                    continue
+                rel = max(0.0, cand.fused_score)
+                redundancy = 0.0
+                if selected:
+                    redundancy = max(_lexical_similarity(cand.text, s.text) for s in selected)
+                mmr_val = lambda_relevance * rel - (1.0 - lambda_relevance) * redundancy
+                if mmr_val > best_val:
+                    best_val = mmr_val
+                    best_idx = idx
+            if best_idx < 0:
+                # Theme caps may be saturated; fill remaining by relevance.
+                for cand in pool:
+                    if len(selected) >= top_k:
+                        break
+                    selected.append(cand)
+                break
+            chosen = pool.pop(best_idx)
+            selected.append(chosen)
+            th = chosen.theme or "general"
+            theme_counts[th] = theme_counts.get(th, 0) + 1
+        return selected[:top_k]
+    except Exception:
+        return sorted(candidates, key=lambda x: x.fused_score, reverse=True)[:top_k]
+
+
+def summarize_memory_retrieval_quality(
+    selected: list[MemoryCandidate],
+    candidates: list[MemoryCandidate],
+) -> dict[str, Any]:
+    theme_set = sorted({(x.theme or "general") for x in selected})
+    uniq_ids = {(x.decision_id or "").strip() for x in selected if (x.decision_id or "").strip()}
+    if len(selected) <= 1:
+        redundancy = 0.0
+    else:
+        sims: list[float] = []
+        for i, lhs in enumerate(selected):
+            for rhs in selected[i + 1 :]:
+                sims.append(_lexical_similarity(lhs.text, rhs.text))
+        redundancy = sum(sims) / len(sims) if sims else 0.0
+    avg_fuse = (sum(x.fused_score for x in selected) / len(selected)) if selected else 0.0
+    return {
+        "candidate_count": len(candidates),
+        "selected_count": len(selected),
+        "unique_decision_ids": len(uniq_ids),
+        "theme_count": len(theme_set),
+        "selected_themes": theme_set,
+        "redundancy_rate": round(redundancy, 4),
+        "avg_fused_score": round(avg_fuse, 6),
+    }
 
 
 class UserMemory:
@@ -295,14 +455,22 @@ class UserMemory:
         )
         return out
 
-    def retrieve(self, user_state: UserState, top_k: int = 5) -> MemoryBundle:
+    def retrieve(
+        self,
+        user_state: UserState,
+        top_k: int = 5,
+        graph_decision_ids: list[str] | None = None,
+        graph_scores: dict[str, float] | None = None,
+    ) -> MemoryBundle:
         extra = profile_snippet_for_retrieval(user_state)
         query = build_memory_retrieval_query(user_state)
         fetch_k = min(48, max(top_k * 6, top_k + 12))
         retriever = self._index.as_retriever(similarity_top_k=fetch_k)
         raw_nodes = retriever.retrieve(query)
 
-        combined: list[tuple[float, Any]] = []
+        graph_id_set = {str(x).strip() for x in (graph_decision_ids or []) if str(x).strip()}
+        graph_boosts = {str(k).strip(): float(v) for k, v in (graph_scores or {}).items() if str(k).strip()}
+        candidates: list[MemoryCandidate] = []
         for rank, node in enumerate(raw_nodes):
             md_raw: dict[str, Any] = {}
             inner = getattr(node, "node", None)
@@ -323,19 +491,67 @@ class UserMemory:
             pov = _priority_word_overlap(extra, doc_bits)
             seed_m = _packaged_seed_memory_multiplier(user_state, md0)
             domain_m = _domain_match_multiplier(user_state, md0)
+            did = str(md0.get("decision_id", "") or "").strip()
+            graph_m = 1.0
+            if did and did in graph_id_set:
+                graph_m *= 1.08
+            if did and did in graph_boosts:
+                graph_m *= 1.0 + max(0.0, min(1.0, graph_boosts[did])) * 0.4
             # Relevance × time decay × (1 + priority alignment) × seed-topic × domain match
-            fuse = sim * (0.42 + 0.58 * rec) * (1.0 + 0.38 * pov) * seed_m * domain_m
-            combined.append((fuse, node))
+            fuse = sim * (0.42 + 0.58 * rec) * (1.0 + 0.38 * pov) * seed_m * domain_m * graph_m
+            cand = MemoryCandidate(
+                decision_id=did or None,
+                text=_node_document_text(node),
+                metadata=md0,
+                similarity_score=sim,
+                fused_score=fuse,
+                theme="general",
+                timestamp=str(md0.get("timestamp", "") or "") or None,
+                outcome_quality=(
+                    None
+                    if (isinstance(md0.get("outcome_quality"), (int, float)) and int(md0.get("outcome_quality")) == -1)
+                    else float(md0.get("outcome_quality"))
+                    if isinstance(md0.get("outcome_quality"), (int, float))
+                    else None
+                ),
+            )
+            cand.theme = _candidate_theme(cand)
+            candidates.append(cand)
 
-        combined.sort(key=lambda x: x[0], reverse=True)
-        nodes = [n for _, n in combined[:top_k]]
+        deduped = _dedupe_candidates_by_decision_id(candidates)
+        selected = _select_diverse_memory_candidates(deduped, top_k=top_k)
+        selected_nodes: list[Any] = []
+        matched_keys: set[str] = set()
+        for node in raw_nodes:
+            md_raw: dict[str, Any] = {}
+            inner = getattr(node, "node", None)
+            if inner is not None and getattr(inner, "metadata", None) is not None:
+                md_raw = dict(inner.metadata)
+            md0 = _decode_meta(md_raw)
+            did = str(md0.get("decision_id", "") or "").strip() or None
+            text = _node_document_text(node)
+            for cand in selected:
+                if cand.decision_id and did and cand.decision_id == did:
+                    key = f"did:{cand.decision_id}"
+                    if key in matched_keys:
+                        break
+                    matched_keys.add(key)
+                    selected_nodes.append(node)
+                    break
+                if not cand.decision_id and _candidate_text_key(cand.text) == _candidate_text_key(text):
+                    key = f"text:{_candidate_text_key(cand.text)}"
+                    if key in matched_keys:
+                        break
+                    matched_keys.add(key)
+                    selected_nodes.append(node)
+                    break
 
         pasts: list[PastDecision] = []
         patterns_acc: list[str] = []
         outcome_snippets: list[str] = []
         seen_pat: set[str] = set()
 
-        for node in nodes:
+        for node in selected_nodes:
             md_raw = {}
             inner = getattr(node, "node", None)
             if inner is not None and getattr(inner, "metadata", None) is not None:
@@ -381,8 +597,19 @@ class UserMemory:
             if outcome_snippets
             else "No strong outcome signal in top retrieved memories."
         )
+        selected_themes = [c.theme for c in selected[:8] if c.theme]
+        if selected_themes:
+            patterns_acc.append("Retrieval themes: " + ", ".join(dict.fromkeys(selected_themes)))
+        quality = summarize_memory_retrieval_quality(selected, candidates)
+        _log.debug("memory.retrieve quality=%s", quality)
+        _log.debug(
+            "memory.retrieve selected_decision_ids=%s",
+            [c.decision_id for c in selected if c.decision_id],
+        )
+        evidence_rows = expand_selected_memories_to_evidence(selected, self.settings.traces_dir)
         return MemoryBundle(
             similar_past_decisions=pasts,
             behavioral_patterns=patterns_acc,
             prior_outcomes_summary=summary[:2000],
+            memory_evidence=evidence_rows,
         )

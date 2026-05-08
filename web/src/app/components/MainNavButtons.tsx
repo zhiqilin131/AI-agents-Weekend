@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router';
-import { History, MessageCircleHeart, Sparkles, UserCircle } from 'lucide-react';
+import { CalendarDays, History, MessageCircleHeart, Sparkles, UserCircle } from 'lucide-react';
 import { PersonaSwitcher } from './PersonaSwitcher';
 
 const btnClass =
@@ -25,6 +25,10 @@ export function MainNavButtons() {
         <button type="button" onClick={() => navigate('/history')} className={btnClass} style={{ fontWeight: 600 }}>
           <History className="w-4 h-4 text-purple-600 shrink-0" aria-hidden />
           History
+        </button>
+        <button type="button" onClick={() => navigate('/execution')} className={btnClass} style={{ fontWeight: 600 }}>
+          <CalendarDays className="w-4 h-4 text-purple-600 shrink-0" aria-hidden />
+          Execution Calendar
         </button>
         <button type="button" onClick={() => navigate('/profile')} className={btnClass} style={{ fontWeight: 600 }}>
           <UserCircle className="w-4 h-4 text-purple-600 shrink-0" aria-hidden />

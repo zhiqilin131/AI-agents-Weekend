@@ -1,4 +1,5 @@
 import { useMemo, useState, type ComponentType } from 'react';
+import { useNavigate } from 'react-router';
 import {
   AlertTriangle,
   Brain,
@@ -75,6 +76,16 @@ interface TraceMemoryBlock {
   }>;
   prior_outcomes_summary?: string;
   graph_influence?: TraceGraphInfluence;
+  memory_evidence?: Array<{
+    decision_id?: string;
+    theme?: string;
+    memory_summary?: string;
+    source_excerpt?: string;
+    outcome?: string;
+    outcome_quality?: number | null;
+    timestamp?: string;
+    source_path?: string;
+  }>;
 }
 
 interface TraceGraphInfluenceNode {
@@ -119,6 +130,7 @@ interface ReportCompactProps {
 type CoachMessage = { role: 'user' | 'assistant'; content: string };
 
 export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: ReportCompactProps) {
+  const navigate = useNavigate();
   const futures = (fullTrace?.futures as TraceFuture[]) ?? [];
   const evidence = fullTrace?.evidence as TraceEvidence | undefined;
   const memoryTrace = fullTrace?.memory as TraceMemoryBlock | undefined;
@@ -221,6 +233,17 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming }: 
               </li>
             ))}
           </ul>
+        )}
+        {!!decisionId && (
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => navigate(`/execution/${encodeURIComponent(decisionId)}`)}
+              className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded-full border border-indigo-200 bg-indigo-600 text-white hover:bg-indigo-700"
+            >
+              Create execution calendar
+            </button>
+          </div>
         )}
       </section>
 
@@ -606,6 +629,7 @@ function EvidenceBlock({
   const facts = evidence?.facts ?? [];
   const rates = evidence?.base_rates ?? [];
   const recent = evidence?.recent_events ?? [];
+  const memoryEvidence = memoryTrace?.memory_evidence ?? [];
   const liveReferenceCount = rates.filter((r) => (r.text || '').toLowerCase().startsWith('live reference')).length;
   const sourceHosts = (() => {
     const hosts = new Set<string>();
@@ -697,6 +721,53 @@ function EvidenceBlock({
                     <span style={{ fontWeight: 600 }}>Chose: </span>
                     {d.chosen_option}
                   </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {memoryEvidence.length > 0 && (
+        <div>
+          <p className="text-xs text-gray-500 mb-1 flex items-center gap-1" style={{ fontWeight: 600 }}>
+            <ListChecks className="w-3.5 h-3.5" aria-hidden />
+            Source-grounded memory evidence
+          </p>
+          <ul className="space-y-2">
+            {memoryEvidence.slice(0, 6).map((row, i) => (
+              <li
+                key={`${row.decision_id ?? 'mem'}-${i}`}
+                className="text-xs text-gray-800 rounded-lg border border-gray-200/80 bg-white/80 px-2.5 py-2 leading-relaxed"
+              >
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className="text-[10px] text-gray-500 font-mono">{row.decision_id ?? '—'}</span>
+                  {row.theme && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-900">
+                      {row.theme}
+                    </span>
+                  )}
+                  {typeof row.outcome_quality === 'number' && (
+                    <span className="text-[10px] text-gray-500">q={row.outcome_quality}/5</span>
+                  )}
+                </div>
+                {(row.memory_summary || '').trim().length > 0 && (
+                  <p className="text-gray-800">
+                    <span style={{ fontWeight: 600 }}>Memory: </span>
+                    {row.memory_summary}
+                  </p>
+                )}
+                {(row.source_excerpt || '').trim().length > 0 && (
+                  <p className="mt-1 text-gray-700">
+                    <span style={{ fontWeight: 600 }}>Source: </span>
+                    {row.source_excerpt}
+                  </p>
+                )}
+                {(row.outcome || '').trim().length > 0 && (
+                  <p className="mt-1 text-gray-700">
+                    <span style={{ fontWeight: 600 }}>Outcome: </span>
+                    {row.outcome}
+                  </p>
                 )}
               </li>
             ))}

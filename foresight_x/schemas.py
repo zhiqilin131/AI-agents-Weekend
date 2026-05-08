@@ -319,11 +319,25 @@ class GraphInfluenceBundle(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class MemoryEvidence(BaseModel):
+    """Compact source-grounded evidence for selected memory items."""
+
+    decision_id: str = ""
+    theme: str = "general"
+    memory_summary: str = ""
+    source_excerpt: str = ""
+    outcome: str = ""
+    outcome_quality: int | None = None
+    timestamp: str = ""
+    source_path: str = ""
+
+
 class MemoryBundle(BaseModel):
     similar_past_decisions: list[PastDecision]
     behavioral_patterns: list[str]
     prior_outcomes_summary: str
     graph_influence: GraphInfluenceBundle | None = None
+    memory_evidence: list[MemoryEvidence] = Field(default_factory=list)
 
 
 class Fact(BaseModel):
