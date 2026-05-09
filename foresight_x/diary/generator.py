@@ -41,7 +41,31 @@ def _fallback_entry(user_id: str, bundle: DiarySourceBundle) -> DiaryEntry:
         f"{c.memory_refs} memory references",
         f"{c.imported_items} imported/ephemeral notes",
     ]
-    summary = "Activity today included: " + ", ".join(lines) + "."
+    preview_bits: list[str] = []
+    for m in bundle.chat_messages[:4]:
+        t = (m.preview or "").strip()
+        if len(t) > 18:
+            preview_bits.append(t[:280])
+    for v in bundle.voice_turns[:3]:
+        t = (v.preview or "").strip()
+        if len(t) > 18:
+            preview_bits.append(t[:280])
+    for mem in bundle.approved_memories[:3]:
+        t = (mem.text_preview or "").strip()
+        if len(t) > 18:
+            preview_bits.append(t[:220])
+    if preview_bits:
+        body = (
+            "Here's what showed up in my logs today. "
+            + " ".join(preview_bits[:6])
+            + "\n\n"
+            + "Volume-wise I also had "
+            + ", ".join(lines)
+            + "."
+        )
+        summary = body
+    else:
+        summary = "Today left traces across my activity: " + ", ".join(lines) + "."
     return DiaryEntry(
         id=new_entry_id(),
         user_id=user_id,
@@ -70,16 +94,17 @@ def _build_llm_prompt(bundle: DiarySourceBundle) -> str:
         "date": bundle.date,
         "timezone": bundle.timezone,
         "counts": bundle.counts().model_dump(),
-        "chat_previews": [m.preview for m in bundle.chat_messages[:24]],
-        "voice_previews": [v.preview for v in bundle.voice_turns[:16]],
-        "decisions": [d.preview for d in bundle.decision_reports[:12]],
-        "calendar": [f"{c.kind}:{c.title}" for c in bundle.calendar_items[:16]],
-        "memory_previews": [m.text_preview for m in bundle.approved_memories[:16]],
-        "imported_previews": [i.preview for i in bundle.imported_context[:12]],
+        "chat_previews": [m.preview for m in bundle.chat_messages[:48]],
+        "voice_previews": [v.preview for v in bundle.voice_turns[:28]],
+        "decisions": [d.preview for d in bundle.decision_reports[:14]],
+        "calendar": [f"{c.kind}:{c.title}" for c in bundle.calendar_items[:20]],
+        "memory_previews": [m.text_preview for m in bundle.approved_memories[:28]],
+        "imported_previews": [i.preview for i in bundle.imported_context[:16]],
     }
     return (
         f"{DIARY_ARTIFACT_RULES}\n"
-        "tone must be one of: reflective, focused, uncertain, excited, stressed, neutral, mixed.\n\n"
+        "tone must be one of: reflective, focused, uncertain, excited, stressed, neutral, mixed.\n"
+        "Respond with JSON matching DiaryLLMPlan: title, summary (diary prose only), highlights=[], themes, tone, action_items.\n\n"
         f"DATA_JSON:\n{json.dumps(payload, ensure_ascii=False)}\n"
     )
 
@@ -116,7 +141,7 @@ def _plan_to_entry(user_id: str, bundle: DiarySourceBundle, plan: DiaryLLMPlan) 
         update={
             "title": (plan.title or base.title)[:200],
             "summary": plan.summary or base.summary,
-            "highlights": [str(x).strip() for x in plan.highlights if str(x).strip()][:12],
+            "highlights": [],
             "themes": [str(x).strip() for x in plan.themes if str(x).strip()][:10],
             "tone": _normalize_tone(plan.tone),
             "action_items": actions,

@@ -122,7 +122,7 @@ def _collect_chat_and_voice(
             role = str(msg.get("role") or "")
             content = str(msg.get("content") or "")
             voice = _is_voice_message(thread, msg)
-            preview = _preview_text(content)
+            preview = _preview_text(content, 360)
             if mid:
                 message_ids.append(mid)
             thread_hit = True
@@ -178,7 +178,7 @@ def _collect_temporary_imports(
                     ImportedContextRef(
                         kind="temporary_context",
                         id=iid,
-                        preview=_preview_text(text, 160),
+                        preview=_preview_text(text, 280),
                         thread_id=tid or None,
                     )
                 )
@@ -314,7 +314,7 @@ def _memory_facts_for_target_day(
 
         if include and fid not in seen:
             seen.add(fid)
-            refs.append(MemoryFactRef(memory_id=fid, text_preview=_preview_text(text, 180), source=src))
+            refs.append(MemoryFactRef(memory_id=fid, text_preview=_preview_text(text, 320), source=src))
             matched_count += 1
 
     return refs, matched_count
