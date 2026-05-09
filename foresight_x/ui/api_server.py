@@ -21,7 +21,7 @@ from concurrent.futures import TimeoutError as FuturesTimeout
 import time
 
 import chromadb
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -99,6 +99,8 @@ from foresight_x.chat import (
     save_thread,
 )
 from foresight_x.chat.thread_store import append_clarification_event
+from foresight_x.auth import get_current_user
+from foresight_x.db.supabase_client import get_supabase_for_user
 from foresight_x.decision_algorithms import (
     build_agility_preview,
     build_influence_graph_from_trace,
@@ -337,9 +339,13 @@ async def _app_lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Foresight-X API", version="0.1.0", lifespan=_app_lifespan)
+_cors_settings = load_settings()
+_exact_origins = _cors_settings.cors_origins_list or ["http://localhost:5173", "http://127.0.0.1:5173"]
+_preview_regex = _cors_settings.cors_preview_regex or None
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_exact_origins,
+    allow_origin_regex=_preview_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -432,6 +438,19 @@ class RunResponse(BaseModel):
     trace_path: str
 
 
+class ThreadCreateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    mode: Literal["shadow", "buddy", "reflect"] = "shadow"
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _normalize_title(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     from foresight_x import __version__
@@ -450,6 +469,8 @@ def root() -> dict[str, object]:
         "status": "ok",
         "routes": [
             "/api/health",
+            "/api/me",
+            "/api/threads",
             "/api/personas",
             "/api/personas/switch",
             "/api/run",
@@ -502,6 +523,62 @@ def root() -> dict[str, object]:
 @app.get("/health")
 def health_alias() -> dict[str, str]:
     return health()
+
+
+@app.get("/api/me")
+def api_me(user: dict[str, str | None] = Depends(get_current_user)) -> dict[str, str | None]:
+    return {"id": user.get("id"), "email": user.get("email")}
+
+
+@app.get("/api/threads")
+def list_user_threads(user: dict[str, str | None] = Depends(get_current_user)) -> dict[str, list[dict[str, Any]]]:
+    token = str(user.get("jwt") or "")
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    try:
+        client = get_supabase_for_user(token)
+        resp = (
+            client.table("threads")
+            .select("id,title,mode,created_at")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        rows = resp.data if isinstance(resp.data, list) else []
+        return {"threads": rows}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"threads_list_failed: {exc}") from exc
+
+
+@app.post("/api/threads")
+def create_user_thread(
+    body: ThreadCreateRequest,
+    user: dict[str, str | None] = Depends(get_current_user),
+) -> dict[str, Any]:
+    token = str(user.get("jwt") or "")
+    user_id = str(user.get("id") or "")
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Token missing sub")
+    try:
+        client = get_supabase_for_user(token)
+        payload = {
+            "user_id": user_id,
+            "title": body.title,
+            "mode": body.mode,
+        }
+        resp = client.table("threads").insert(payload).select("id,title,mode,created_at").execute()
+        if isinstance(resp.data, list) and resp.data:
+            return {"thread": resp.data[0]}
+        if isinstance(resp.data, dict):
+            return {"thread": resp.data}
+        raise HTTPException(status_code=502, detail="threads_create_failed: invalid response")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"threads_create_failed: {exc}") from exc
 
 
 @app.post("/api/memory-graph/external-event")
