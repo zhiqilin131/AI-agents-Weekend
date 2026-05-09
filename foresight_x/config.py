@@ -51,6 +51,21 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("openai_embedding_model", "OPENAI_EMBEDDING_MODEL"),
     )
     openai_api_base: str | None = Field(default=None, validation_alias=AliasChoices("openai_api_base", "OPENAI_API_BASE"))
+    supabase_url: str = Field(default="", validation_alias=AliasChoices("supabase_url", "SUPABASE_URL"))
+    supabase_service_role_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("supabase_service_role_key", "SUPABASE_SERVICE_ROLE_KEY"),
+    )
+    supabase_anon_key: str = Field(default="", validation_alias=AliasChoices("supabase_anon_key", "SUPABASE_ANON_KEY"))
+    redis_url: str = Field(default="", validation_alias=AliasChoices("redis_url", "REDIS_URL"))
+    allowed_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173",
+        validation_alias=AliasChoices("allowed_origins", "ALLOWED_ORIGINS"),
+    )
+    cors_preview_regex: str = Field(
+        default="",
+        validation_alias=AliasChoices("cors_preview_regex", "CORS_PREVIEW_REGEX"),
+    )
     #: Auto-refresh Tier 3 profile every N newly accumulated decisions (0 disables auto-refresh).
     tier3_auto_update_every: int = Field(default=5, ge=0, validation_alias=AliasChoices("tier3_auto_update_every", "TIER3_AUTO_UPDATE_EVERY"))
     #: Require at least this many decisions before Tier 3 auto-refresh can run.
@@ -117,6 +132,10 @@ class Settings(BaseSettings):
     @property
     def graph_dir(self) -> Path:
         return self.foresight_data_dir / "graph"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [x.strip() for x in self.allowed_origins.split(",") if x.strip()]
 
 
 def load_settings() -> Settings:

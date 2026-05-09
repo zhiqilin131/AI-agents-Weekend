@@ -1,5 +1,5 @@
 {
-  "current_user_id": "Bob",
+  "current_user_id": "bo",
   "users": [
     {
       "user_id": "demo_user",
@@ -16,6 +16,10 @@
     {
       "user_id": "Bob",
       "created_at": "2026-04-20T20:19:34Z"
+    },
+    {
+      "user_id": "bo",
+      "created_at": "2026-05-09T01:17:34Z"
     }
   ]
 }
