@@ -63,7 +63,7 @@ ROUTE_TO_PATH: dict[str, str] = {
     "shadow_chat": "/chat",
     "execution_calendar": "/execution",
     "history": "/history",
-    "settings": "/personalize",
+    "settings": "/profile",
 }
 
 

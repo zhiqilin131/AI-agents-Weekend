@@ -1,6 +1,6 @@
 import type { ComponentType, SVGProps } from 'react';
 import { useNavigate } from 'react-router';
-import { CalendarDays, Ghost, History, MessagesSquare, Sparkles } from 'lucide-react';
+import { BookOpen, CalendarDays, Ghost, History, MessagesSquare } from 'lucide-react';
 import { SlimeAdvisor } from './report/SlimeAdvisor';
 import { PersonaSwitcher } from './PersonaSwitcher';
 import { cn } from './ui/utils';
@@ -106,13 +106,13 @@ export function MainNavButtons({
               <NavIconSlot Icon={MessagesSquare} compact={compact} colorClass="text-indigo-600" />
               Chat
             </button>
-            <button type="button" onClick={() => navigate('/personalize')} className={btnClass} style={btnStyle}>
-              <NavIconSlot Icon={Sparkles} compact={compact} colorClass="text-violet-600" />
-              Personalize
-            </button>
             <button type="button" onClick={() => navigate('/history')} className={btnClass} style={btnStyle}>
               <NavIconSlot Icon={History} compact={compact} colorClass="text-purple-600" />
               History
+            </button>
+            <button type="button" onClick={() => navigate('/diary')} className={btnClass} style={btnStyle}>
+              <NavIconSlot Icon={BookOpen} compact={compact} colorClass="text-emerald-600" />
+              Diary
             </button>
             <button type="button" onClick={() => navigate('/execution')} className={btnClass} style={btnStyle}>
               <NavIconSlot Icon={CalendarDays} compact={compact} colorClass="text-purple-600" />

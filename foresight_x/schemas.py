@@ -70,6 +70,7 @@ class ProfileMemoryFact(BaseModel):
     text: str = Field(min_length=1, description="Human-readable line for UI and prompts (always set).")
     source: MemoryFactSource = "shadow"
     created_at: str = Field(default="", description="ISO-8601 UTC when known.")
+    updated_at: str = Field(default="", description="ISO-8601 UTC when fact text/metadata last changed.")
     # Typed layer (optional; empty predicate => legacy category+text only)
     subject_ref: str = Field(
         default="user",

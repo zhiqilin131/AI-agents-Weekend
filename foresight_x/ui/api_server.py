@@ -54,14 +54,20 @@ from foresight_x.perception.personalized_clarify import (
     run_personalized_clarify_gate,
 )
 from foresight_x.profile.merge import (
+    append_profile_memory_records,
     delete_memory_fact_by_id,
     delete_priority_line_by_id,
 )
 from foresight_x.profile.store import load_user_profile, save_user_profile
+from foresight_x.diary.generator import attach_links, generate_diary_entry
+from foresight_x.diary.source_adapter import bundle_has_activity, collect_diary_sources_for_date
+from foresight_x.diary.store import load_entry, load_entry_by_id, list_month_summaries, save_entry, stamp_times
 from foresight_x.schemas import (
     DecisionCommit,
     DecisionOutcome,
+    MemoryFactCategory,
     ProfileLine,
+    ProfileMemoryFact,
     SlimeAccessory,
     SlimeColorTheme,
     SlimeCustomColors,
@@ -516,6 +522,11 @@ def root() -> dict[str, object]:
             "/api/transcribe",
             "/api/personalization/ingest",
             "/api/memory-graph/external-event",
+            "/api/diary/entries",
+            "/api/diary/entries/{date}",
+            "/api/diary/generate",
+            "/api/diary/sources/{date}",
+            "/api/diary/entries/{entry_id}/save-insight",
         ],
     }
 
@@ -3072,6 +3083,151 @@ def remove_trace(decision_id: str) -> dict:
         "outcome_deleted": outcome_deleted,
         "commit_deleted": commit_deleted,
     }
+
+
+_RE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_RE_MONTH = re.compile(r"^\d{4}-\d{2}$")
+
+
+class DiaryGenerateBody(BaseModel):
+    date: str = Field(min_length=10, max_length=10)
+    force: bool = False
+    timezone: str = Field(default="UTC", max_length=80)
+
+
+class DiarySaveInsightBody(BaseModel):
+    insight_text: str = Field(min_length=1, max_length=500)
+    confirmed: bool = False
+
+
+@app.get("/api/diary/entries")
+def diary_entries_month(month: str, timezone: str = "UTC") -> dict:
+    """Summaries for each day in ``month`` (YYYY-MM) for timeline nodes."""
+    if not _RE_MONTH.match((month or "").strip()):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    try:
+        rows = list_month_summaries(settings, uid, month.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "month": month.strip(),
+        "timezone": (timezone or "UTC").strip() or "UTC",
+        "days": [r.model_dump(mode="json") for r in rows],
+    }
+
+
+@app.get("/api/diary/entries/{date}")
+def diary_entry_by_date(date: str) -> dict:
+    if not _RE_DATE.match((date or "").strip()):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    entry = load_entry(settings, uid, date.strip())
+    if entry is None:
+        raise HTTPException(status_code=404, detail="diary_not_found")
+    return entry.model_dump(mode="json")
+
+
+@app.get("/api/diary/sources/{date}")
+def diary_sources(date: str, timezone: str = "UTC") -> dict:
+    if not _RE_DATE.match((date or "").strip()):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    tz = (timezone or "UTC").strip() or "UTC"
+    bundle = collect_diary_sources_for_date(uid, date.strip(), tz, settings=settings)
+    refs = bundle.source_refs
+    return {
+        "date": bundle.date,
+        "timezone": tz,
+        "source_counts": bundle.counts().model_dump(),
+        "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
+        "thread_refs": [{"thread_id": tid} for tid in refs.thread_ids],
+        "message_refs": [{"message_id": mid} for mid in refs.message_ids[:200]],
+        "decision_refs": [{"decision_id": d} for d in refs.decision_ids],
+        "calendar_event_refs": [{"event_id": e} for e in refs.calendar_event_ids],
+        "calendar_draft_refs": [{"draft_id": d} for d in refs.calendar_draft_ids],
+        "memory_refs": [{"memory_id": m} for m in refs.memory_ids],
+        "import_refs": [{"import_id": i} for i in refs.import_ids],
+    }
+
+
+@app.post("/api/diary/generate")
+def diary_generate(body: DiaryGenerateBody) -> dict:
+    if not _RE_DATE.match((body.date or "").strip()):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    tz = (body.timezone or "UTC").strip() or "UTC"
+    bundle = collect_diary_sources_for_date(uid, body.date.strip(), tz, settings=settings)
+
+    if not bundle_has_activity(bundle) and not body.force:
+        return {
+            "ok": True,
+            "empty": True,
+            "message": "no_meaningful_activity",
+            "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
+        }
+
+    existing = load_entry(settings, uid, body.date.strip())
+    if existing is not None and not body.force:
+        return {"ok": True, "cached": True, "entry": existing.model_dump(mode="json")}
+
+    entry = generate_diary_entry(uid, bundle, settings=settings)
+    if entry is None:
+        return {
+            "ok": True,
+            "empty": True,
+            "message": "no_meaningful_activity",
+            "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
+        }
+
+    created_new = existing is None
+    if existing is not None:
+        entry = entry.model_copy(
+            update={
+                "id": existing.id,
+                "created_at": existing.created_at,
+                "user_edited": existing.user_edited,
+                "memory_status": existing.memory_status,
+            }
+        )
+    entry = attach_links(entry, bundle)
+    save_entry(settings, uid, stamp_times(entry, created=created_new))
+    loaded = load_entry(settings, uid, body.date.strip())
+    return {"ok": True, "empty": False, "entry": (loaded or entry).model_dump(mode="json")}
+
+
+@app.post("/api/diary/entries/{entry_id}/save-insight")
+def diary_save_insight(entry_id: str, body: DiarySaveInsightBody) -> dict:
+    if not body.confirmed:
+        raise HTTPException(status_code=400, detail="confirmation_required")
+    insight = body.insight_text.strip()
+    if not insight:
+        raise HTTPException(status_code=400, detail="empty_insight")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    entry = load_entry_by_id(settings, uid, entry_id.strip())
+    if entry is None:
+        raise HTTPException(status_code=404, detail="diary_not_found")
+
+    fact = ProfileMemoryFact(
+        id=str(uuid.uuid4()),
+        category=MemoryFactCategory.GOALS,
+        text=insight[:500],
+        source="user",
+        evidence=f"From diary entry {entry.id} ({entry.date})",
+        qualifiers={"diary_entry_id": entry.id},
+    )
+    profile = load_user_profile(settings)
+    updated_profile = append_profile_memory_records(profile, [fact])
+    save_user_profile(updated_profile, settings=settings)
+
+    next_entry = entry.model_copy(update={"memory_status": "saved_selected_insights"})
+    save_entry(settings, uid, stamp_times(next_entry, created=False))
+    return {"ok": True, "memory_fact_id": fact.id, "diary_entry_id": entry.id}
 
 
 class RecordOutcomeRequest(BaseModel):

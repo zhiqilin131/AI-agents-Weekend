@@ -58,13 +58,9 @@ export default function HistoryPage() {
     <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-8 py-16">
       <div className="max-w-3xl mx-auto">
         <PageBackButton />
-        <h1 className="text-3xl text-gray-900 mb-2" style={{ fontWeight: 700 }}>
+        <h1 className="text-3xl text-gray-900 mb-8" style={{ fontWeight: 700 }}>
           Decision history
         </h1>
-        <p className="text-gray-600 mb-8 text-sm">
-          Traces live under <code className="text-xs bg-white/80 px-1 rounded">data/traces</code>. Adoptions and outcomes
-          improve future suggestions. Deleting a row also removes its outcome and adoption record when present.
-        </p>
 
         {error && <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>}
 
