@@ -1,22 +1,29 @@
-# AI-agents-Weekend — Foresight-X
+# Foresight-X
 
-Evidence-grounded decision agent: **perceive → retrieve → infer → simulate → decide → reflect**.  
-Specs: `foresight_x_product_spec.md`, `foresight_x_technical_architecture.md`.
+**Evidence-grounded decision assistant:** perceive → retrieve → infer → simulate → decide → reflect.  
+Web app: **Shadow Chat** (streaming), **Slime Buddy** (voice-first companion, 3D slime, profile memory toasts, optional **Decision Report** flow), **Home / Profile / Execution** planner, and classic pipeline runs from **Home**.
+
+**Repository:** [github.com/zhiqilin131/Foresight-x](https://github.com/zhiqilin131/Foresight-x)  
+Design specs: `foresight_x_product_spec.md`, `foresight_x_technical_architecture.md`.
 
 ## What it does
 
-- **Perception:** natural language → structured `UserState`; optional **query enhancement**; optional **clarification gate** (1–2 multiple-choice questions if input is too vague).
+- **Perception:** natural language → structured `UserState`; optional **query enhancement**; optional **clarification gate** (Shadow) when input is too vague.
 - **Retrieval (parallel):**
-  - **UserMemory** (Chroma, per `FORESIGHT_USER_ID`): **similar past decisions** + **behavioral pattern** labels. This is **not** a dump of full chat history — only indexed decision records you have stored (e.g. via outcomes / harness).
-  - **WorldKnowledge** (global Chroma + optional **Tavily**): **facts**, **base rates / baselines**, and **live web lines**. All **web search** snippets are surfaced under **base rates** as `Live reference (aligned to your question): …`. The **Recent events** bucket is reserved for non-URL / local event-style lines (usually empty when everything comes from the web).
-- **Inference:** bias / irrationality check; **option generation**.
-- **Simulation:** **multi-future** scenarios per option (best / base / worst) with probabilities; prompt uses **EvidenceBundle** and optional **MemoryBundle** for calibration.
-- **Evaluation & recommendation:** multi-criteria scores; **reflection** and persisted **traces** under `data/traces/` (gitignored JSON).
-- **Profiles:** classic user profile (`data/profile/`) and optional **tier-3 semantic profile** (`data/profiles/`, see `cursor_tier3_profile_prompt.md`) for recommender weighting.
+  - **UserMemory** (Chroma, per `FORESIGHT_USER_ID`): similar past decisions + behavioral pattern labels (indexed decision records, not full chat dumps).
+  - **WorldKnowledge** (global Chroma + optional **Tavily**): facts, base rates, and **live web** lines (`Live reference …` under base rates). **Recent events** is for non-web snippets only.
+- **Inference:** bias check; option generation.
+- **Simulation:** multi-future scenarios per option; uses **EvidenceBundle** + optional **MemoryBundle**.
+- **Evaluation & recommendation:** MCDA-style scores; **reflection**; traces under `data/traces/` (gitignored JSON).
+- **Profiles:** classic profile (`data/profile/`) and optional **tier-3 semantic profile** (`data/profiles/`) for recommender weighting.
+- **Voice (Slime Buddy):** ASR → routed tools or shared **conversation** turn (same core as Shadow); server TTS optional; **Decision Mode** card when intent is decision-like.
 
 ## Stack
 
-Python 3.11+, **OpenAI** (chat + embeddings), **LlamaIndex**, **Chroma**, **Tavily** (optional live search; tests mock the client), **FastAPI** + **Uvicorn**, **React + Vite** frontend with **SSE** streaming.
+- **Backend:** Python 3.11+, **FastAPI**, **OpenAI** (chat, embeddings, Whisper/TTS where configured), **LlamaIndex**, **Chroma**, **Tavily** (optional), **faster-whisper** (optional local ASR).
+- **Frontend:** **React 18**, **Vite 6**, **TypeScript**, **Tailwind 4**, **React Three Fiber** (slime), **SSE** streaming.
+
+Dependency versions are pinned in `pyproject.toml` and `web/package.json`; upgrade with care (LlamaIndex + React majors may need code changes).
 
 ## Setup
 
@@ -25,12 +32,12 @@ pip install -e ".[dev]"
 pytest
 ```
 
-For a repeatable local workflow, use `docs/REPRODUCIBILITY.md` (includes `make setup`, `make doctor`, and consistent run/test commands).
+For a repeatable local workflow, see `docs/REPRODUCIBILITY.md` (`make setup`, `make doctor`).
 
 **Environment:** `cp .env.example .env`, then set `OPENAI_API_KEY` and, for live web retrieval, `TAVILY_API_KEY`.  
-If `python` raises `KeyError: 'TAVILY_API_KEY'`, the variable is missing from `.env`.
+If you see `KeyError: 'TAVILY_API_KEY'`, the variable is missing from `.env`.
 
-**Smoke test (Tavily):** same Python environment as the app, then `python scripts/smoke_tavily.py`. Install `tavily-python` if needed.
+**Smoke test (Tavily):** `python scripts/smoke_tavily.py` (same venv as the app).
 
 ## Run the web app
 
@@ -41,7 +48,9 @@ pip install -e ".[web]"
 cd web && npm install && npm run dev:all
 ```
 
-Open **`http://127.0.0.1:5173`** (Vite is pinned to this host/port; `web/.env.development` points the browser at **`http://127.0.0.1:8765`** for the API and SSE).
+Open **`http://127.0.0.1:5173`**. The dev client uses **`http://127.0.0.1:8765`** for the API (`web/.env.development`).
+
+**Routes (hash router):** `/` Home, `/buddy` Slime Buddy, `/reflect` Shadow Chat, `/profile`, `/execution`, etc.
 
 Split terminals (optional):
 
@@ -54,12 +63,24 @@ Split terminals (optional):
 
 | Section | Meaning |
 |--------|---------|
-| **Similar past decisions / Patterns** | From **UserMemory** — needs indexed past decisions for your user id. Empty if Chroma has no matching history yet. |
-| **Base rates** | Priors + **all Tavily / web lines** (live reference prefix). |
-| **Recent events** | Non-web event snippets only; web results are **not** listed here. |
+| **Similar past decisions / Patterns** | **UserMemory** — needs indexed past decisions for your user id. |
+| **Base rates** | Priors + **Tavily / web** lines (live reference prefix). |
+| **Recent events** | Non-web snippets only. |
 
-Stale world seeds after code changes: delete `data/chroma` (or only the world collection) and re-ingest / re-run.
+Stale seeds after code changes: delete `data/chroma` (or the world collection) and re-ingest / re-run.
+
+## Docs
+
+- Voice / Slime: `docs/voice_slime_agent.md`, `docs/voice_asr.md`
+
+## GitHub About (maintainers)
+
+If you have admin on the repo, paste this into **About → Description**:
+
+> Evidence-grounded decision assistant: structured reports, vector memory (Chroma), Shadow Chat & Slime Buddy voice UI. FastAPI + React/Vite.
+
+Suggested **topics:** `decision-support`, `ai-agents`, `llm`, `fastapi`, `react`, `python`, `chromadb`, `vite`
 
 ## License / team
 
-Hackathon / coursework project — see repository owners for contribution policy.
+Hackathon / coursework — see repository owners for contribution policy.

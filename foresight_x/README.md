@@ -26,7 +26,7 @@ Phase 6 adds UI entry points:
 
 ### Web UI (`web/` — Vite + React)
 
-Requires Python extras **`web`** (FastAPI + Uvicorn) and Node/npm.
+Requires Python extras **`web`** (FastAPI, Uvicorn, multipart, optional ASR/TTS deps) and Node/npm.
 
 1. Install backend: `pip install -e ".[web]"`
 2. From `web/`, start API + Vite together:
@@ -37,6 +37,8 @@ Requires Python extras **`web`** (FastAPI + Uvicorn) and Node/npm.
    ```
 
    Or run separately: `python -m uvicorn foresight_x.ui.api_server:app --host 127.0.0.1 --port 8765 --reload` (repo root) and `npm run dev` (`web/`).
+
+**Slime Buddy** (`/buddy`): voice commands, 3D slime, shared thread store with Shadow; **Decision Report** stream when you confirm Decision Mode.
 
 3. Open **`http://127.0.0.1:5173`**. Use repo-root `.env` for `OPENAI_API_KEY` / `TAVILY_API_KEY` (same as CLI). `web/.env.development` should keep `VITE_API_ORIGIN=http://127.0.0.1:8765`.
 
