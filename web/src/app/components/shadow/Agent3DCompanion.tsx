@@ -263,6 +263,26 @@ function damp(cur: number, target: number, lambda: number, dt: number) {
   return cur + (target - cur) * (1 - Math.exp(-lambda * dt));
 }
 
+/** Draggy motion — slower settles, less jitter, heavier “slime gel” read */
+const SLIME_VISCOUS = {
+  dampLambdaMul: 0.58,
+  colorLerpMul: 0.62,
+  floatSpeed: 0.74,
+  floatIntensity: 0.2,
+  driftSpeedMul: 0.58,
+  driftTurbulenceMul: 0.42,
+  microAmpMul: 0.58,
+  rippleOscMul: 0.62,
+  yawMul: 0.55,
+  bobAmp: 0.028,
+  bobHz: 0.62,
+  pointerTiltMul: 0.72,
+} as const;
+
+function vLambda(λ: number) {
+  return λ * SLIME_VISCOUS.dampLambdaMul;
+}
+
 const DRIFT_PARTICLE_COUNT = 56;
 
 function createDriftParticleSystem() {
@@ -402,37 +422,38 @@ function CompanionMesh({
     goalGlow.current.setStyle(target.glow);
     goalEye.current.setStyle(target.eye);
     goalTint.current.setStyle(target.coreTint);
-    const colorLambda = 5.2;
+    const colorLambda = 5.2 * SLIME_VISCOUS.colorLerpMul;
     curGlow.current.lerp(goalGlow.current, 1 - Math.exp(-colorLambda * dt));
     curEye.current.lerp(goalEye.current, 1 - Math.exp(-colorLambda * dt));
     curTint.current.lerp(goalTint.current, 1 - Math.exp(-colorLambda * dt));
     chromaBoost.current.copy(curGlow.current).lerp(curTint.current, 0.35);
 
     const s = smooth.current;
-    s.ringSpeed = damp(s.ringSpeed, target.ringSpeed, 4.5, dt);
-    s.breatheAmp = damp(s.breatheAmp, target.breatheAmp, 4.2, dt);
-    s.breatheHz = damp(s.breatheHz, target.breatheHz, 4.2, dt);
-    s.streamMicroAmp = damp(s.streamMicroAmp, target.streamMicroAmp, 5, dt);
-    s.streamMicroHz = damp(s.streamMicroHz, target.streamMicroHz, 5, dt);
-    s.emissiveIntensity = damp(s.emissiveIntensity, target.emissiveIntensity, 4, dt);
-    s.haloScale = damp(s.haloScale, target.haloScale, 3.8, dt);
-    s.haloAlpha = damp(s.haloAlpha, target.haloAlpha, 4, dt);
-    s.orbitNodeRadius = damp(s.orbitNodeRadius, target.orbitNodeRadius, 3.5, dt);
-    s.constellationOpacity = damp(s.constellationOpacity, target.constellationOpacity, 4.5, dt);
-    s.rippleOpacity = damp(s.rippleOpacity, target.rippleOpacity, 5, dt);
-    s.morphThinking = damp(s.morphThinking, target.morphThinking, 4.8, dt);
-    s.morphResponding = damp(s.morphResponding, target.morphResponding, 5, dt);
-    s.morphReading = damp(s.morphReading, target.morphReading, 4.6, dt);
+    s.ringSpeed = damp(s.ringSpeed, target.ringSpeed, vLambda(4.5), dt);
+    s.breatheAmp = damp(s.breatheAmp, target.breatheAmp, vLambda(4.2), dt);
+    s.breatheHz = damp(s.breatheHz, target.breatheHz, vLambda(4.2), dt);
+    s.streamMicroAmp = damp(s.streamMicroAmp, target.streamMicroAmp, vLambda(5), dt);
+    s.streamMicroHz = damp(s.streamMicroHz, target.streamMicroHz, vLambda(5), dt);
+    s.emissiveIntensity = damp(s.emissiveIntensity, target.emissiveIntensity, vLambda(4), dt);
+    s.haloScale = damp(s.haloScale, target.haloScale, vLambda(3.8), dt);
+    s.haloAlpha = damp(s.haloAlpha, target.haloAlpha, vLambda(4), dt);
+    s.orbitNodeRadius = damp(s.orbitNodeRadius, target.orbitNodeRadius, vLambda(3.5), dt);
+    s.constellationOpacity = damp(s.constellationOpacity, target.constellationOpacity, vLambda(4.5), dt);
+    s.rippleOpacity = damp(s.rippleOpacity, target.rippleOpacity, vLambda(5), dt);
+    s.morphThinking = damp(s.morphThinking, target.morphThinking, vLambda(4.8), dt);
+    s.morphResponding = damp(s.morphResponding, target.morphResponding, vLambda(5), dt);
+    s.morphReading = damp(s.morphReading, target.morphReading, vLambda(4.6), dt);
 
-    const breath =
-      1 +
-      s.breatheAmp * Math.sin(t * Math.PI * 2 * s.breatheHz) +
-      (s.streamMicroAmp > 0.001 ? s.streamMicroAmp * Math.sin(t * Math.PI * 2 * s.streamMicroHz) : 0);
+    const micro =
+      s.streamMicroAmp > 0.001
+        ? SLIME_VISCOUS.microAmpMul * s.streamMicroAmp * Math.sin(t * Math.PI * 2 * s.streamMicroHz)
+        : 0;
+    const breath = 1 + s.breatheAmp * Math.sin(t * Math.PI * 2 * s.breatheHz) + micro;
 
     if (groupRef.current) {
-      groupRef.current.rotation.y += 0.001 + s.ringSpeed * 0.00085;
-      groupRef.current.rotation.x = pointer.y * 0.08;
-      groupRef.current.position.y = Math.sin(t * 0.9) * 0.042;
+      groupRef.current.rotation.y += (0.001 + s.ringSpeed * 0.00085) * SLIME_VISCOUS.yawMul;
+      groupRef.current.rotation.x = pointer.y * 0.08 * SLIME_VISCOUS.pointerTiltMul;
+      groupRef.current.position.y = Math.sin(t * SLIME_VISCOUS.bobHz) * SLIME_VISCOUS.bobAmp;
       const hover = 1 + hoverIntensity * 0.035;
       groupRef.current.scale.setScalar(hover);
     }
@@ -444,7 +465,11 @@ function CompanionMesh({
     }
 
     if (rippleRef.current) {
-      const wave = 1 + Math.sin(t * 5.2) * 0.09 * s.rippleOpacity + Math.sin(t * 7.8) * 0.05 * s.rippleOpacity;
+      const rv = SLIME_VISCOUS.rippleOscMul;
+      const wave =
+        1 +
+        Math.sin(t * 5.2) * 0.09 * s.rippleOpacity * rv +
+        Math.sin(t * 7.8) * 0.05 * s.rippleOpacity * rv;
       rippleRef.current.scale.setScalar(wave);
       rippleRef.current.visible = s.rippleOpacity > 0.04;
     }
@@ -562,12 +587,14 @@ function CompanionMesh({
     } = driftData;
     const driftMaxR = 1.05 + s.haloAlpha * 0.38;
     const driftSpeed =
-      0.48 + s.ringSpeed * 0.14 + s.emissiveIntensity * 0.06 + s.morphResponding * 0.42 + s.morphReading * 0.22;
+      SLIME_VISCOUS.driftSpeedMul *
+      (0.48 + s.ringSpeed * 0.14 + s.emissiveIntensity * 0.06 + s.morphResponding * 0.42 + s.morphReading * 0.22);
+    const tu = SLIME_VISCOUS.driftTurbulenceMul;
     for (let i = 0; i < driftCount; i++) {
       const sd = driftSeeds[i];
-      const w1 = Math.sin(t * 1.9 + sd) * 0.01;
-      const w2 = Math.cos(t * 1.4 + sd * 0.73) * 0.01;
-      const w3 = Math.sin(t * 2.7 + driftPhases[i]) * 0.007;
+      const w1 = Math.sin(t * 1.9 + sd) * 0.01 * tu;
+      const w2 = Math.cos(t * 1.4 + sd * 0.73) * 0.01 * tu;
+      const w3 = Math.sin(t * 2.7 + driftPhases[i]) * 0.007 * tu;
       driftPos[i * 3] += driftVel[i * 3] * dt * driftSpeed + w1;
       driftPos[i * 3 + 1] += driftVel[i * 3 + 1] * dt * driftSpeed + w2;
       driftPos[i * 3 + 2] += driftVel[i * 3 + 2] * dt * driftSpeed + w3;
@@ -603,7 +630,7 @@ function CompanionMesh({
 
   return (
     <group ref={groupRef}>
-      <Float speed={1.35} floatIntensity={0.36}>
+      <Float speed={SLIME_VISCOUS.floatSpeed} floatIntensity={SLIME_VISCOUS.floatIntensity}>
         <mesh ref={haloMeshRef} scale={[1.2, 1.2, 1.2]}>
           <sphereGeometry args={[0.55, 28, 28]} />
           <meshBasicMaterial ref={haloMatRef} transparent />
@@ -742,7 +769,7 @@ function CompanionFallback({ mode }: { mode: AgentMode }) {
   return (
     <div className={`flex h-[220px] w-full items-center justify-center rounded-2xl ${COMPANION_FRAME_BG}`}>
       <div
-        className="relative h-28 w-28 rounded-full transition-all duration-[800ms] ease-out"
+        className="relative h-28 w-28 rounded-full transition-all duration-[1100ms] ease-[cubic-bezier(0.22,0.82,0.28,1)]"
         style={{
           transform: mode === 'thinking' ? 'scale(1.12)' : mode === 'responding' ? 'scale(1)' : undefined,
           background: `radial-gradient(circle at 35% 35%, ${t.coreTint}ee 0%, ${t.glow}cc 45%, ${t.glow}66 100%)`,
@@ -750,7 +777,7 @@ function CompanionFallback({ mode }: { mode: AgentMode }) {
         }}
       >
         <div
-          className="absolute inset-[22%] rounded-full transition-colors duration-[800ms]"
+          className="absolute inset-[22%] rounded-full transition-colors duration-[1100ms] ease-out"
           style={{
             background: `radial-gradient(circle, ${t.eye}99, ${t.coreTint}55)`,
             opacity: mode === 'responding' ? 0.95 : 0.88,

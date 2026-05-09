@@ -1,15 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { VoiceInputButton } from '../VoiceInputButton';
 
 export function ShadowChatInput({
   disabled,
   onSend,
+  bootstrapText,
+  onBootstrapConsumed,
 }: {
   disabled: boolean;
   onSend: (text: string) => void;
+  /** When set, prefills an empty composer (e.g. suggestion chip). */
+  bootstrapText?: string | null;
+  onBootstrapConsumed?: () => void;
 }) {
   const [value, setValue] = useState('');
   const appendVoice = (t: string) => setValue((s) => (s.trim() ? `${s.trim()} ${t}` : t));
+
+  useEffect(() => {
+    const b = (bootstrapText || '').trim();
+    if (!b) return;
+    setValue((prev) => (prev.trim() ? prev : b));
+    onBootstrapConsumed?.();
+  }, [bootstrapText, onBootstrapConsumed]);
 
   const send = () => {
     const x = value.trim();

@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router';
 import { CalendarDays, History, MessagesSquare, Sparkles, UserCircle } from 'lucide-react';
 import { PersonaSwitcher } from './PersonaSwitcher';
+import { cn } from './ui/utils';
 
 const btnClassDefault =
   'inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full text-sm ' +
@@ -14,14 +15,21 @@ const btnClassCompact =
   'hover:bg-slate-50 hover:border-indigo-200 transition-colors ' +
   'focus:outline-none focus:ring-2 focus:ring-indigo-400/30';
 
-export function MainNavButtons({ variant = 'default' }: { variant?: 'default' | 'compact' }) {
+export function MainNavButtons({
+  variant = 'default',
+  className,
+}: {
+  variant?: 'default' | 'compact';
+  /** Extra classes on the outer wrapper (e.g. margin). */
+  className?: string;
+}) {
   const navigate = useNavigate();
   const compact = variant === 'compact';
   const btnClass = compact ? btnClassCompact : btnClassDefault;
   const iconClass = compact ? 'w-3.5 h-3.5 shrink-0' : 'w-4 h-4 shrink-0';
 
   return (
-    <div className={compact ? '' : 'mb-8'}>
+    <div className={cn(!compact && 'mb-8', className)}>
       {!compact ? <PersonaSwitcher compact /> : null}
       <div className={`flex flex-wrap ${compact ? 'gap-1.5 justify-start' : 'gap-3 justify-center'}`}>
         <button type="button" onClick={() => navigate('/chat')} className={btnClass} style={{ fontWeight: compact ? 500 : 600 }}>

@@ -35,6 +35,7 @@ from foresight_x.schemas import (
     SimulatedFuture,
     UserState,
 )
+from foresight_x.decision.report_surface import build_report_surface
 from foresight_x.simulation.evaluator import evaluate_options
 from foresight_x.simulation.future_simulator import simulate_futures
 
@@ -265,6 +266,7 @@ def finalize_trace(
     )
     reflection = reflect(trace, llm)
     trace = trace.model_copy(update={"reflection": reflection})
+    trace = trace.model_copy(update={"report_surface": build_report_surface(trace)})
     if persist_trace:
         save_decision_trace(trace, settings=settings)
         if settings.graph_enabled:
@@ -288,6 +290,7 @@ def iter_pipeline_events(
     clarification_answers: dict[str, str] | None = None,
     save_clarification_to_profile: bool = False,
     preserve_raw_input: bool = False,
+    clarification_profile_merge_done_externally: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Yield meta, partial trace fragments per stage, then ``complete`` (SSE)."""
     settings = ctx.settings or load_settings()
@@ -384,7 +387,11 @@ def iter_pipeline_events(
         original_user_input=original,
         anchor_now_iso=anchor,
     )
-    if save_clarification_to_profile and clarification_answers:
+    if (
+        save_clarification_to_profile
+        and clarification_answers
+        and not clarification_profile_merge_done_externally
+    ):
         p = append_clarification_to_profile(load_user_profile(settings), clarification_answers)
         save_user_profile(p, settings=settings)
     yield {"event": "complete", "trace": trace.model_dump(mode="json")}
@@ -400,6 +407,7 @@ def run_pipeline(
     clarification_answers: dict[str, str] | None = None,
     save_clarification_to_profile: bool = False,
     preserve_raw_input: bool = False,
+    clarification_profile_merge_done_externally: bool = False,
 ) -> DecisionTrace:
     """Execute the full RIS stack and return a ``DecisionTrace``; optionally save JSON under ``data/traces/``."""
     settings = ctx.settings or load_settings()
@@ -448,7 +456,11 @@ def run_pipeline(
         original_user_input=original,
         anchor_now_iso=anchor,
     )
-    if save_clarification_to_profile and clarification_answers:
+    if (
+        save_clarification_to_profile
+        and clarification_answers
+        and not clarification_profile_merge_done_externally
+    ):
         p = append_clarification_to_profile(load_user_profile(settings), clarification_answers)
         save_user_profile(p, settings=settings)
     return trace

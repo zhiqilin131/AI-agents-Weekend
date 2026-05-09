@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 
 from foresight_x.decision_algorithms.schemas import CalendarEvent, ExecutionTask, ScheduleResult, SchedulerOptions
 
@@ -30,11 +30,23 @@ def schedule_greedy_earliest_fit(
         deadline = t.deadline_hint or "zzzz"
         return (pri, deadline, -t.duration_minutes)
 
+    max_per_day = int(getattr(options, "max_ai_blocks_per_day", 0) or 0)
+    ai_counts_by_day: dict[date, int] = defaultdict(int)
+    allowed_raw = getattr(options, "allowed_weekdays", None) or []
+    allowed_set: set[int] | None = (
+        {int(x) for x in allowed_raw if 0 <= int(x) <= 6} if allowed_raw else None
+    )
+
     for t in sorted(tasks, key=sort_key):
         placed = False
         dur = timedelta(minutes=max(options.slot_minutes, t.duration_minutes))
         for d in range(options.days):
             day = (start + timedelta(days=d)).replace(hour=options.day_start_hour, minute=0, second=0, microsecond=0)
+            day_key = day.date()
+            if allowed_set is not None and day.weekday() not in allowed_set:
+                continue
+            if max_per_day > 0 and ai_counts_by_day[day_key] >= max_per_day:
+                continue
             end_window = day.replace(hour=options.day_end_hour, minute=0)
             cur = day
             while cur + dur <= end_window:
@@ -51,6 +63,7 @@ def schedule_greedy_earliest_fit(
                     )
                     scheduled.append(ev)
                     blocked.append((cand_s, cand_e))
+                    ai_counts_by_day[cand_s.date()] += 1
                     placed = True
                     break
                 cur += timedelta(minutes=options.slot_minutes)

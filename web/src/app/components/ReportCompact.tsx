@@ -1,19 +1,18 @@
-import { useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router';
 import {
   AlertTriangle,
   Brain,
-  CheckCircle2,
   Clock,
   Gauge,
   Layers,
   ListChecks,
   MessageCircle,
-  Sparkles,
   Star,
   Undo2,
 } from 'lucide-react';
-import type { DecisionReport } from '../model';
+import type { DecisionReport, ResourceDrop } from '../model';
+import { RESOURCE_DROP_CALENDAR_ID } from '../model';
 import {
   Accordion,
   AccordionContent,
@@ -25,6 +24,12 @@ import { TradeoffsRadarChart } from './TradeoffsRadarChart';
 import { TypewriterText } from './TypewriterText';
 import { cn } from './ui/utils';
 import { apiUrl } from '../../utils/apiOrigin';
+import type { TraceUserStateLite } from '../../utils/evidenceDetailFromTrace';
+import { AssumptionsCard } from './report/AssumptionsCard';
+import { FuturePathsCard } from './report/FuturePathsCard';
+import { NextActionCard } from './report/NextActionCard';
+import { PersonalizedFitCard } from './report/PersonalizedFitCard';
+import { RecommendationCard } from './report/RecommendationCard';
 
 function optionTierSurface(tier: 'high' | 'medium' | 'low'): string {
   switch (tier) {
@@ -75,7 +80,6 @@ interface TraceMemoryBlock {
     timestamp?: string;
   }>;
   prior_outcomes_summary?: string;
-  graph_influence?: TraceGraphInfluence;
   memory_evidence?: Array<{
     decision_id?: string;
     theme?: string;
@@ -86,23 +90,6 @@ interface TraceMemoryBlock {
     timestamp?: string;
     source_path?: string;
   }>;
-}
-
-interface TraceGraphInfluenceNode {
-  node_id?: string;
-  label?: string;
-  node_type?: string;
-  layer?: 'event' | 'concept';
-  score?: number;
-  why?: string;
-}
-
-interface TraceGraphInfluence {
-  algorithm?: string;
-  seed_nodes?: string[];
-  surfaced_decision_ids?: string[];
-  notes?: string[];
-  top_nodes?: TraceGraphInfluenceNode[];
 }
 
 interface ReportCompactProps {
@@ -136,10 +123,12 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
   const futures = (fullTrace?.futures as TraceFuture[]) ?? [];
   const evidence = fullTrace?.evidence as TraceEvidence | undefined;
   const memoryTrace = fullTrace?.memory as TraceMemoryBlock | undefined;
-  const hasRec = Boolean(report.recommendation.reasoning || report.recommendation.chosenOption);
   const chosenOptionId = report.recommendation.chosenOption?.trim() ?? '';
   const optionTitleById = new Map(report.options.map((o) => [o.id, o.name]));
   const decisionId = typeof fullTrace?.decision_id === 'string' ? fullTrace.decision_id : '';
+  const surface = report.reportSurface;
+  const [resourceDrops, setResourceDrops] = useState<ResourceDrop[]>([]);
+  const [resourceDropsLoading, setResourceDropsLoading] = useState(false);
   const [coachOption, setCoachOption] = useState<{ id: string; name: string } | null>(null);
   const [coachQuestion, setCoachQuestion] = useState('');
   const [coachThreads, setCoachThreads] = useState<Record<string, CoachMessage[]>>({});
@@ -150,6 +139,36 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
   const selectedTradeoff = useMemo(
     () => report.tradeoffs?.rows.find((r) => r.optionId === mcdaOptionId) ?? report.tradeoffs?.rows[0],
     [mcdaOptionId, report.tradeoffs?.rows],
+  );
+
+  useEffect(() => {
+    if (!decisionId) {
+      setResourceDrops([]);
+      setResourceDropsLoading(false);
+      return;
+    }
+    if (isStreaming) return;
+    let cancelled = false;
+    setResourceDropsLoading(true);
+    void fetch(apiUrl(`/api/traces/${encodeURIComponent(decisionId)}/resource-drops`))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('resource_drops'))))
+      .then((data: { resource_drops?: ResourceDrop[] }) => {
+        if (!cancelled) setResourceDrops(Array.isArray(data.resource_drops) ? data.resource_drops : []);
+      })
+      .catch(() => {
+        if (!cancelled) setResourceDrops([]);
+      })
+      .finally(() => {
+        if (!cancelled) setResourceDropsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [decisionId, isStreaming]);
+
+  const suppressNextCalendar = useMemo(
+    () => !resourceDropsLoading && resourceDrops.some((d) => d.id === RESOURCE_DROP_CALENDAR_ID),
+    [resourceDrops, resourceDropsLoading],
   );
 
   const askOptionCoach = async () => {
@@ -189,73 +208,232 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
     }
   };
 
+  const tradeoffsPanel =
+    report.tradeoffs && report.tradeoffs.rows.length > 0 ? (
+      <section className="rounded-2xl bg-white/70 border border-white/80 p-4 shadow-sm space-y-3">
+        <h3 className="text-sm text-gray-900 flex items-center gap-2" style={{ fontWeight: 700 }}>
+          <Layers className="w-4 h-4 text-purple-600" aria-hidden />
+          MCDA option analysis
+        </h3>
+        <p className="text-xs text-gray-600 leading-relaxed">
+          Options are compared across EV, Risk, Regret, Uncertainty, and Goal Alignment. Use this panel to inspect each
+          option&apos;s profile.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {report.options.map((o) => {
+            const selected = (selectedTradeoff?.optionId || '').trim() === o.id.trim();
+            return (
+              <button
+                key={`mcda-${o.id}`}
+                type="button"
+                onClick={() => setMcdaOptionId(o.id)}
+                className={cn(
+                  'px-3 py-1.5 rounded-full text-xs border transition-colors',
+                  selected ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-indigo-50',
+                )}
+              >
+                {o.name}
+              </button>
+            );
+          })}
+        </div>
+        {selectedTradeoff && (
+          <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+            <p className="text-xs text-indigo-900 mb-2" style={{ fontWeight: 700 }}>
+              Selected: {selectedTradeoff.optionName}
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              {Object.entries(selectedTradeoff.scores).map(([k, v]) => (
+                <div key={`${selectedTradeoff.optionId}-${k}`} className="rounded-lg bg-white border border-indigo-100 px-2 py-1.5">
+                  <p className="text-[10px] text-gray-500 uppercase" style={{ fontWeight: 700 }}>
+                    {k}
+                  </p>
+                  <p className="text-sm text-gray-900" style={{ fontWeight: 700 }}>
+                    {v}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <TradeoffsRadarChart tradeoffs={report.tradeoffs} />
+      </section>
+    ) : null;
+
+  const optionWriteups = (
+    <div className="space-y-4">
+      {report.options.map((o) => {
+        const tier = o.importanceTier ?? 'medium';
+        const rank = o.importanceRank ?? 0;
+        const rec = Boolean(o.isRecommended);
+        return (
+          <div key={o.id} className={cn('rounded-xl border p-3 space-y-3 shadow-sm', optionTierSurface(tier))}>
+            <div className="flex flex-wrap items-center gap-2 justify-between">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="text-xs font-mono text-gray-500 truncate">{o.id}</span>
+                {rank > 0 && (
+                  <span
+                    className="text-[10px] px-2 py-0.5 rounded-full bg-white/90 border border-gray-200/80 text-gray-800"
+                    style={{ fontWeight: 700 }}
+                  >
+                    #{rank}
+                  </span>
+                )}
+                <span
+                  className={cn(
+                    'text-[10px] px-2 py-0.5 rounded-full border',
+                    tier === 'high' && 'bg-emerald-100/90 text-emerald-900 border-emerald-200',
+                    tier === 'medium' && 'bg-amber-100/90 text-amber-900 border-amber-200',
+                    tier === 'low' && 'bg-slate-100/90 text-slate-800 border-slate-200',
+                  )}
+                  style={{ fontWeight: 700 }}
+                >
+                  {tierCaption(tier)}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-start gap-2 min-w-0">
+              {rec ? (
+                <Star
+                  className="w-5 h-5 shrink-0 mt-0.5 text-amber-500 fill-amber-400 drop-shadow-sm"
+                  strokeWidth={1.25}
+                  aria-label="Recommended in final analysis"
+                />
+              ) : (
+                <span className="w-5 shrink-0" aria-hidden />
+              )}
+              <div className="min-w-0 flex-1 space-y-2">
+                <p className="text-sm text-gray-900 leading-snug" style={{ fontWeight: 700 }}>
+                  {o.name}
+                </p>
+                <p className="text-sm text-gray-600 leading-relaxed">{o.description}</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 border bg-gray-50/90 border-gray-200/60">
+              <Undo2 className="w-4 h-4 shrink-0 mt-0.5 text-gray-600" aria-hidden />
+              <div className="min-w-0">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wide" style={{ fontWeight: 700 }}>
+                  Cost of reversal
+                </p>
+                <p className="text-sm text-gray-900 leading-snug">{o.costOfReversal}</p>
+              </div>
+            </div>
+            {o.keyAssumptions.length > 0 && (
+              <ul className="text-xs text-gray-600 list-disc ml-4 space-y-0.5">
+                {o.keyAssumptions.map((a, i) => (
+                  <li key={i}>{a}</li>
+                ))}
+              </ul>
+            )}
+            {!!decisionId && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCoachOption({ id: o.id, name: o.name });
+                  setCoachError(null);
+                }}
+                className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border border-purple-200 bg-white/85 text-purple-800 hover:bg-purple-50"
+              >
+                <MessageCircle className="w-3.5 h-3.5" aria-hidden />
+                Ask how to execute this option
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className="space-y-4">
-      {/* Hero: recommendation first — page scroll only (no nested scroll area) */}
-      <section className="rounded-[24px] border border-white/90 bg-gradient-to-br from-white/80 to-purple-50/50 p-6 shadow-[0_8px_40px_rgba(0,0,0,0.06)] backdrop-blur-md">
-        <div className="flex items-start gap-3 mb-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center shadow-md shrink-0">
-            <Sparkles className="w-5 h-5 text-white" aria-hidden />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] uppercase tracking-wider text-purple-700 mb-1" style={{ fontWeight: 700 }}>
-              Recommendation
-            </p>
-            <p className="text-lg text-gray-900 leading-snug" style={{ fontWeight: 700 }}>
-              {report.recommendation.chosenOptionName ||
-                optionTitleById.get(chosenOptionId) ||
-                report.recommendation.chosenOption ||
-                '…'}
-            </p>
-          </div>
-        </div>
-        {hasRec &&
-          (isStreaming ? (
-            <p
-              className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap"
-              style={{ fontWeight: 400, lineHeight: 1.75 }}
-            >
-              {report.recommendation.reasoning}
-            </p>
-          ) : (
-            <TypewriterText
-              text={report.recommendation.reasoning}
-              as="p"
-              className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap"
-              enabled={Boolean(report.recommendation.reasoning)}
-            />
-          ))}
-        {report.actions.length > 0 && (
-          <ul className="mt-4 space-y-2">
-            {report.actions.slice(0, 5).map((a, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-gray-800">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" aria-hidden />
-                <span>
-                  {a.text}
-                  {a.deadline && (
-                    <span className="text-gray-500 text-xs ml-1">({a.deadline})</span>
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {!!decisionId && (
-          <div className="mt-4">
-            <button
-              type="button"
-              onClick={() =>
-                onExecutionCalendarNavigate
-                  ? onExecutionCalendarNavigate(decisionId)
-                  : navigate(`/execution/${encodeURIComponent(decisionId)}`)
-              }
-              className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded-full border border-indigo-200 bg-indigo-600 text-white hover:bg-indigo-700"
-            >
-              Create execution calendar
-            </button>
-          </div>
-        )}
-      </section>
+      {surface ? (
+        <>
+          <RecommendationCard
+            report={report}
+            isStreaming={isStreaming}
+            executionCalendar={
+              decisionId
+                ? { decisionId, navigate, onExecutionCalendarNavigate: onExecutionCalendarNavigate }
+                : undefined
+            }
+            resourceDrops={resourceDrops}
+            resourceDropsLoading={resourceDropsLoading}
+          />
+          <PersonalizedFitCard
+            surface={surface}
+            memoryTrace={memoryTrace}
+            userState={fullTrace?.user_state as TraceUserStateLite | undefined}
+          />
+          <FuturePathsCard
+            paths={surface.futurePaths}
+            memoryTrace={memoryTrace}
+            userState={fullTrace?.user_state as TraceUserStateLite | undefined}
+          />
+          <AssumptionsCard assumptions={surface.keyAssumptions} />
+          <NextActionCard
+            actions={report.actions.map((a) => ({ text: a.text, deadline: a.deadline }))}
+            fallbackPrimary={surface.primaryNextAction}
+            decisionId={decisionId}
+            onExecutionCalendarNavigate={onExecutionCalendarNavigate}
+            navigate={navigate}
+            suppressCalendarButton={suppressNextCalendar}
+          />
+          <Accordion type="multiple" defaultValue={[]} className="rounded-2xl border border-white/80 bg-white/50 px-2">
+            <AccordionItem value="tradeoffs">
+              <AccordionTrigger className="text-sm" style={{ fontWeight: 600 }}>
+                Show detailed tradeoffs
+              </AccordionTrigger>
+              <AccordionContent className="space-y-4">
+                {tradeoffsPanel ?? <p className="text-sm text-gray-600">No scoring grid was returned for this run.</p>}
+                {optionWriteups}
+              </AccordionContent>
+            </AccordionItem>
+            <AccordionItem value="memories">
+              <AccordionTrigger className="text-sm" style={{ fontWeight: 600 }}>
+                Show memories used
+              </AccordionTrigger>
+              <AccordionContent className="space-y-4">
+                <EvidenceBlock
+                  evidence={evidence}
+                  patterns={report.insights.memoryPatterns}
+                  memoryTrace={memoryTrace}
+                />
+                {tier3Profile?.profile ? <Tier3ProfileBlock tier3Profile={tier3Profile} fullTrace={fullTrace} /> : null}
+              </AccordionContent>
+            </AccordionItem>
+            <AccordionItem value="scoring">
+              <AccordionTrigger className="text-sm" style={{ fontWeight: 600 }}>
+                Show scoring details
+              </AccordionTrigger>
+              <AccordionContent className="space-y-4">
+                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{report.situation || '…'}</p>
+                <ReflectionBlock report={report} />
+                {futures.length === 0 ? (
+                  <p className="text-sm text-gray-500">No per-option simulations in this run.</p>
+                ) : (
+                  <SimulatedFuturesPanel
+                    futures={futures}
+                    optionTitleById={optionTitleById}
+                    chosenOptionId={chosenOptionId || undefined}
+                  />
+                )}
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        </>
+      ) : (
+        <>
+      <RecommendationCard
+        report={report}
+        isStreaming={isStreaming}
+        executionCalendar={
+          decisionId
+            ? { decisionId, navigate, onExecutionCalendarNavigate: onExecutionCalendarNavigate }
+            : undefined
+        }
+        resourceDrops={resourceDrops}
+        resourceDropsLoading={resourceDropsLoading}
+      />
 
       {/* Quick insight icons — no long paragraphs */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -299,51 +477,7 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
         </div>
       </div>
 
-      {report.tradeoffs && report.tradeoffs.rows.length > 0 && (
-        <section className="rounded-2xl bg-white/70 border border-white/80 p-4 shadow-sm space-y-3">
-          <h3 className="text-sm text-gray-900 flex items-center gap-2" style={{ fontWeight: 700 }}>
-            <Layers className="w-4 h-4 text-purple-600" aria-hidden />
-            MCDA option analysis
-          </h3>
-          <p className="text-xs text-gray-600 leading-relaxed">
-            Options are compared across EV, Risk, Regret, Uncertainty, and Goal Alignment. Use this panel to inspect each option's profile.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {report.options.map((o) => {
-              const selected = (selectedTradeoff?.optionId || '').trim() === o.id.trim();
-              return (
-                <button
-                  key={`mcda-${o.id}`}
-                  type="button"
-                  onClick={() => setMcdaOptionId(o.id)}
-                  className={cn(
-                    'px-3 py-1.5 rounded-full text-xs border transition-colors',
-                    selected ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-indigo-50',
-                  )}
-                >
-                  {o.name}
-                </button>
-              );
-            })}
-          </div>
-          {selectedTradeoff && (
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
-              <p className="text-xs text-indigo-900 mb-2" style={{ fontWeight: 700 }}>
-                Selected: {selectedTradeoff.optionName}
-              </p>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                {Object.entries(selectedTradeoff.scores).map(([k, v]) => (
-                  <div key={`${selectedTradeoff.optionId}-${k}`} className="rounded-lg bg-white border border-indigo-100 px-2 py-1.5">
-                    <p className="text-[10px] text-gray-500 uppercase" style={{ fontWeight: 700 }}>{k}</p>
-                    <p className="text-sm text-gray-900" style={{ fontWeight: 700 }}>{v}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          <TradeoffsRadarChart tradeoffs={report.tradeoffs} />
-        </section>
-      )}
+      {tradeoffsPanel}
 
       {tier3Profile?.profile && (
         <Tier3ProfileBlock tier3Profile={tier3Profile} fullTrace={fullTrace} />
@@ -363,92 +497,7 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
           <AccordionTrigger className="text-sm" style={{ fontWeight: 600 }}>
             Options ({report.options.length})
           </AccordionTrigger>
-          <AccordionContent>
-            <div className="space-y-4">
-              {report.options.map((o) => {
-                const tier = o.importanceTier ?? 'medium';
-                const rank = o.importanceRank ?? 0;
-                const rec = Boolean(o.isRecommended);
-                return (
-                  <div
-                    key={o.id}
-                    className={cn('rounded-xl border p-3 space-y-3 shadow-sm', optionTierSurface(tier))}
-                  >
-                    <div className="flex flex-wrap items-center gap-2 justify-between">
-                      <div className="flex flex-wrap items-center gap-2 min-w-0">
-                        <span className="text-xs font-mono text-gray-500 truncate">{o.id}</span>
-                        {rank > 0 && (
-                          <span
-                            className="text-[10px] px-2 py-0.5 rounded-full bg-white/90 border border-gray-200/80 text-gray-800"
-                            style={{ fontWeight: 700 }}
-                          >
-                            #{rank}
-                          </span>
-                        )}
-                        <span
-                          className={cn(
-                            'text-[10px] px-2 py-0.5 rounded-full border',
-                            tier === 'high' && 'bg-emerald-100/90 text-emerald-900 border-emerald-200',
-                            tier === 'medium' && 'bg-amber-100/90 text-amber-900 border-amber-200',
-                            tier === 'low' && 'bg-slate-100/90 text-slate-800 border-slate-200',
-                          )}
-                          style={{ fontWeight: 700 }}
-                        >
-                          {tierCaption(tier)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-2 min-w-0">
-                      {rec ? (
-                        <Star
-                          className="w-5 h-5 shrink-0 mt-0.5 text-amber-500 fill-amber-400 drop-shadow-sm"
-                          strokeWidth={1.25}
-                          aria-label="Recommended in final analysis"
-                        />
-                      ) : (
-                        <span className="w-5 shrink-0" aria-hidden />
-                      )}
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <p className="text-sm text-gray-900 leading-snug" style={{ fontWeight: 700 }}>
-                          {o.name}
-                        </p>
-                        <p className="text-sm text-gray-600 leading-relaxed">{o.description}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 border bg-gray-50/90 border-gray-200/60">
-                      <Undo2 className="w-4 h-4 shrink-0 mt-0.5 text-gray-600" aria-hidden />
-                      <div className="min-w-0">
-                        <p className="text-[10px] text-gray-500 uppercase tracking-wide" style={{ fontWeight: 700 }}>
-                          Cost of reversal
-                        </p>
-                        <p className="text-sm text-gray-900 leading-snug">{o.costOfReversal}</p>
-                      </div>
-                    </div>
-                    {o.keyAssumptions.length > 0 && (
-                      <ul className="text-xs text-gray-600 list-disc ml-4 space-y-0.5">
-                        {o.keyAssumptions.map((a, i) => (
-                          <li key={i}>{a}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {!!decisionId && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCoachOption({ id: o.id, name: o.name });
-                          setCoachError(null);
-                        }}
-                        className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border border-purple-200 bg-white/85 text-purple-800 hover:bg-purple-50"
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" aria-hidden />
-                        Ask how to execute this option
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </AccordionContent>
+          <AccordionContent>{optionWriteups}</AccordionContent>
         </AccordionItem>
 
         <AccordionItem value="evidence">
@@ -490,6 +539,8 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
           </AccordionContent>
         </AccordionItem>
       </Accordion>
+        </>
+      )}
 
       {coachOption && (
         <div className="fixed bottom-5 right-5 z-[75] w-[min(92vw,28rem)] rounded-2xl border border-purple-200/80 bg-white/95 shadow-2xl shadow-purple-500/20 backdrop-blur-sm">
@@ -571,53 +622,54 @@ function Tier3ProfileBlock({
     (userState.profile_constraints?.length ?? 0);
 
   return (
-    <section className="rounded-2xl bg-white/70 border border-white/85 p-4 shadow-sm space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm text-gray-900 flex items-center gap-2" style={{ fontWeight: 700 }}>
-            <Brain className="w-4 h-4 text-violet-600" aria-hidden />
-            Tier 3 semantic profile
+    <section className="rounded-xl border border-white/85 bg-white/70 p-3 shadow-sm space-y-2 md:rounded-2xl md:p-3.5">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="flex items-center gap-1.5 text-xs font-bold text-gray-900 md:text-sm">
+            <Brain className="h-3.5 w-3.5 shrink-0 text-violet-600 md:h-4 md:w-4" aria-hidden />
+            Semantic profile (Tier 3)
           </h3>
-          <p className="text-[11px] text-gray-600 mt-1">
-            Values/risk/themes profile from `cursor_tier3_profile_prompt.md`, loaded for recommender.
+          <p className="mt-0.5 text-[10px] leading-snug text-gray-500 md:text-[11px]">
+            Injected into this run’s recommender context.
           </p>
         </div>
         <span
           className={cn(
-            'text-[10px] px-2 py-1 rounded-full border',
+            'shrink-0 rounded-full border px-2 py-0.5 text-[9px] md:text-[10px]',
             used
-              ? 'bg-emerald-100 text-emerald-900 border-emerald-200'
-              : 'bg-amber-100 text-amber-900 border-amber-200',
+              ? 'border-emerald-200 bg-emerald-100 text-emerald-900'
+              : 'border-amber-200 bg-amber-100 text-amber-900',
           )}
           style={{ fontWeight: 700 }}
         >
-          {used ? 'Profile actively used' : 'Profile weakly weighted'}
+          {used ? 'Used' : 'Low weight'}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 md:gap-2">
         <MiniMetric label="Confidence" value={confidence.toFixed(2)} />
         <MiniMetric label="Threshold" value={threshold.toFixed(2)} />
         <MiniMetric label="Risk posture" value={p.risk_posture || 'unknown'} />
-        <MiniMetric label="Decisions summarized" value={String(p.n_decisions_summarized ?? 0)} />
+        <MiniMetric label="Decisions Σ" value={String(p.n_decisions_summarized ?? 0)} />
       </div>
 
-      <div className="text-[11px] text-gray-600 leading-relaxed rounded-md bg-violet-50/80 border border-violet-100 px-2.5 py-2">
-        In this run, profile fields injected into `user_state` for downstream modules: {injectedCount}
-        {(userState.profile_values?.length ?? 0) > 0 ? ` · values ${userState.profile_values?.length ?? 0}` : ''}
-        {(userState.profile_priorities?.length ?? 0) > 0 ? ` · priorities ${userState.profile_priorities?.length ?? 0}` : ''}
-        {(userState.profile_constraints?.length ?? 0) > 0 ? ` · constraints ${userState.profile_constraints?.length ?? 0}` : ''}
+      <div className="rounded-md border border-violet-100 bg-violet-50/70 px-2 py-1.5 text-[10px] leading-snug text-gray-600">
+        Injected fields this run: <span className="font-semibold text-gray-800">{injectedCount}</span>
+        {(userState.profile_values?.length ?? 0) > 0 ? ` · v${userState.profile_values?.length ?? 0}` : ''}
+        {(userState.profile_priorities?.length ?? 0) > 0 ? ` · p${userState.profile_priorities?.length ?? 0}` : ''}
+        {(userState.profile_constraints?.length ?? 0) > 0 ? ` · c${userState.profile_constraints?.length ?? 0}` : ''}
       </div>
 
-      <div className="grid md:grid-cols-2 gap-3">
+      <div className="grid gap-1.5 sm:grid-cols-2 md:gap-2">
         <StringList title="Values" items={p.values ?? []} />
         <StringList title="Recurring themes" items={p.recurring_themes ?? []} />
         <StringList title="Current goals" items={p.current_goals ?? []} />
         <StringList title="Known constraints" items={p.known_constraints ?? []} />
       </div>
 
-      <p className="text-[10px] text-gray-500">
-        Source: {tier3Profile.source || 'unknown'}{p.last_updated ? ` · last updated ${p.last_updated}` : ''}
+      <p className="text-[9px] text-gray-500 md:text-[10px]">
+        {tier3Profile.source || 'unknown'}
+        {p.last_updated ? ` · ${p.last_updated}` : ''}
       </p>
     </section>
   );
@@ -625,13 +677,9 @@ function Tier3ProfileBlock({
 
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-white/90 border border-gray-200/80 px-2.5 py-2">
-      <p className="text-[10px] text-gray-500 uppercase" style={{ fontWeight: 600 }}>
-        {label}
-      </p>
-      <p className="text-xs text-gray-900 truncate" style={{ fontWeight: 700 }}>
-        {value}
-      </p>
+    <div className="rounded-md border border-gray-200/80 bg-white/90 px-2 py-1.5 md:rounded-lg md:px-2.5">
+      <p className="text-[9px] font-semibold uppercase tracking-wide text-gray-500 md:text-[10px]">{label}</p>
+      <p className="truncate text-[11px] font-bold text-gray-900 md:text-xs">{value}</p>
     </div>
   );
 }
@@ -639,21 +687,17 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
 function StringList({ title, items }: { title: string; items: string[] }) {
   if (!items.length) {
     return (
-      <div className="rounded-lg bg-white/80 border border-gray-200/80 px-2.5 py-2">
-        <p className="text-[11px] text-gray-500 mb-1" style={{ fontWeight: 700 }}>
-          {title}
-        </p>
-        <p className="text-xs text-gray-400">No signal yet.</p>
+      <div className="rounded-md border border-gray-200/80 bg-white/80 px-2 py-1.5 md:rounded-lg md:px-2.5">
+        <p className="text-[10px] font-bold text-gray-500">{title}</p>
+        <p className="text-[11px] text-gray-400">—</p>
       </div>
     );
   }
   return (
-    <div className="rounded-lg bg-white/80 border border-gray-200/80 px-2.5 py-2">
-      <p className="text-[11px] text-gray-500 mb-1" style={{ fontWeight: 700 }}>
-        {title}
-      </p>
-      <ul className="list-disc ml-4 text-xs text-gray-800 space-y-0.5">
-        {items.slice(0, 5).map((x, i) => (
+    <div className="rounded-md border border-gray-200/80 bg-white/80 px-2 py-1.5 md:rounded-lg md:px-2.5">
+      <p className="text-[10px] font-bold text-gray-500">{title}</p>
+      <ul className="ml-3 list-disc space-y-0 text-[11px] leading-snug text-gray-800 md:text-xs">
+        {items.slice(0, 4).map((x, i) => (
           <li key={`${title}-${i}`}>{x}</li>
         ))}
       </ul>
@@ -836,229 +880,6 @@ function EvidenceBlock({
       <SnippetList variant="baseline" title="Base rates" items={rates} />
       <SnippetList variant="recent" title="Recent events" items={recent} />
     </div>
-  );
-}
-
-function GraphInfluenceVisualizer({ graph }: { graph?: TraceGraphInfluence }) {
-  const nodes = useMemo(
-    () =>
-      (graph?.top_nodes ?? [])
-        .filter((x) => typeof x?.label === 'string' && typeof x?.score === 'number')
-        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-        .slice(0, 12),
-    [graph?.top_nodes],
-  );
-  const [open, setOpen] = useState(false);
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const selected = nodes[selectedIdx] ?? nodes[0];
-
-  const cx = 150;
-  const cy = 130;
-  const orbit = 84;
-  const placed = nodes.map((n, i) => {
-    const a = (-Math.PI / 2) + (2 * Math.PI * i) / Math.max(1, nodes.length);
-    const x = cx + orbit * Math.cos(a);
-    const y = cy + orbit * Math.sin(a);
-    const score = Math.max(0.01, Math.min(1, n.score ?? 0));
-    const r = 8 + score * 14;
-    return { ...n, x, y, r, i, score };
-  });
-
-  const topSummary = nodes.slice(0, 3);
-  const empty = nodes.length === 0;
-  const prettyLabel = (raw?: string): string => {
-    const src = (raw || '').trim();
-    if (!src) return 'Unknown node';
-    const [prefix, restRaw] = src.includes(':') ? src.split(':', 2) : ['', src];
-    const rest = (restRaw || src).replace(/\|/g, ' ').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!prefix) return rest;
-    const p = prefix.trim();
-    const title = p.slice(0, 1).toUpperCase() + p.slice(1);
-    return `${title}: ${rest}`;
-  };
-  const shortLabel = (raw?: string): string => {
-    const full = prettyLabel(raw);
-    return full.length > 30 ? `${full.slice(0, 27)}...` : full;
-  };
-
-  return (
-    <section className="rounded-2xl border border-indigo-200/85 bg-gradient-to-br from-indigo-50/75 via-white/92 to-purple-50/70 p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <h3 className="text-sm text-gray-900 flex items-center gap-2" style={{ fontWeight: 700 }}>
-            <Layers className="w-4 h-4 text-indigo-600" aria-hidden />
-            Graph influence map
-          </h3>
-          <p className="text-[11px] text-gray-600 mt-1">
-            Why memories surfaced for this decision ({graph?.algorithm || 'ppr_decay_v1'}).
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          disabled={empty}
-          className="px-3 py-1.5 rounded-full text-[11px] bg-indigo-600 text-white disabled:opacity-40"
-          style={{ fontWeight: 700 }}
-        >
-          Open interactive view
-        </button>
-      </div>
-
-      {empty ? (
-        <div className="rounded-xl border border-dashed border-indigo-300/80 bg-white/80 p-4">
-          <p className="text-sm text-gray-800" style={{ fontWeight: 700 }}>
-            No graph influence returned in this run yet.
-          </p>
-          <ul className="mt-2 text-xs text-gray-600 list-disc ml-4 space-y-1">
-            <li>Make sure backend `.env` has `GRAPH_ENABLED=true` and restart API.</li>
-            <li>Run one new decision so graph events are written.</li>
-            <li>Record one outcome to strengthen event-to-outcome links.</li>
-          </ul>
-        </div>
-      ) : (
-        <div className="rounded-xl border border-indigo-100/90 bg-white/85 p-3">
-          <p className="text-[11px] text-gray-600 mb-2">
-            Top influencers (click <span style={{ fontWeight: 700 }}>Open interactive view</span> for network details)
-          </p>
-          <ul className="space-y-2">
-            {topSummary.map((n, i) => (
-              <li key={`${n.node_id ?? n.label ?? i}-${i}`} className="rounded-lg border border-indigo-100 bg-white px-2.5 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-gray-900 truncate" style={{ fontWeight: 700 }}>
-                    {i + 1}. {n.label}
-                  </span>
-                  <span className="text-[11px] font-mono text-indigo-900">{n.score?.toFixed(2)}</span>
-                </div>
-                <p className="text-[10px] text-gray-600 mt-1">
-                  {(n.layer || 'concept')} · {(n.node_type || 'unknown')}
-                </p>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {open && !empty && (
-        <div className="fixed inset-0 z-[120] bg-black/45 flex items-center justify-center p-4">
-          <div className="w-[min(960px,96vw)] max-h-[90vh] overflow-auto rounded-2xl bg-white border border-indigo-100 shadow-2xl">
-            <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-indigo-100 px-4 py-3 flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-900" style={{ fontWeight: 700 }}>
-                  Graph influence details
-                </p>
-                <p className="text-[11px] text-gray-600">
-                  Click a circle node to inspect why it influenced this decision.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="px-3 py-1.5 rounded-full border border-gray-200 text-xs text-gray-700 hover:bg-gray-50"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="p-4 grid lg:grid-cols-[420px,1fr] gap-4">
-              <div className="rounded-xl border border-indigo-100/90 bg-indigo-50/50 p-3">
-                <svg viewBox="0 0 300 260" className="w-full h-auto">
-                  <defs>
-                    <radialGradient id="nowGlowCompact" cx="50%" cy="50%" r="60%">
-                      <stop offset="0%" stopColor="#6366f1" stopOpacity="0.35" />
-                      <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
-                    </radialGradient>
-                  </defs>
-                  <circle cx={cx} cy={cy} r={92} fill="none" stroke="#c7d2fe" strokeDasharray="4 4" />
-                  <circle cx={cx} cy={cy} r={34} fill="url(#nowGlowCompact)" />
-                  {placed.map((n, i) => (
-                    <g key={`${n.node_id ?? n.label ?? i}-${i}`}>
-                      <line
-                        x1={cx}
-                        y1={cy}
-                        x2={n.x}
-                        y2={n.y}
-                        stroke={selectedIdx === i ? '#4f46e5' : '#a5b4fc'}
-                        strokeOpacity={0.35 + n.score * 0.45}
-                        strokeWidth={selectedIdx === i ? 2.2 : 1.1 + n.score * 1.6}
-                      />
-                      <circle
-                        cx={n.x}
-                        cy={n.y}
-                        r={n.r}
-                        fill={n.layer === 'event' ? '#38bdf8' : '#818cf8'}
-                        fillOpacity={selectedIdx === i ? 0.95 : 0.8}
-                        stroke={selectedIdx === i ? '#312e81' : '#ffffff'}
-                        strokeWidth={selectedIdx === i ? 2 : 1.1}
-                        className="cursor-pointer transition-all duration-200"
-                        onClick={() => setSelectedIdx(i)}
-                      >
-                        <title>{prettyLabel(n.label)} ({n.score.toFixed(2)})</title>
-                      </circle>
-                      <text
-                        x={n.x}
-                        y={n.y + 3}
-                        textAnchor="middle"
-                        fontSize="8"
-                        fill="white"
-                        style={{ fontWeight: 800, pointerEvents: 'none' }}
-                      >
-                        {(n.score * 100).toFixed(0)}
-                      </text>
-                    </g>
-                  ))}
-                  <circle cx={cx} cy={cy} r={15} fill="#312e81" />
-                  <text x={cx} y={cy + 3.5} textAnchor="middle" fontSize="8" fill="#fff" style={{ fontWeight: 800 }}>
-                    NOW
-                  </text>
-                </svg>
-                <p className="mt-2 text-[11px] text-gray-600">
-                  Circle size = influence score. Click a circle to inspect details.
-                </p>
-              </div>
-
-              <div className="space-y-2.5">
-                <div className="rounded-xl border border-indigo-100 bg-white/90 px-3 py-2.5">
-                  <p className="text-[10px] uppercase text-indigo-900 mb-1" style={{ fontWeight: 800 }}>
-                    Selected node
-                  </p>
-                  <p className="text-sm text-gray-900" style={{ fontWeight: 700 }}>
-                    {prettyLabel(selected?.label)}
-                  </p>
-                  <p className="text-[11px] text-gray-600 mt-0.5">
-                    {(selected?.layer || 'concept')} · {(selected?.node_type || 'unknown')} · influence {(selected?.score ?? 0).toFixed(2)}
-                  </p>
-                  {(selected?.why || '').trim().length > 0 && (
-                    <p className="text-xs text-gray-700 mt-2 leading-relaxed">{selected?.why}</p>
-                  )}
-                </div>
-
-                <div className="rounded-xl border border-indigo-100 bg-white/90 px-3 py-2.5">
-                  <p className="text-[10px] uppercase text-gray-600 mb-1" style={{ fontWeight: 700 }}>
-                    Top influencers
-                  </p>
-                  <div className="space-y-1 text-xs text-gray-700">
-                    {placed.map((n, i) => (
-                      <button
-                        key={`${n.node_id ?? n.label ?? i}-legend-${i}`}
-                        type="button"
-                        onClick={() => setSelectedIdx(i)}
-                        className={cn(
-                          'w-full text-left rounded-md px-2 py-1.5 border',
-                          selectedIdx === i ? 'border-indigo-300 bg-indigo-50' : 'border-gray-100 bg-white',
-                        )}
-                      >
-                        <span style={{ fontWeight: 700 }}>{i + 1}. {shortLabel(n.label)}</span>
-                        <span className="ml-2 text-gray-500">({n.score.toFixed(2)})</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </section>
   );
 }
 

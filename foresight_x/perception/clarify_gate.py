@@ -1,47 +1,38 @@
-"""Optional pre-run clarification: multiple-choice questions when input is too vague."""
+"""Pre-run clarification gate — deterministic fast path + optional timed LLM."""
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol
-
-from pydantic import BaseModel, Field
+import time
+from typing import Any
 
 from foresight_x.schemas import UserProfile
-from foresight_x.structured_predict import structured_predict
 
+from foresight_x.perception.clarify_types import (
+    ClarifyGateResult,
+    ClarifyOption,
+    ClarifyQuestion,
+    SkipReason,
+    StructuredPredictLLM,
+)
+from foresight_x.perception.clarification_engine import run_personalized_clarify_gate_timed
+from foresight_x.perception.clarification_gate import (
+    ClarificationFastResult,
+    build_fast_clarify_questions,
+    build_timeout_fallback_questions,
+    fast_gate_timing_ms,
+    should_show_clarification_fast,
+)
+from foresight_x.perception.personalized_clarify import heuristic_domain
 
-class StructuredPredictLLM(Protocol):
-    def structured_predict(self, output_cls: Any, prompt: str, **kwargs: Any) -> Any:
-        ...
-
-
-class ClarifyOption(BaseModel):
-    value: str = Field(description="Stable id for the answer, e.g. budget_tight")
-    label: str = Field(description="Short human-readable choice")
-
-
-class ClarifyQuestion(BaseModel):
-    id: str = Field(description="snake_case id, e.g. budget_sensitivity")
-    prompt: str = Field(description="One sentence question")
-    options: list[ClarifyOption] = Field(min_length=2, max_length=6)
-
-
-SkipReason = Literal["none", "no_input", "no_llm", "not_needed", "no_questions", "error"]
-
-
-class ClarifyGateResult(BaseModel):
-    need_clarification: bool = Field(
-        description="True only if the message is too vague to analyze without guessing priorities."
-    )
-    questions: list[ClarifyQuestion] = Field(default_factory=list)
-    note: str = Field(default="", description="Optional hint for the UI")
-    skip_reason: SkipReason = Field(
-        default="none",
-        description=(
-            "When need_clarification is false: why the multiple-choice modal was not shown. "
-            "'not_needed' means the model judged the message specific enough."
-        ),
-    )
+__all__ = [
+    "ClarifyGateResult",
+    "ClarifyOption",
+    "ClarifyQuestion",
+    "SkipReason",
+    "StructuredPredictLLM",
+    "merge_clarification_answers",
+    "run_clarify_gate",
+]
 
 
 def merge_clarification_answers(raw: str, answers: dict[str, str] | None) -> str:
@@ -55,63 +46,147 @@ def merge_clarification_answers(raw: str, answers: dict[str, str] | None) -> str
     return "\n".join(lines)
 
 
+def _why_fast(fast: ClarificationFastResult) -> str:
+    return (
+        "This is a quick, domain-specific check so we don't guess what matters most — "
+        f"no extra model round-trip ({fast.domain})."
+    )
+
+
 def run_clarify_gate(
     raw: str,
     llm: StructuredPredictLLM | None,
     *,
     profile: UserProfile | None = None,
+    recent_messages: list[dict[str, str]] | None = None,
+    thread_clarification_events: list[dict[str, Any]] | None = None,
+    purpose: str | None = None,
+    thread_metadata: dict[str, Any] | None = None,
 ) -> ClarifyGateResult:
-    """Ask the LLM whether we need 1–2 multiple-choice questions before the main pipeline."""
+    """Fast gate first; optional smart clarification with strict timeout; deterministic fallback."""
     text = raw.strip()
+    events = list(thread_clarification_events or [])
+    tm: dict[str, Any]
+    if thread_metadata is not None:
+        tm = thread_metadata
+    else:
+        tm = {"messages": [], "clarification_events": events, "clarification_state": {}}
+
     if not text:
-        return ClarifyGateResult(need_clarification=False, skip_reason="no_input")
-    if llm is None:
-        return ClarifyGateResult(need_clarification=False, skip_reason="no_llm")
+        return ClarifyGateResult(
+            need_clarification=False,
+            skip_reason="no_input",
+            clarification_meta={
+                "clarification_fast_gate_ms": 0.0,
+                "clarification_used_llm": False,
+                "clarification_shown": False,
+                "clarification_suppressed_reason": "empty_chat",
+            },
+        )
 
-    prof_bits = ""
-    if profile:
-        pp = profile.profile_channel_priority_texts()
-        if pp:
-            prof_bits += f"User-authored priorities (authoritative): {pp}\n"
-        clar = profile.clarification_priority_texts()
-        if clar:
-            prof_bits += f"Saved clarification choices: {clar}\n"
-        if profile.memory_facts:
-            from foresight_x.profile.memory_structured import active_memory_facts, format_memory_fact_prompt_line
-
-            prof_bits += "Structured memory facts: " + " | ".join(
-                format_memory_fact_prompt_line(f) for f in active_memory_facts(list(profile.memory_facts))[:16]
-            ) + "\n"
-        if profile.inferred_priorities:
-            prof_bits += (
-                f"Legacy system-inferred lines (lower weight): {profile.inferred_priorities}\n"
-            )
-        if profile.constraints:
-            prof_bits += f"Known constraints: {profile.constraints}\n"
-
-    prompt = (
-        "You help a decision agent decide if the user's message needs extra multiple-choice input.\n"
-        "Set need_clarification=true ONLY when:\n"
-        "- the decision is critically underspecified (e.g. trade-offs depend on budget, timeline, or risk tolerance not mentioned), AND\n"
-        "- those dimensions cannot be inferred from the text or from the profile snippet below.\n"
-        "If the message is short but clear enough (e.g. pick A vs B), need_clarification=false.\n"
-        "When need_clarification=true, add at most 2 questions with 2–4 options each. "
-        "Questions must not repeat facts already in the profile. "
-        "Do NOT ask about things already stated in the user message.\n\n"
-        f"{prof_bits}\nUSER MESSAGE:\n---\n{text}\n---\n"
+    t_fast_start = time.perf_counter()
+    fast = should_show_clarification_fast(
+        text,
+        list(recent_messages or []),
+        tm,
+        None,
+        interaction_purpose=purpose,
     )
-    try:
-        out = structured_predict(llm, ClarifyGateResult, prompt)
-        res = out if isinstance(out, ClarifyGateResult) else ClarifyGateResult.model_validate(out)
-        if not res.need_clarification:
-            return ClarifyGateResult(need_clarification=False, skip_reason="not_needed")
-        if not res.questions:
-            return ClarifyGateResult(need_clarification=False, skip_reason="no_questions")
+    timing: dict[str, Any] = {
+        "clarification_fast_gate_ms": fast_gate_timing_ms(t_fast_start),
+        "clarification_used_llm": False,
+        "clarification_shown": False,
+        "clarification_suppressed_reason": "",
+    }
+
+    if not fast.should_ask:
+        timing["clarification_suppressed_reason"] = fast.reason
+        return ClarifyGateResult(
+            need_clarification=False,
+            skip_reason="not_needed",
+            clarification_meta=timing,
+        )
+
+    if fast.fast_question and not fast.requires_llm:
+        qs = build_fast_clarify_questions(fast)
+        if not qs:
+            timing["clarification_suppressed_reason"] = "fast_pack_empty"
+            return ClarifyGateResult(
+                need_clarification=False,
+                skip_reason="no_questions",
+                clarification_meta=timing,
+            )
+        timing["clarification_shown"] = True
+        timing["clarification_suppressed_reason"] = "none"
+        meta = {
+            "domain": fast.domain,
+            "target_dimension": fast.target_dimension,
+            "why_this_question": _why_fast(fast),
+            "fast_path": True,
+            **timing,
+        }
         return ClarifyGateResult(
             need_clarification=True,
-            questions=res.questions[:2],
-            note=res.note[:500] if res.note else "",
+            questions=qs,
+            clarification_meta=meta,
             skip_reason="none",
         )
-    except Exception:
-        return ClarifyGateResult(need_clarification=False, skip_reason="error")
+
+    # Smart path — bounded LLM time; if unavailable or timeout, fall back to domain template.
+    llm_out, llm_ms = run_personalized_clarify_gate_timed(
+        text,
+        llm,
+        timeout_s=1.5,
+        profile=profile,
+        recent_messages=recent_messages,
+        thread_clarification_events=events,
+        interaction_purpose=purpose,
+    )
+    timing["clarification_llm_ms"] = llm_ms
+
+    if llm_out is not None:
+        merged_meta = dict(llm_out.clarification_meta or {})
+        merged_meta.update(timing)
+        if llm_out.need_clarification and llm_out.questions:
+            merged_meta["clarification_used_llm"] = True
+            merged_meta["clarification_shown"] = True
+            merged_meta["clarification_suppressed_reason"] = "none"
+            return ClarifyGateResult(
+                need_clarification=True,
+                questions=llm_out.questions,
+                note=llm_out.note,
+                skip_reason="none",
+                clarification_meta=merged_meta,
+            )
+        merged_meta["clarification_used_llm"] = bool(llm_ms is not None and llm is not None)
+        merged_meta["clarification_shown"] = False
+        merged_meta.setdefault(
+            "clarification_suppressed_reason",
+            str(llm_out.skip_reason or "not_needed"),
+        )
+        return ClarifyGateResult(
+            need_clarification=False,
+            skip_reason=llm_out.skip_reason,
+            clarification_meta=merged_meta,
+        )
+
+    dom = heuristic_domain(text)
+    fb = build_timeout_fallback_questions(dom)
+    timing["clarification_shown"] = True
+    timing["clarification_suppressed_reason"] = "llm_timeout_fallback" if llm is not None else "no_llm_fallback"
+    meta = {
+        "domain": dom,
+        "why_this_question": (
+            "Smart clarification timed out or wasn't available — using a quick domain fallback "
+            "so we can still proceed without blocking."
+        ),
+        "fast_path": True,
+        "fallback_after_llm": llm is not None,
+        **timing,
+    }
+    return ClarifyGateResult(
+        need_clarification=True,
+        questions=fb,
+        clarification_meta=meta,
+        skip_reason="none",
+    )

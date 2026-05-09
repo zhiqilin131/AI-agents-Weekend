@@ -41,6 +41,26 @@ MemoryFactSource = Literal["shadow", "personalize", "clarification", "user", "im
 
 MemoryFactStatus = Literal["active", "deprecated"]
 
+TemporaryContextKind = Literal[
+    "joke",
+    "temporary_name",
+    "roleplay_setup",
+    "current_topic",
+    "task_context",
+    "unresolved_question",
+]
+
+
+class TemporaryContextItem(BaseModel):
+    """Ephemeral chat-thread notes — never treated as durable profile identity."""
+
+    id: str = Field(default="", description="UUID when persisted on thread JSON.")
+    text: str = Field(min_length=1)
+    type: TemporaryContextKind = "current_topic"
+    created_at: str = Field(default="", description="ISO-8601 UTC when stored.")
+    expires_scope: Literal["thread"] = "thread"
+    should_not_profile: bool = True
+
 
 class ProfileMemoryFact(BaseModel):
     """Structured memory: legacy flat ``text`` and/or typed triple + time/version semantics."""
@@ -423,6 +443,54 @@ class Reflection(BaseModel):
     self_improvement_signal: str
 
 
+EvidenceRefType = Literal["profile", "past_decision", "current_constraint", "memory", "user_statement"]
+
+
+class EvidenceReference(BaseModel):
+    """Lightweight provenance chip for UI — grounded in profile, memory, or stated context."""
+
+    type: EvidenceRefType
+    id: str | None = None
+    text: str = Field(min_length=1)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class FuturePath(BaseModel):
+    """One narrative branch for the primary report surface (expected / friction / pivot)."""
+
+    path_type: Literal["expected", "friction", "pivot"]
+    title: str
+    summary: str
+    trigger_conditions: list[str]
+    watch_signals: list[str]
+    recommended_action: str
+    based_on: list[EvidenceReference]
+
+
+class PersonalizedFitReason(BaseModel):
+    text: str
+    based_on: list[EvidenceReference]
+
+
+class NextActionSurface(BaseModel):
+    text: str
+    duration_estimate: str
+    deadline: str | None = None
+
+
+class ReportSurface(BaseModel):
+    """Concise, user-facing summary layered on top of the full DecisionTrace."""
+
+    grounding_note: str = Field(
+        ...,
+        description="Explains whether futures lean on personal history vs current context alone.",
+    )
+    personalized_reasons: list[PersonalizedFitReason] = Field(default_factory=list)
+    future_paths: list[FuturePath] = Field(default_factory=list)
+    key_assumptions: list[str] = Field(default_factory=list)
+    primary_next_action: NextActionSurface
+
+
 class DecisionTrace(BaseModel):
     decision_id: str
     timestamp: str
@@ -439,6 +507,10 @@ class DecisionTrace(BaseModel):
     evaluations: list[OptionEvaluation]
     recommendation: Recommendation
     reflection: Reflection
+    report_surface: ReportSurface | None = Field(
+        default=None,
+        description="UI-focused narrative; omitted on legacy saved traces.",
+    )
 
 
 class DecisionOutcome(BaseModel):

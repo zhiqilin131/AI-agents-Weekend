@@ -6,6 +6,9 @@ import logging
 import os
 import re
 import threading
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -19,6 +22,17 @@ from foresight_x.profile.merge import append_profile_memory_records
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import MemoryFactCategory, ProfileMemoryFact
 from foresight_x.shadow.decision_context import build_shadow_decision_context_block
+from foresight_x.shadow.memory_durability import (
+    MemoryDurabilityResult,
+    classify_memory_durability,
+    fact_looks_like_identity_name,
+    should_confirm_identity_overwrite,
+)
+from foresight_x.shadow.thread_context import (
+    format_recent_conversation_section,
+    get_recent_thread_context,
+    is_local_context_question,
+)
 from foresight_x.shadow.store import ShadowSelfState, load_shadow_self, merge_observation, save_shadow_self
 from foresight_x.structured_predict import structured_predict
 
@@ -125,6 +139,19 @@ class ShadowMemoryFactDraft(BaseModel):
     )
 
 
+@dataclass
+class ShadowTurnOutput:
+    """Structured result from ``run_shadow_turn`` (replaces legacy 5-tuple unpack)."""
+
+    reply: str
+    suggest_decision_navigation: bool
+    state: ShadowSelfState
+    profile_record_texts: list[str] | None
+    used_memory_facts: list[str]
+    thread_only_items: list[dict[str, Any]] = field(default_factory=list)
+    memory_confirmation_question: str | None = None
+
+
 class ShadowChatTurn(BaseModel):
     reply_to_user: str = Field(
         description=(
@@ -143,23 +170,59 @@ class ShadowChatTurn(BaseModel):
     memory_facts: list[ShadowMemoryFactDraft] = Field(
         default_factory=list,
         description=(
-            "0–12 concrete memory facts to store (category + short text), one distinct proposition per item. "
-            "Examples: identity — 'Currently identifies as Republican'; views — 'Supports tighter immigration policy'. "
-            "Skip if nothing new and concrete; never store vague rewrites of their message."
+            "0–6 concrete profile rows per turn when the user shares new autobiographical facts (what they did, "
+            "where they were, self-image they assert, named people/situations they treat as real, goals, constraints) "
+            "or explicit remember / real-name corrections. Downstream code strips jokes, hypotheticals, roleplay, "
+            "and sensitive facts unless the user asked to remember — propose serious candidates anyway. "
+            "Skip duplicates of facts already in stable memory in the prompt; skip empty meta-summaries."
         ),
     )
 
 
-def _format_transcript(messages: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    for m in messages:
-        role = str(m.get("role", "")).strip()
-        content = str(m.get("content", "")).strip()
-        if role == "system" or not content:
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _thread_ctx_type(cls: MemoryDurabilityResult, fact: ProfileMemoryFact) -> str:
+    if cls.is_roleplay:
+        return "roleplay_setup"
+    if cls.is_joke:
+        return "joke"
+    if fact_looks_like_identity_name(fact):
+        return "temporary_name"
+    return "current_topic"
+
+
+def _coerce_atomic_claims_to_memory_drafts(
+    claims: list[str],
+    *,
+    max_drafts: int = 4,
+    min_len: int = 12,
+) -> list[ShadowMemoryFactDraft]:
+    """When the main shadow model omits memory_facts, reuse atomic-claim extraction as a persistence fallback."""
+    out: list[ShadowMemoryFactDraft] = []
+    seen: set[str] = set()
+    for c in claims:
+        t = (c or "").strip()
+        if len(t) < min_len:
             continue
-        label = "You" if role == "user" else "Shadow"
-        lines.append(f"{label}: {content}")
-    return "\n".join(lines)
+        k = t.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(
+            ShadowMemoryFactDraft(
+                category="behavior",
+                text=t[:280],
+                subject_ref="user",
+                predicate="",
+                object_value="",
+                evidence=t[:220],
+            )
+        )
+        if len(out) >= max_drafts:
+            break
+    return out
 
 
 def _coerce_category(raw: str) -> MemoryFactCategory:
@@ -252,49 +315,59 @@ def _ground_reply_with_memory_preferences(
 SHADOW_INSTRUCTIONS = """You are not an AI product, therapist, or employee. You are the user's shadow — the inner
 dialogue that uses their own vocabulary and remembers what they actually said.
 
+CONTEXT PRIORITY (critical):
+- If the user asks about THIS chat ("what did I just say", "what joke", "earlier here", "刚才", "前面说的"),
+  answer from [Recent conversation in this thread] and [Thread working summary] FIRST.
+- [Stable long-term user memory] is only for durable preferences/goals/patterns across chats — do NOT let it override
+  explicit recent-thread content, jokes, or temporary names from this conversation.
+- Do NOT treat jokes, roleplay, hypotheticals, or thread-only notes as real identity — unless the user explicitly asks
+  you to remember them long-term or clearly states a real correction ("my real name is…").
+
 Speak so it feels like them talking to themselves in a mirror: honest, specific, not performative.
 
 FAITHFUL LANGUAGE (strict):
 - Direct address (you). Stay on their topic and concrete words.
 - Do NOT write third-person notes ("User is…", "They seem to be navigating…").
 - Do NOT replace specifics with vague psychology ("themes", "journey", "space", "processing").
-- Read and USE the structured memory below; reference it when relevant so this feels continuous, not amnesic.
-- Read and USE the Foresight decision context below when they refer to people, situations, or past runs — that is the
-  same Decision-mode history, not a separate "profile-only" world.
-- Read and USE the profile block below (priorities/constraints/values/about_me). If they ask "what do you remember"
-  or ask about priorities, answer from stored items first before inferring.
-- If a stored memory clearly answers a direct either-or question, state that remembered preference first (explicitly),
-  then add nuance if needed. Do NOT hedge into neutrality when memory is explicit.
+- Read stable structured memory when relevant for continuity across sessions — but never contradict recent explicit chat.
+- Read Foresight decision context when they refer to saved runs or external stakes.
+- Read profile fields when they ask what is saved about priorities — unless they clearly mean "just now in chat".
+- If durable stored memory answers a direct either-or preference question, say that preference explicitly, then nuance.
 - Short paragraphs. No numbered homework or life plans. No picking their decision for them.
 
-ATOMIC CLAIMS (machine decomposition of the user's LATEST message only; language-agnostic, one proposition per line):
+--- ATOMIC CLAIMS (latest user message only; one proposition per line) ---
 {atomic_claims_block}
 
-MEMORY FACTS (structured output):
-- When the atomic-claims list is non-empty, emit one `memory_facts` item per claim that is NEW relative to structured memory
-  on file and worth persisting (identity, views, behavior, goals, constraints). Do not merge two claims into one row.
-- For each item, set `subject_ref` (usually "user"), `predicate` (snake_case, e.g. studies_at, works_at, friend_of, prefers),
-  and `object_value` (the school, person, or literal). These fields power typed storage and time-aware updates; leave them
-  empty only if you cannot name a relation (then `text` alone is used as a legacy flat fact).
-- `text` must remain a clear one-line fact; `evidence` should quote a few words from the user's message when possible.
-- When the atomic-claims list is empty, fall back to 0–12 items only if the latest message still states NEW concrete facts.
-- FORBIDDEN in memory_facts.text: meta-summaries with no content ("significant shift in identity") — either write the
-  actual fact ("Now identifies as Republican") or omit.
+MEMORY FACTS (structured JSON output — LONG-TERM PROFILE ONLY):
+- Emit 0–6 rows when the user states **concrete autobiographical facts** they present as true: routines or what they did,
+  stable preferences, self-descriptions (traits, self-view), ongoing situations with **named** people they treat as real,
+  goals, or constraints. A separate durability step drops jokes, hypotheticals, roleplay, and sensitive data unless they
+  asked to be remembered — you should still propose serious rows here.
+- ALSO emit when they explicitly say "remember that…" / real-name corrections (same as before).
+- Skip rows that **duplicate** a fact already listed in [Stable long-term user memory] above (same meaning).
+- Omit vague paraphrases with no new fact ("user is reflecting") — omit instead.
+- Typed triples preferred: subject_ref, predicate (snake_case), object_value; evidence quotes the user when possible.
 
-Structured memory already on file (may be empty):
+--- Stable long-term user memory (structured facts on file; may be empty) ---
 {memory_block}
 
-Profile fields on file (may be empty):
+--- Profile form fields (may be empty) ---
 {profile_block}
 
-Past Foresight decision runs + related memory (may be minimal if none saved):
+--- Thread working summary (LOCAL — includes playful/temporary context; not durable profile) ---
+{working_summary_block}
+
+--- Thread-only context notes (LOCAL — do not store as profile identity) ---
+{temporary_context_block}
+
+--- Foresight runs + indexed recall (may be abbreviated this turn) ---
 {decision_context_block}
 
-Running notes from past shadow turns (may be empty):
+--- Running shadow observations (cross-thread chat notes; may be empty) ---
 {shadow_block}
 
-Conversation so far:
-{transcript}
+--- Recent conversation in this thread ---
+{recent_conversation_block}
 
 Return JSON: reply_to_user, suggest_decision_navigation, memory_facts."""
 
@@ -306,8 +379,10 @@ def run_shadow_turn(
     thread_id: str | None = None,
     retrieval_mode: str = "chat_fast",
     report_revision_decision_id: str | None = None,
-) -> tuple[str, bool, ShadowSelfState, list[str] | None, list[str]]:
-    """Return (assistant_reply, suggest_decision_navigation, updated_state, recorded_fact_texts_or_none, used_memory_facts)."""
+    working_summary: str = "",
+    temporary_context_prompt: str = "",
+) -> ShadowTurnOutput:
+    """Run one shadow chat turn with separated thread vs profile memory pathways."""
     s = settings or load_settings()
     if not messages:
         raise ValueError("messages must be non-empty")
@@ -322,7 +397,12 @@ def run_shadow_turn(
 
     state = load_shadow_self(settings=s)
     shadow_block = state.narrative.strip() or "(none yet — first turns.)"
-    transcript = _format_transcript(messages)
+
+    recent_ctx = get_recent_thread_context(messages, max_messages=18)
+    recent_conversation_block = format_recent_conversation_section(recent_ctx)
+    classifier_msgs: list[dict[str, Any]] = [
+        {"role": m.get("role"), "content": m.get("content")} for m in recent_ctx
+    ]
 
     prof = load_user_profile(settings=s)
     mem_active = active_memory_facts(list(prof.memory_facts))
@@ -333,13 +413,18 @@ def run_shadow_turn(
     profile_block = _format_profile_block(prof)
 
     last_user_text = str(last.get("content", "") or "").strip()
+    prioritize_local = is_local_context_question(last_user_text)
     decision_context_block = build_shadow_decision_context_block(
         settings=s,
         profile=prof,
         last_user_message=last_user_text,
         thread_id=thread_id,
         retrieval_mode=retrieval_mode,
+        minimal_long_term_context=prioritize_local,
     )
+
+    working_summary_block = (working_summary or "").strip() or "(none yet — start of thread.)"
+    temporary_context_block = (temporary_context_prompt or "").strip() or "(none)"
 
     llm_claims = build_openai_llm(s, temperature=0.12)
     atomic_claims = run_atomic_claims(last_user_text, llm_claims, max_claims=12)
@@ -350,7 +435,9 @@ def run_shadow_turn(
         profile_block=profile_block,
         decision_context_block=decision_context_block,
         shadow_block=shadow_block,
-        transcript=transcript,
+        working_summary_block=working_summary_block,
+        temporary_context_block=temporary_context_block,
+        recent_conversation_block=recent_conversation_block,
         atomic_claims_block=atomic_claims_block,
     )
     rid = (report_revision_decision_id or "").strip()
@@ -367,8 +454,12 @@ def run_shadow_turn(
     flag = bool(turn.suggest_decision_navigation)
     memory_used: list[str] = []
 
-    records: list[ProfileMemoryFact] = []
-    for d in turn.memory_facts:
+    memory_drafts: list[ShadowMemoryFactDraft] = list(turn.memory_facts)
+    if not memory_drafts and atomic_claims:
+        memory_drafts = _coerce_atomic_claims_to_memory_drafts(atomic_claims)
+
+    draft_records: list[ProfileMemoryFact] = []
+    for d in memory_drafts:
         cat = _coerce_category(d.category)
         subj = (d.subject_ref or "user").strip() or "user"
         pred = (d.predicate or "").strip()[:200]
@@ -379,7 +470,7 @@ def run_shadow_turn(
                 continue
             if len(txt) > 280:
                 txt = txt[:277] + "…"
-            records.append(
+            draft_records.append(
                 ProfileMemoryFact(
                     id="",
                     category=cat,
@@ -395,7 +486,7 @@ def run_shadow_turn(
             txt = txt[:277] + "…"
         if not txt:
             txt = render_triple_line(subj, pred, obj)[:500]
-        records.append(
+        draft_records.append(
             ProfileMemoryFact(
                 id="",
                 category=cat,
@@ -409,13 +500,70 @@ def run_shadow_turn(
             )
         )
 
-    recorded: list[str] | None = None
-    if records:
-        combined = " · ".join(r.text for r in records)
-        recorded = [r.text for r in records]
-        # Grounding uses facts already on disk plus this turn's new facts (persist may still be in flight).
+    profile_records: list[ProfileMemoryFact] = []
+    thread_only_items: list[dict[str, Any]] = []
+    memory_confirmation_question: str | None = None
+
+    for rec in draft_records:
+        cls = classify_memory_durability(
+            last_user_text,
+            classifier_msgs,
+            rec.text,
+            category_hint=rec.category,
+            predicate_hint=rec.predicate or "",
+        )
+        if cls.durability == "long_term_profile" and should_confirm_identity_overwrite(prof, rec, last_user_text):
+            cls = cls.model_copy(
+                update={
+                    "durability": "needs_confirmation",
+                    "reason": "Stored identity differs — confirm before overwriting.",
+                    "confidence": max(cls.confidence, 0.62),
+                }
+            )
+
+        if cls.durability == "needs_confirmation":
+            if memory_confirmation_question is None:
+                memory_confirmation_question = (
+                    f"You mentioned «{rec.text}». Should I remember that as a long-term fact, "
+                    "or keep it only in this chat?"
+                )
+            thread_only_items.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "text": rec.text[:900],
+                    "type": _thread_ctx_type(cls, rec),
+                    "created_at": _utc_now(),
+                    "expires_scope": "thread",
+                    "should_not_profile": True,
+                }
+            )
+            continue
+
+        if cls.durability == "long_term_profile":
+            profile_records.append(rec)
+            continue
+
+        if cls.durability == "thread_only":
+            thread_only_items.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "text": rec.text[:900],
+                    "type": _thread_ctx_type(cls, rec),
+                    "created_at": _utc_now(),
+                    "expires_scope": "thread",
+                    "should_not_profile": True,
+                }
+            )
+
+    if memory_confirmation_question:
+        reply = f"{reply.rstrip()}\n\n{memory_confirmation_question}"
+
+    recorded_profile: list[str] | None = [r.text for r in profile_records] if profile_records else None
+
+    if profile_records:
+        combined = " · ".join(r.text for r in profile_records)
         active_texts = [x.text for x in prof.memory_facts if x.status == "active"]
-        memory_fact_texts_for_grounding = active_texts + recorded
+        memory_fact_texts_for_grounding = active_texts + (recorded_profile or [])
         reply, used = _ground_reply_with_memory_preferences(
             reply,
             user_text=last_user_text,
@@ -423,11 +571,10 @@ def run_shadow_turn(
         )
         if used:
             memory_used.extend(used)
-        # Optimistic in-memory state for callers; disk update runs in background (unless sync env).
         state = merge_observation(state, combined)
         _schedule_shadow_memory_persist(
             s,
-            records,
+            profile_records,
             combined,
             last_user_text,
             reply,
@@ -450,4 +597,12 @@ def run_shadow_turn(
             except Exception:
                 pass
 
-    return reply, flag, state, recorded, memory_used
+    return ShadowTurnOutput(
+        reply=reply,
+        suggest_decision_navigation=flag,
+        state=state,
+        profile_record_texts=recorded_profile,
+        used_memory_facts=memory_used,
+        thread_only_items=thread_only_items,
+        memory_confirmation_question=memory_confirmation_question,
+    )

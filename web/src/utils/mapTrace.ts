@@ -3,6 +3,7 @@
  * Tolerates partial payloads during SSE streaming.
  */
 import type { DecisionReport } from '../app/model';
+import { deriveReportSurfaceFromTrace, parseReportSurface } from './reportSurfaceFromTrace';
 
 interface TraceUserState {
   raw_input?: string;
@@ -140,6 +141,10 @@ export function mapTraceToReport(trace: Record<string, unknown>): DecisionReport
   const showEnhanced =
     orig.length > 0 && enhancedForCompare.length > 0 && orig.trim() !== enhancedForCompare.trim();
 
+  const reportSurface =
+    parseReportSurface(trace.report_surface) ??
+    (chosenId ? deriveReportSurfaceFromTrace(trace) ?? undefined : undefined);
+
   return {
     originalInput: orig || undefined,
     enhancedInput: showEnhanced ? enhancedForCompare : undefined,
@@ -192,5 +197,6 @@ export function mapTraceToReport(trace: Record<string, unknown>): DecisionReport
       informationGaps: refl?.information_gaps?.slice(0, 10),
       selfImprovement: refl?.self_improvement_signal,
     },
+    reportSurface,
   };
 }

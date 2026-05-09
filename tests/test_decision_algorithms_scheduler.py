@@ -1,3 +1,6 @@
+from datetime import datetime
+
+import foresight_x.decision_algorithms.scheduler as scheduler_mod
 from foresight_x.decision_algorithms.scheduler import schedule_greedy_earliest_fit, schedule_with_ortools
 from foresight_x.decision_algorithms.schemas import CalendarEvent, ExecutionTask, SchedulerOptions
 
@@ -62,4 +65,59 @@ def test_unschedulable_task_returns_warning():
     out = schedule_greedy_earliest_fit(tasks, events, opts)
     assert out.unscheduled_tasks
     assert out.warnings
+
+
+def test_max_ai_blocks_per_day_spreads_placements(monkeypatch):
+    """Greedy scheduler must not place more than N new AI blocks on the same calendar day."""
+
+    class _FixedDateTime:
+        @staticmethod
+        def utcnow():
+            return datetime(2026, 5, 8, 12, 0, 0)
+
+        fromisoformat = staticmethod(datetime.fromisoformat)
+
+    monkeypatch.setattr(scheduler_mod, "datetime", _FixedDateTime)
+
+    tasks = [
+        ExecutionTask(id=f"t{i}", title=f"Task {i}", duration_minutes=60, priority="medium")
+        for i in range(6)
+    ]
+    opts = SchedulerOptions(
+        day_start_hour=9,
+        day_end_hour=22,
+        days=7,
+        slot_minutes=60,
+        max_ai_blocks_per_day=2,
+    )
+    out = schedule_greedy_earliest_fit(tasks, [], opts)
+    assert len(out.scheduled_events) == 6
+    from collections import Counter
+
+    by_day = Counter(ev.start[:10] for ev in out.scheduled_events)
+    assert max(by_day.values()) <= 2
+
+
+def test_allowed_weekdays_saturday_only(monkeypatch):
+    class _FixedDateTime:
+        @staticmethod
+        def utcnow():
+            return datetime(2026, 5, 11, 12, 0, 0)
+
+        fromisoformat = staticmethod(datetime.fromisoformat)
+
+    monkeypatch.setattr(scheduler_mod, "datetime", _FixedDateTime)
+
+    tasks = [ExecutionTask(id="t1", title="Deep work", duration_minutes=60, priority="medium")]
+    opts = SchedulerOptions(
+        day_start_hour=9,
+        day_end_hour=22,
+        days=7,
+        slot_minutes=60,
+        allowed_weekdays=[5],
+    )
+    out = schedule_greedy_earliest_fit(tasks, [], opts)
+    assert len(out.scheduled_events) == 1
+    assert "2026-05-16" in out.scheduled_events[0].start
+    assert datetime.fromisoformat(out.scheduled_events[0].start.replace("Z", "+00:00")).weekday() == 5
 

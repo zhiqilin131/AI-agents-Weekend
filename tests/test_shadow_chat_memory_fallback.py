@@ -1,4 +1,4 @@
-from foresight_x.shadow.chat import _ground_reply_with_memory_preferences
+from foresight_x.shadow.chat import _coerce_atomic_claims_to_memory_drafts, _ground_reply_with_memory_preferences
 
 
 def test_ground_reply_prefers_explicit_memory_for_or_question() -> None:
@@ -10,6 +10,14 @@ def test_ground_reply_prefers_explicit_memory_for_or_question() -> None:
     assert "prefer LeBron over Kobe" in reply
     assert "it's LeBron for you" in reply
     assert used == ["Prefers LeBron over Kobe"]
+
+
+def test_coerce_atomic_claims_to_memory_drafts_skips_short_and_dedupes() -> None:
+    d = _coerce_atomic_claims_to_memory_drafts(
+        ["x" * 5, "I stayed home the entire day", "I stayed home the entire day", "I prefer quiet evenings"],
+    )
+    assert len(d) == 2
+    assert "stayed home" in d[0].text.lower()
 
 
 def test_ground_reply_no_override_when_no_direct_choice() -> None:

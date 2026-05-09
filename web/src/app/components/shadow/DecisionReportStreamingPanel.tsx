@@ -32,7 +32,7 @@ export function DecisionReportStreamingPanel({
   const doneJourney = journeyStateFromProgress('', 'complete');
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/30 p-4">
+    <div className="fixed inset-0 z-[200] bg-black/30 p-4">
       <div className="mx-auto mt-3 flex max-h-[93vh] w-[min(1240px,96vw)] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-xl">
         <div className="shrink-0 border-b border-gray-100/90 bg-white/95 px-4 py-3 backdrop-blur-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">

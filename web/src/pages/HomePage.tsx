@@ -404,9 +404,10 @@ export default function HomePage() {
   );
 
   const nav = <MainNavButtons />;
+  const navLanding = <MainNavButtons className="!mb-4 sm:!mb-5" />;
 
   const workspace = (
-    <div className="max-w-[1600px] mx-auto px-6 lg:px-10 py-8 pb-16">
+    <div className="max-w-[1600px] mx-auto px-6 lg:px-10 pt-4 pb-16 lg:pt-5">
       {nav}
 
       <header className="mb-6">
@@ -498,34 +499,36 @@ export default function HomePage() {
 
       <div className="relative z-10">
         {state === 'empty' ? (
-          <div className="flex items-center justify-center min-h-screen px-8">
+          <div className="flex min-h-screen flex-col items-center px-6 pb-12 pt-3 sm:px-8 sm:pt-4 md:pt-5">
             <div className="w-full max-w-3xl">
-              {nav}
-              <div className="text-center mb-16">
-                <h1 className="text-7xl mb-5 text-gray-900 tracking-tight" style={{ fontWeight: 700, letterSpacing: '-0.04em' }}>
-                  Foresight-X
-                </h1>
-                <p className="text-xl text-gray-500" style={{ fontWeight: 400 }}>
-                  Evidence-grounded decision agent
-                </p>
-              </div>
+              {navLanding}
+              <div className="mt-10 w-full sm:mt-14 md:mt-20">
+                <div className="mb-12 text-center sm:mb-14">
+                  <h1 className="mb-4 text-6xl text-gray-900 tracking-tight sm:mb-5 sm:text-7xl" style={{ fontWeight: 700, letterSpacing: '-0.04em' }}>
+                    Foresight-X
+                  </h1>
+                  <p className="text-lg text-gray-500 sm:text-xl" style={{ fontWeight: 400 }}>
+                    Evidence-grounded decision agent
+                  </p>
+                </div>
 
-              {error && (
-                <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>
-              )}
+                {error && (
+                  <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>
+                )}
 
-              <div className="mx-auto max-w-xl text-center">
-                <button
-                  type="button"
-                  onClick={() => navigate('/chat')}
-                  className="inline-flex items-center justify-center px-10 py-4 rounded-full bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 text-white text-lg shadow-[0_14px_40px_rgba(99,102,241,0.35)] hover:shadow-[0_18px_48px_rgba(99,102,241,0.4)] hover:scale-[1.01] active:scale-[0.995] transition-all"
-                  style={{ fontWeight: 600 }}
-                >
-                  Start Chatting
-                </button>
-                <p className="mt-4 text-sm text-gray-500">
-                  Chat naturally. Foresight-X will detect when you need a decision report.
-                </p>
+                <div className="mx-auto max-w-xl text-center">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/chat')}
+                    className="inline-flex items-center justify-center px-10 py-4 rounded-full bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 text-white text-lg shadow-[0_14px_40px_rgba(99,102,241,0.35)] hover:shadow-[0_18px_48px_rgba(99,102,241,0.4)] hover:scale-[1.01] active:scale-[0.995] transition-all"
+                    style={{ fontWeight: 600 }}
+                  >
+                    Start Chatting
+                  </button>
+                  <p className="mt-4 text-sm text-gray-500">
+                    Chat naturally. Foresight-X will detect when you need a decision report.
+                  </p>
+                </div>
               </div>
             </div>
           </div>

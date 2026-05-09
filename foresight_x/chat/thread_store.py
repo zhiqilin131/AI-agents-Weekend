@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from foresight_x.config import load_settings
+from foresight_x.perception.clarification_gate import default_clarification_state
 
 
 def _now() -> str:
@@ -51,6 +52,10 @@ def create_thread(*, user_id: str, title: str | None = None) -> dict[str, Any]:
         "memory_events": [],
         "dismissed_suggestions": {"role_mode": False, "decision_report": False},
         "linked_decision_ids": [],
+        "working_summary": "",
+        "temporary_context": [],
+        "clarification_events": [],
+        "clarification_state": default_clarification_state(),
     }
     save_thread(t)
     return t
@@ -90,6 +95,15 @@ def load_thread(thread_id: str | None, *, user_id: str) -> dict[str, Any]:
         if not t.get("title"):
             first = (t.get("messages") or [{}])[0].get("content", "")
             t["title"] = _default_title(first)
+        t.setdefault("working_summary", "")
+        t.setdefault("temporary_context", [])
+        t.setdefault("clarification_events", [])
+        if not isinstance(t.get("clarification_state"), dict):
+            t["clarification_state"] = default_clarification_state()
+        else:
+            base = default_clarification_state()
+            base.update(t["clarification_state"])
+            t["clarification_state"] = base
         return t
     except Exception:
         return create_thread(user_id=user_id)
@@ -107,6 +121,43 @@ def delete_thread(*, user_id: str, thread_id: str) -> bool:
         return False
     p.unlink(missing_ok=True)
     return True
+
+
+def append_clarification_event(
+    thread: dict[str, Any],
+    *,
+    kind: str,
+    target_dimension: str,
+    question_prompt: str = "",
+    answer_label: str = "",
+    persistence: str = "",
+) -> None:
+    """Record clarification ask / answer / skip for repetition-aware gating."""
+    thread.setdefault("clarification_events", []).append(
+        {
+            "at": _now(),
+            "kind": kind,
+            "target_dimension": (target_dimension or "").strip(),
+            "question_prompt": (question_prompt or "")[:900],
+            "answer_label": (answer_label or "")[:900],
+            "persistence": (persistence or "").strip(),
+        }
+    )
+    st = thread.setdefault("clarification_state", default_clarification_state())
+    td = (target_dimension or "").strip()
+    if kind == "answered" and td:
+        ad = st.setdefault("answered_dimensions", [])
+        if td not in ad:
+            ad.append(td)
+    if kind == "skipped" and td:
+        sd = st.setdefault("skipped_dimensions", [])
+        if td not in sd:
+            sd.append(td)
+    if kind == "asked" and (question_prompt or "").strip():
+        st["last_question"] = (question_prompt or "")[:900]
+        st["last_target_dimension"] = td
+        st["last_asked_at"] = _now()
+    save_thread(thread)
 
 
 def append_message(

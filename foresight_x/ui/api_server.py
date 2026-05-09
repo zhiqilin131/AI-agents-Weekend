@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 import json
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +13,9 @@ import logging
 import re
 from pathlib import Path
 from threading import Lock
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+import time
 
 import chromadb
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -23,14 +27,30 @@ from foresight_x.config import load_settings
 from foresight_x.harness.improvement_loop import apply_outcome_to_memory
 from foresight_x.harness.outcome_tracker import load_decision_outcome, save_decision_outcome
 from foresight_x.harness.trace import load_decision_trace
+from foresight_x.resources.resource_drops import (
+    calendar_fallback_drops,
+    generate_resource_drops_for_recommendation,
+    resource_drops_as_json,
+)
 from foresight_x.harness.decision_commit import load_commit, save_commit
 from foresight_x.harness.evaluation_log import append_evaluation_log, build_evaluation_record
 from foresight_x.harness.trace_index import delete_trace, list_traces
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.orchestration.pipeline import PipelineContext, iter_pipeline_events, run_pipeline
 from foresight_x.perception.clarify_gate import merge_clarification_answers, run_clarify_gate
+from foresight_x.perception.clarification_gate import (
+    build_fast_clarify_questions,
+    build_timeout_fallback_questions,
+    default_clarification_state,
+    fast_gate_timing_ms,
+    should_show_clarification_fast,
+)
+from foresight_x.perception.personalized_clarify import (
+    heuristic_domain,
+    persist_clarification_followup,
+    run_personalized_clarify_gate,
+)
 from foresight_x.profile.merge import (
-    append_clarification_to_profile,
     delete_memory_fact_by_id,
     delete_priority_line_by_id,
 )
@@ -43,6 +63,8 @@ from foresight_x.memory.profile_store import load_profile as load_tier3_profile
 from foresight_x.memory.profile_store import save_profile as save_tier3_profile
 from foresight_x.personalization.ingest import ingest_personalization_text, preview_extract_summary
 from foresight_x.shadow.chat import run_shadow_turn
+from foresight_x.shadow.thread_context import append_temporary_context_items, format_temporary_context_prompt
+from foresight_x.shadow.thread_summary import maybe_update_thread_summary
 from foresight_x.structured_predict import structured_predict
 from foresight_x.chat import (
     append_message,
@@ -54,6 +76,7 @@ from foresight_x.chat import (
     load_thread,
     save_thread,
 )
+from foresight_x.chat.thread_store import append_clarification_event
 from foresight_x.decision_algorithms import (
     build_agility_preview,
     build_influence_graph_from_trace,
@@ -67,6 +90,7 @@ from foresight_x.decision_algorithms.schemas import (
     ExecutionTask as AlgoExecutionTask,
     SchedulerOptions as AlgoSchedulerOptions,
 )
+from foresight_x.ui.calendar_feedback_interpreter import interpret_calendar_feedback
 
 
 _log = logging.getLogger(__name__)
@@ -267,6 +291,15 @@ class ExternalEventRequest(BaseModel):
 
 class ClarifyRequest(BaseModel):
     raw_input: str = Field(min_length=1)
+    thread_id: str | None = Field(default=None)
+    recent_messages: list[dict[str, Any]] = Field(default_factory=list)
+    # shadow_chat: skip clarify for jokes / obvious non-analytical lines (Decision mode unchanged).
+    purpose: str | None = Field(default=None)
+
+
+class ClarifySkipRequest(BaseModel):
+    target_dimension: str = Field(min_length=1)
+    question_prompt: str = Field(default="", max_length=900)
 
 
 class RunResponse(BaseModel):
@@ -304,6 +337,7 @@ def root() -> dict[str, object]:
             "/api/clarify",
             "/api/traces",
             "/api/traces/{decision_id}",
+            "/api/traces/{decision_id}/resource-drops",
             "/api/record-outcome",
             "/api/commit-decision",
             "/api/commits/{decision_id}",
@@ -314,10 +348,12 @@ def root() -> dict[str, object]:
             "/api/decision/agility-preview",
             "/api/decision/schedule",
             "/api/calendar/parse-ics",
+            "/api/calendar/refine-schedule",
             "/api/chat/unified",
             "/api/shadow-chat/threads",
             "/api/shadow-chat/threads/{thread_id}",
             "/api/shadow-chat/threads/{thread_id}/messages",
+            "/api/shadow-chat/threads/{thread_id}/clarification-skip",
             "/api/shadow-chat/threads/{thread_id}/stream",
             "/api/shadow-chat/threads/{thread_id}/decision-report/stream",
             "/api/transcribe",
@@ -414,6 +450,17 @@ def _client_anchor_iso(client_now_iso: str | None) -> str | None:
 def run_decision(body: RunRequest) -> RunResponse:
     settings = _settings_for_active_user()
     ctx, notes = _build_context(settings)
+    merge_done = False
+    if body.clarification_answers:
+        persist_clarification_followup(
+            settings,
+            thread=None,
+            user_plain_message=body.raw_input.strip(),
+            clarification_answers=body.clarification_answers,
+            save_to_profile_requested=bool(body.save_clarification_to_profile),
+            llm=ctx.llm,
+        )
+        merge_done = True
     trace = run_pipeline(
         ctx,
         body.raw_input.strip(),
@@ -422,6 +469,7 @@ def run_decision(body: RunRequest) -> RunResponse:
         clarification_answers=body.clarification_answers,
         save_clarification_to_profile=body.save_clarification_to_profile,
         preserve_raw_input=body.preserve_raw_input,
+        clarification_profile_merge_done_externally=merge_done,
     )
     trace_path = settings.traces_dir / f"{trace.decision_id}.json"
     return RunResponse(
@@ -441,6 +489,17 @@ def run_decision_stream(body: RunRequest) -> StreamingResponse:
     def gen():
         try:
             yield _sse_chunk({"event": "notes", "notes": notes})
+            merge_done = False
+            if body.clarification_answers:
+                persist_clarification_followup(
+                    settings,
+                    thread=None,
+                    user_plain_message=body.raw_input.strip(),
+                    clarification_answers=body.clarification_answers,
+                    save_to_profile_requested=bool(body.save_clarification_to_profile),
+                    llm=ctx.llm,
+                )
+                merge_done = True
             for ev in iter_pipeline_events(
                 ctx,
                 body.raw_input.strip(),
@@ -449,6 +508,7 @@ def run_decision_stream(body: RunRequest) -> StreamingResponse:
                 clarification_answers=body.clarification_answers,
                 save_clarification_to_profile=body.save_clarification_to_profile,
                 preserve_raw_input=body.preserve_raw_input,
+                clarification_profile_merge_done_externally=merge_done,
             ):
                 if ev.get("event") == "complete" and isinstance(ev.get("trace"), dict):
                     tid = ev["trace"].get("decision_id")
@@ -561,8 +621,63 @@ def clarify(body: ClarifyRequest) -> dict:
     settings = _settings_for_active_user()
     ctx, _notes = _build_context(settings)
     profile = load_user_profile(settings)
-    result = run_clarify_gate(body.raw_input.strip(), ctx.llm, profile=profile)
+    recent = list(body.recent_messages or [])
+    events: list[dict[str, Any]] = []
+    thread: dict[str, Any] | None = None
+    if body.thread_id:
+        thread = load_thread(body.thread_id, user_id=settings.foresight_user_id)
+        events = list(thread.get("clarification_events") or [])
+        if not recent:
+            recent = [
+                {"role": str(m.get("role") or ""), "content": str(m.get("content") or "")}
+                for m in (thread.get("messages") or [])[-8:]
+            ]
+    thread_meta: dict[str, Any]
+    if thread is not None:
+        thread_meta = thread
+    else:
+        thread_meta = {
+            "messages": [{"role": str(x.get("role") or ""), "content": str(x.get("content") or "")} for x in recent],
+            "clarification_events": events,
+            "clarification_state": default_clarification_state(),
+        }
+    result = run_clarify_gate(
+        body.raw_input.strip(),
+        ctx.llm,
+        profile=profile,
+        recent_messages=[{"role": str(x.get("role") or ""), "content": str(x.get("content") or "")} for x in recent],
+        thread_clarification_events=events,
+        purpose=(body.purpose.strip() if (body.purpose or "").strip() else None),
+        thread_metadata=thread_meta,
+    )
+    if result.need_clarification and thread is not None:
+        for q in result.questions:
+            append_clarification_event(
+                thread,
+                kind="asked",
+                target_dimension=q.id,
+                question_prompt=q.prompt,
+            )
     return result.model_dump(mode="json")
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/clarification-skip")
+def shadow_clarification_skip(thread_id: str, body: ClarifySkipRequest) -> dict:
+    """Record a skipped clarification so the gate does not immediately repeat the same dimension."""
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = load_thread(thread_id, user_id=uid)
+    append_clarification_event(
+        thread,
+        kind="skipped",
+        target_dimension=body.target_dimension.strip(),
+        question_prompt=body.question_prompt.strip(),
+    )
+    st = thread.setdefault("clarification_state", default_clarification_state())
+    n_user = sum(1 for m in thread.get("messages", []) if str(m.get("role") or "") == "user")
+    st["suppress_clarify_until_user_count"] = n_user + 8
+    save_thread(thread)
+    return {"ok": True, "thread": load_thread(thread_id, user_id=uid)}
 
 
 @app.get("/api/traces")
@@ -660,6 +775,17 @@ class CalendarParseIcsRequest(BaseModel):
     ics_text: str = Field(min_length=1)
 
 
+class CalendarRefineScheduleRequest(BaseModel):
+    """Re-interpret natural-language schedule feedback and return a fresh AI placement."""
+
+    feedback: str = Field(min_length=1, max_length=4000)
+    tasks: list[AlgoExecutionTask] = Field(default_factory=list)
+    existing_events: list[AlgoCalendarEvent] = Field(default_factory=list)
+    options: AlgoSchedulerOptions | None = None
+    #: When set, only these tasks are re-scheduled; caller should pin other AI blocks in existing_events.
+    target_task_ids: list[str] | None = None
+
+
 class UnifiedChatRequest(BaseModel):
     thread_id: str | None = None
     message: str = ""
@@ -678,6 +804,8 @@ class ShadowThreadMessageRequest(BaseModel):
     user_action: str = "send_message"
     clarification_answers: dict[str, str] | None = Field(default=None)
     save_clarification_to_profile: bool = Field(default=False)
+    #: Echoed on clarification SSE + done.metrics so the client can ignore stale async cards.
+    client_turn_seq: int | None = None
 
 
 class ShadowDecisionReportStreamRequest(BaseModel):
@@ -745,7 +873,7 @@ def unified_chat(body: UnifiedChatRequest) -> dict:
     assistant_text = ""
     if action == "generate_decision_report":
         ctx, _ = _build_context(settings)
-        trace = run_pipeline(message or "Help me decide.", ctx=ctx, save_trace=True)
+        trace = run_pipeline(ctx, message or "Help me decide.", persist_trace=True)
         decision_trace = trace.model_dump(mode="json")
         mode = "decision_report"
         thread["mode"] = mode
@@ -758,35 +886,54 @@ def unified_chat(body: UnifiedChatRequest) -> dict:
         )
     elif mode == "roleplay":
         try:
-            msgs = [{"role": m.get("role"), "content": m.get("content")} for m in thread.get("messages", [])[-16:]]
-            reply, _flag, _state, rec, _used = run_shadow_turn(msgs, settings=settings)
-            assistant_text = reply.strip()
+            msgs = _slice_shadow_messages(thread)
+            out = run_shadow_turn(
+                msgs,
+                settings=settings,
+                thread_id=str(thread.get("thread_id") or "") or None,
+                working_summary=str(thread.get("working_summary") or ""),
+                temporary_context_prompt=format_temporary_context_prompt(thread),
+            )
+            assistant_text = out.reply.strip()
+            append_temporary_context_items(thread, out.thread_only_items)
+            rec = out.profile_record_texts
             if rec:
                 profile_updates.extend(rec)
                 shadow_updates.extend(rec)
         except Exception:
             assistant_text = _simple_chat_reply(message)
         append_message(thread, role="assistant", content=assistant_text, mode=mode)
+        _finalize_shadow_thread_turn(thread, settings=settings)
     else:
         # Normal mode still uses the existing shadow engine as a passive memory-aware dialogue core,
         # but does not force users into explicit "ShadowChat page" navigation.
         try:
-            msgs = [{"role": m.get("role"), "content": m.get("content")} for m in thread.get("messages", [])[-16:]]
-            reply, _flag, _state, rec, _used = run_shadow_turn(msgs, settings=settings)
-            assistant_text = reply.strip()
+            msgs = _slice_shadow_messages(thread)
+            out = run_shadow_turn(
+                msgs,
+                settings=settings,
+                thread_id=str(thread.get("thread_id") or "") or None,
+                working_summary=str(thread.get("working_summary") or ""),
+                temporary_context_prompt=format_temporary_context_prompt(thread),
+            )
+            assistant_text = out.reply.strip()
+            append_temporary_context_items(thread, out.thread_only_items)
+            rec = out.profile_record_texts
             if rec:
                 profile_updates.extend(rec)
                 shadow_updates.extend(rec)
         except Exception:
             assistant_text = _simple_chat_reply(message)
         append_message(thread, role="assistant", content=assistant_text, mode=mode)
+        _finalize_shadow_thread_turn(thread, settings=settings)
         passive_memory_enabled = os.getenv("ENABLE_UNIFIED_CHAT_PASSIVE_MEMORY", "false").strip().lower() == "true"
         if message and (settings.openai_api_key or "").strip() and passive_memory_enabled:
             try:
-                _r, _f, _st, rec, _used = run_shadow_turn(
+                _out = run_shadow_turn(
                     [{"role": "user", "content": message}],
                     settings=settings,
                 )
+                rec = _out.profile_record_texts
                 if rec:
                     profile_updates.extend(rec)
                     shadow_updates.extend(rec)
@@ -835,6 +982,28 @@ def _chunk_text(text: str, *, step: int = 18) -> list[str]:
     if not t:
         return []
     return [t[i : i + step] for i in range(0, len(t), step)]
+
+
+def _slice_shadow_messages(thread: dict) -> list[dict]:
+    """Last messages with metadata preserved so artifact rows can be filtered in Shadow."""
+    raw = thread.get("messages") or []
+    chunk = raw[-24:] if len(raw) > 24 else raw
+    out: list[dict] = []
+    for m in chunk:
+        if not isinstance(m, dict):
+            continue
+        meta = m.get("metadata")
+        row: dict = {"role": m.get("role"), "content": m.get("content")}
+        if isinstance(meta, dict):
+            row["metadata"] = meta
+        out.append(row)
+    return out
+
+
+def _finalize_shadow_thread_turn(thread: dict, *, settings: Any) -> None:
+    """Persist rolling summary after messages appended."""
+    maybe_update_thread_summary(thread, settings=settings)
+    save_thread(thread)
 
 
 def _should_store_profile_fact(item: str) -> bool:
@@ -923,23 +1092,36 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
     mode = str(body.mode or thread.get("mode") or "normal")
     msg = body.message.strip()
     effective_msg = merge_clarification_answers(msg, body.clarification_answers)
-    if body.save_clarification_to_profile and body.clarification_answers:
-        p = append_clarification_to_profile(load_user_profile(settings), body.clarification_answers)
-        save_user_profile(p, settings=settings)
-    intent = detect_chat_intent(msg, thread.get("messages", [])[-8:])
+    if body.clarification_answers:
+        try:
+            ctx0, _ = _build_context(settings)
+            persist_clarification_followup(
+                settings,
+                thread=thread,
+                user_plain_message=msg,
+                clarification_answers=body.clarification_answers,
+                save_to_profile_requested=bool(body.save_clarification_to_profile),
+                llm=ctx0.llm,
+            )
+        except Exception:
+            _log.exception("persist_clarification_followup failed (non-stream) thread_id=%s", thread_id)
+    intent_probe = effective_msg.strip() if effective_msg.strip() != msg.strip() else msg
+    intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
     append_message(thread, role="user", content=effective_msg, mode=mode, intent=intent.intent)
 
     suggestion: dict | None = None
     decision_trace: dict | None = None
     profile_updates: list[str] = []
+    thread_context_kept = False
     if body.user_action == "generate_decision_report":
         ctx, _ = _build_context(settings)
         trace = run_pipeline(
+            ctx,
             effective_msg,
-            ctx=ctx,
-            save_trace=True,
+            persist_trace=True,
             clarification_answers=body.clarification_answers,
             save_clarification_to_profile=body.save_clarification_to_profile,
+            clarification_profile_merge_done_externally=bool(body.clarification_answers),
         )
         decision_trace = trace.model_dump(mode="json")
         thread["mode"] = "decision_report"
@@ -960,31 +1142,38 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
             },
         )
     else:
-        msgs = [{"role": m.get("role"), "content": m.get("content")} for m in thread.get("messages", [])[-16:]]
+        msgs = _slice_shadow_messages(thread)
         ar_ctx = thread.get("active_report_context") or {}
         rev_id: str | None = None
         if isinstance(ar_ctx, dict) and str(ar_ctx.get("mode") or "") == "revision":
             d0 = str(ar_ctx.get("decision_id") or "").strip()
             if d0:
                 rev_id = d0
-        reply, _flag, _state, rec, used = run_shadow_turn(
-            msgs, settings=settings, report_revision_decision_id=rev_id
+        out = run_shadow_turn(
+            msgs,
+            settings=settings,
+            thread_id=str(thread.get("thread_id") or "") or None,
+            report_revision_decision_id=rev_id,
+            working_summary=str(thread.get("working_summary") or ""),
+            temporary_context_prompt=format_temporary_context_prompt(thread),
         )
-        profile_updates = [x for x in (rec or []) if _should_store_profile_fact(x)]
+        append_temporary_context_items(thread, out.thread_only_items)
+        thread_context_kept = bool(out.thread_only_items)
+        profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
         append_message(
             thread,
             role="assistant",
-            content=reply.strip(),
+            content=out.reply.strip(),
             mode=mode,
             intent=intent.intent,
-            memory_used=bool(used),
+            memory_used=bool(out.used_memory_facts),
             profile_updated=bool(profile_updates),
         )
         if profile_updates:
             thread.setdefault("memory_events", []).append(
                 {"kind": "profile_update", "items": profile_updates[:4], "at": _utc_now()}
             )
-            save_thread(thread)
+        _finalize_shadow_thread_turn(thread, settings=settings)
         suggestion = _build_shadow_suggestion(
             intent.intent,
             dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
@@ -995,6 +1184,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
         "suggestion": suggestion,
         "decision_trace": decision_trace,
         "profile_updates": profile_updates,
+        "thread_context_kept": thread_context_kept,
     }
 
 
@@ -1011,27 +1201,131 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
             mode = str(body.mode or thread.get("mode") or "normal")
             message = body.message.strip()
             effective_message = merge_clarification_answers(message, body.clarification_answers)
-            if body.save_clarification_to_profile and body.clarification_answers:
-                p = append_clarification_to_profile(load_user_profile(settings), body.clarification_answers)
-                save_user_profile(p, settings=settings)
+            if body.clarification_answers:
+                try:
+                    ctx0, _ = _build_context(settings)
+                    persist_clarification_followup(
+                        settings,
+                        thread=thread,
+                        user_plain_message=message,
+                        clarification_answers=body.clarification_answers,
+                        save_to_profile_requested=bool(body.save_clarification_to_profile),
+                        llm=ctx0.llm,
+                    )
+                except Exception:
+                    _log.exception("persist_clarification_followup failed; continuing shadow reply thread_id=%s", tid)
             t0 = datetime.now(timezone.utc)
-            intent = detect_chat_intent(message, thread.get("messages", [])[-8:])
+            intent_probe = (
+                effective_message.strip()
+                if effective_message.strip() != message.strip()
+                else message
+            )
+            intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
             retrieval_mode = "chat_deep" if intent.intent == "decision_candidate" else "chat_fast"
-            append_message(thread, role="user", content=effective_message, mode=mode, intent=intent.intent)
+            user_row = append_message(thread, role="user", content=effective_message, mode=mode, intent=intent.intent)
+            user_msg_id = str(user_row.get("id") or "")
+
+            ctx, _ = _build_context(settings)
+            profile = load_user_profile(settings)
+            events = list(thread.get("clarification_events") or [])
+            recent_slice = [
+                {"role": str(m.get("role") or ""), "content": str(m.get("content") or "")}
+                for m in thread.get("messages", [])[-12:]
+            ]
+
+            clar_metrics: dict[str, Any] = {
+                "clarification_fast_gate_ms": 0.0,
+                "clarification_llm_ms": None,
+                "clarification_used_llm": False,
+                "clarification_shown": False,
+                "clarification_suppressed_reason": "",
+                "client_turn_seq": body.client_turn_seq,
+            }
+            ex: ThreadPoolExecutor | None = None
+            llm_future = None
+            t_llm_start: float | None = None
+            shown_clar = False
+            fast = None
+            if body.clarification_answers:
+                clar_metrics["clarification_suppressed_reason"] = "inline_answers"
+            else:
+                t_fg = time.perf_counter()
+                fast = should_show_clarification_fast(
+                    effective_message,
+                    recent_slice,
+                    thread,
+                    None,
+                    interaction_purpose="shadow_chat",
+                )
+                clar_metrics["clarification_fast_gate_ms"] = fast_gate_timing_ms(t_fg)
+                if not fast.should_ask:
+                    clar_metrics["clarification_suppressed_reason"] = fast.reason
+                elif fast.requires_llm and ctx.llm is not None:
+                    clar_metrics["clarification_suppressed_reason"] = "pending_async_llm"
+                    ex = ThreadPoolExecutor(max_workers=1)
+                    t_llm_start = time.perf_counter()
+                    llm_future = ex.submit(
+                        run_personalized_clarify_gate,
+                        effective_message,
+                        ctx.llm,
+                        profile=profile,
+                        recent_messages=recent_slice,
+                        thread_clarification_events=events,
+                        interaction_purpose="shadow_chat",
+                    )
+                else:
+                    clar_metrics["clarification_suppressed_reason"] = "pending_fast_template"
 
             yield _sse_chunk({"type": "status", "status": "reading_memory", "label": "Reading memory..."})
             yield _sse_chunk({"type": "status", "status": "thinking", "label": "Thinking..."})
 
+            if fast is not None and fast.should_ask and fast.fast_question and not fast.requires_llm:
+                qs_fast = build_fast_clarify_questions(fast)
+                if qs_fast:
+                    cmeta = {
+                        "domain": fast.domain,
+                        "target_dimension": fast.target_dimension,
+                        "why_this_question": (
+                            "Quick domain check so we don't guess what matters — no extra model round-trip."
+                        ),
+                        "fast_path": True,
+                    }
+                    yield _sse_chunk(
+                        {
+                            "type": "clarification",
+                            "client_turn_seq": body.client_turn_seq,
+                            "user_message_id": user_msg_id,
+                            "need_clarification": True,
+                            "questions": [q.model_dump(mode="json") for q in qs_fast],
+                            "note": "",
+                            "clarification_meta": {**cmeta, **clar_metrics},
+                        }
+                    )
+                    for q in qs_fast:
+                        append_clarification_event(
+                            thread,
+                            kind="asked",
+                            target_dimension=q.id,
+                            question_prompt=q.prompt,
+                        )
+                    shown_clar = True
+                    clar_metrics["clarification_shown"] = True
+                    clar_metrics["clarification_used_llm"] = False
+                    clar_metrics["clarification_suppressed_reason"] = "none"
+
             suggestion = None
             profile_updates: list[str] = []
             if body.user_action == "generate_decision_report":
+                if ex is not None:
+                    ex.shutdown(wait=False, cancel_futures=True)
                 ctx, _ = _build_context(settings)
                 trace = run_pipeline(
+                    ctx,
                     message,
-                    ctx=ctx,
-                    save_trace=True,
+                    persist_trace=True,
                     clarification_answers=body.clarification_answers,
                     save_clarification_to_profile=body.save_clarification_to_profile,
+                    clarification_profile_merge_done_externally=bool(body.clarification_answers),
                 )
                 thread["mode"] = "decision_report"
                 tr_dump = trace.model_dump(mode="json")
@@ -1061,43 +1355,180 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
                 )
                 return
 
-            msgs = [{"role": m.get("role"), "content": m.get("content")} for m in thread.get("messages", [])[-16:]]
+            msgs = _slice_shadow_messages(thread)
             ar_ctx = thread.get("active_report_context") or {}
             rev_id: str | None = None
             if isinstance(ar_ctx, dict) and str(ar_ctx.get("mode") or "") == "revision":
                 d0 = str(ar_ctx.get("decision_id") or "").strip()
                 if d0:
                     rev_id = d0
-            reply, _flag, _state, rec, used = run_shadow_turn(
+            out = run_shadow_turn(
                 msgs,
                 settings=settings,
-                thread_id=thread_id,
+                thread_id=tid,
                 retrieval_mode=retrieval_mode,
                 report_revision_decision_id=rev_id,
+                working_summary=str(thread.get("working_summary") or ""),
+                temporary_context_prompt=format_temporary_context_prompt(thread),
             )
+            append_temporary_context_items(thread, out.thread_only_items)
             t_after_reply = datetime.now(timezone.utc)
-            text = reply.strip()
+            text = out.reply.strip()
             yield _sse_chunk({"type": "status", "status": "responding", "label": "Writing response..."})
             for chunk in _chunk_text(text):
                 yield _sse_chunk({"type": "delta", "content": chunk})
-            profile_updates = [x for x in (rec or []) if _should_store_profile_fact(x)]
+            profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
             if profile_updates:
                 yield _sse_chunk({"type": "status", "status": "updating_profile", "label": "Updating profile..."})
                 yield _sse_chunk({"type": "profile_update", "items": profile_updates[:4]})
+            elif out.thread_only_items and not out.memory_confirmation_question:
+                yield _sse_chunk(
+                    {
+                        "type": "thread_context_note",
+                        "message": "Keeping this in the current chat context",
+                    }
+                )
             append_message(
                 thread,
                 role="assistant",
                 content=text,
                 mode=mode,
                 intent=intent.intent,
-                memory_used=bool(used),
+                memory_used=bool(out.used_memory_facts),
                 profile_updated=bool(profile_updates),
             )
             if profile_updates:
                 thread.setdefault("memory_events", []).append(
                     {"kind": "profile_update", "items": profile_updates[:4], "at": _utc_now()}
                 )
-                save_thread(thread)
+            _finalize_shadow_thread_turn(thread, settings=settings)
+
+            try:
+                if (
+                    not body.clarification_answers
+                    and fast is not None
+                    and fast.should_ask
+                    and fast.requires_llm
+                    and not shown_clar
+                ):
+                    llm_res = None
+                    if llm_future is not None and t_llm_start is not None:
+                        remaining = max(0.0, 1.5 - (time.perf_counter() - t_llm_start))
+                        try:
+                            llm_res = llm_future.result(timeout=remaining)
+                        except FuturesTimeout:
+                            llm_res = None
+                        clar_metrics["clarification_llm_ms"] = round(
+                            (time.perf_counter() - t_llm_start) * 1000.0, 3
+                        )
+                    else:
+                        clar_metrics["clarification_llm_ms"] = None
+
+                    last_uid = ""
+                    for m in reversed(thread.get("messages", [])):
+                        if str(m.get("role") or "") == "user":
+                            last_uid = str(m.get("id") or "")
+                            break
+                    stale_clar = last_uid != user_msg_id
+
+                    if not stale_clar:
+                        if llm_res and llm_res.need_clarification and llm_res.questions:
+                            mcomb = dict(llm_res.clarification_meta or {})
+                            mcomb.update(clar_metrics)
+                            yield _sse_chunk(
+                                {
+                                    "type": "clarification",
+                                    "client_turn_seq": body.client_turn_seq,
+                                    "user_message_id": user_msg_id,
+                                    "need_clarification": True,
+                                    "questions": [q.model_dump(mode="json") for q in llm_res.questions],
+                                    "note": llm_res.note,
+                                    "clarification_meta": mcomb,
+                                }
+                            )
+                            for q in llm_res.questions:
+                                append_clarification_event(
+                                    thread,
+                                    kind="asked",
+                                    target_dimension=q.id,
+                                    question_prompt=q.prompt,
+                                )
+                            clar_metrics["clarification_used_llm"] = True
+                            clar_metrics["clarification_shown"] = True
+                            clar_metrics["clarification_suppressed_reason"] = "none"
+                        elif llm_future is not None and llm_res is None:
+                            fb_qs = build_timeout_fallback_questions(heuristic_domain(effective_message))
+                            dom = heuristic_domain(effective_message)
+                            cmeta = {
+                                "domain": dom,
+                                "why_this_question": (
+                                    "Smart clarification timed out — using a quick domain fallback instead."
+                                ),
+                                "fast_path": True,
+                                "fallback_after_llm": True,
+                                **clar_metrics,
+                            }
+                            yield _sse_chunk(
+                                {
+                                    "type": "clarification",
+                                    "client_turn_seq": body.client_turn_seq,
+                                    "user_message_id": user_msg_id,
+                                    "need_clarification": True,
+                                    "questions": [q.model_dump(mode="json") for q in fb_qs],
+                                    "note": "",
+                                    "clarification_meta": cmeta,
+                                }
+                            )
+                            for q in fb_qs:
+                                append_clarification_event(
+                                    thread,
+                                    kind="asked",
+                                    target_dimension=q.id,
+                                    question_prompt=q.prompt,
+                                )
+                            clar_metrics["clarification_shown"] = True
+                            clar_metrics["clarification_suppressed_reason"] = "llm_timeout_fallback"
+                        elif llm_future is None:
+                            fb_qs = build_timeout_fallback_questions(heuristic_domain(effective_message))
+                            dom = heuristic_domain(effective_message)
+                            cmeta = {
+                                "domain": dom,
+                                "why_this_question": (
+                                    "Smart clarification isn't available — quick domain fallback instead."
+                                ),
+                                "fast_path": True,
+                                "fallback_after_llm": False,
+                                **clar_metrics,
+                            }
+                            yield _sse_chunk(
+                                {
+                                    "type": "clarification",
+                                    "client_turn_seq": body.client_turn_seq,
+                                    "user_message_id": user_msg_id,
+                                    "need_clarification": True,
+                                    "questions": [q.model_dump(mode="json") for q in fb_qs],
+                                    "note": "",
+                                    "clarification_meta": cmeta,
+                                }
+                            )
+                            for q in fb_qs:
+                                append_clarification_event(
+                                    thread,
+                                    kind="asked",
+                                    target_dimension=q.id,
+                                    question_prompt=q.prompt,
+                                )
+                            clar_metrics["clarification_shown"] = True
+                            clar_metrics["clarification_suppressed_reason"] = "no_llm_fallback"
+                        elif llm_res is not None:
+                            clar_metrics["clarification_shown"] = False
+                            clar_metrics["clarification_suppressed_reason"] = str(llm_res.skip_reason or "not_needed")
+                    else:
+                        clar_metrics["clarification_suppressed_reason"] = "stale"
+            finally:
+                if ex is not None:
+                    ex.shutdown(wait=False, cancel_futures=True)
+
             suggestion = _build_shadow_suggestion(
                 intent.intent,
                 dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
@@ -1116,6 +1547,7 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
                 "response_first_token_ms": int((t_after_reply - t0).total_seconds() * 1000),
                 "response_total_ms": int((t_done - t0).total_seconds() * 1000),
                 "profile_update_ms": 0 if not profile_updates else 1,
+                **clar_metrics,
             }
             yield _sse_chunk(
                 {
@@ -1156,6 +1588,15 @@ def stream_shadow_decision_report(thread_id: str, body: ShadowDecisionReportStre
             tid = str(thread.get("thread_id") or thread_id)
             ctx, _ = _build_context(settings)
             prompt = body.decision_prompt.strip()
+            if body.clarification_answers:
+                persist_clarification_followup(
+                    settings,
+                    thread=thread,
+                    user_plain_message=prompt,
+                    clarification_answers=body.clarification_answers,
+                    save_to_profile_requested=bool(body.save_clarification_to_profile),
+                    llm=ctx.llm,
+                )
             first_meta_at: datetime | None = None
             for ev in iter_pipeline_events(
                 ctx,
@@ -1163,6 +1604,7 @@ def stream_shadow_decision_report(thread_id: str, body: ShadowDecisionReportStre
                 persist_trace=True,
                 clarification_answers=body.clarification_answers,
                 save_clarification_to_profile=body.save_clarification_to_profile,
+                clarification_profile_merge_done_externally=bool(body.clarification_answers),
             ):
                 if ev.get("event") == "meta":
                     first_meta_at = datetime.now(timezone.utc)
@@ -1280,7 +1722,12 @@ def shadow_chat(body: ShadowChatRequest) -> dict:
         raise HTTPException(status_code=503, detail="Shadow chat requires OPENAI_API_KEY")
     try:
         msgs = [m.model_dump() for m in body.messages]
-        reply, flag, state, recorded_facts, used_memory_facts = run_shadow_turn(msgs, settings=settings)
+        out = run_shadow_turn(msgs, settings=settings)
+        reply = out.reply
+        flag = out.suggest_decision_navigation
+        state = out.state
+        recorded_facts = out.profile_record_texts
+        used_memory_facts = out.used_memory_facts
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
@@ -1294,6 +1741,8 @@ def shadow_chat(body: ShadowChatRequest) -> dict:
         "memory_facts_recorded": recorded_facts or [],
         "memory_used_facts": used_memory_facts,
         "recorded_observation": (" · ".join(recorded_facts) if recorded_facts else None),
+        "thread_only_items": out.thread_only_items,
+        "memory_confirmation_question": out.memory_confirmation_question,
     }
 
 
@@ -1507,6 +1956,38 @@ def decision_schedule(body: DecisionScheduleRequest) -> dict:
     return result.model_dump(mode="json")
 
 
+@app.post("/api/calendar/refine-schedule")
+def calendar_refine_schedule(body: CalendarRefineScheduleRequest) -> dict:
+    """Apply heuristic interpretation of user feedback, then re-run the same scheduler as /api/decision/schedule."""
+    base = body.options or AlgoSchedulerOptions()
+    opt, notes, tasks_filtered = interpret_calendar_feedback(body.feedback, base, list(body.tasks))
+    raw_targets = [x.strip() for x in (body.target_task_ids or []) if x and str(x).strip()]
+    if raw_targets:
+        tid_set = set(raw_targets)
+        tasks_to_place = [t for t in tasks_filtered if t.id in tid_set]
+        if not tasks_to_place:
+            notes = [
+                *notes,
+                "Selection did not match any remaining tasks after interpreting feedback — re-scheduling full backlog.",
+            ]
+            tasks_to_place = list(tasks_filtered)
+        else:
+            notes = [
+                *notes,
+                f"Re-scheduling only the selected block(s): {len(tasks_to_place)} task(s).",
+            ]
+    else:
+        tasks_to_place = list(tasks_filtered)
+    result = schedule_with_ortools(tasks_to_place, body.existing_events, opt)
+    return {
+        "interpretation": " ".join(notes),
+        "notes": notes,
+        "adjusted_options": opt.model_dump(),
+        "tasks_input": [x.model_dump(mode="json") for x in tasks_filtered],
+        "schedule": result.model_dump(mode="json"),
+    }
+
+
 @app.post("/api/calendar/parse-ics")
 def parse_calendar_ics(body: CalendarParseIcsRequest) -> dict:
     text = body.ics_text.strip()
@@ -1567,6 +2048,24 @@ async def transcribe_audio(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=502, detail=f"Transcription failed: {e!s}") from e
     text = getattr(tr, "text", None) or ""
     return {"text": text.strip()}
+
+
+@app.get("/api/traces/{decision_id}/resource-drops")
+def get_trace_resource_drops(decision_id: str) -> dict:
+    """Post-hoc resource suggestions (does not block pipeline); Tavily optional."""
+    settings = _settings_for_active_user()
+    try:
+        trace = load_decision_trace(decision_id, settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}")
+    try:
+        drops = generate_resource_drops_for_recommendation(trace, settings=settings)
+    except Exception:
+        drops = calendar_fallback_drops(trace, recommendation=None)
+    return {"resource_drops": resource_drops_as_json(drops)}
 
 
 @app.get("/api/traces/{decision_id}")

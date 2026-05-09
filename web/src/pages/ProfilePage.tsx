@@ -66,10 +66,10 @@ export default function ProfilePage() {
   const [selectedMemoryCat, setSelectedMemoryCat] = useState<string>('');
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     priorities: true,
-    memory: true,
-    clarifications: true,
-    legacy: true,
-    context: true,
+    memory: false,
+    clarifications: false,
+    legacy: false,
+    context: false,
   });
 
   const load = useCallback(async () => {
@@ -212,73 +212,82 @@ export default function ProfilePage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-8 md:px-8 md:py-10">
+    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-3 py-4 md:px-6 md:py-6">
       <div className="mx-auto max-w-[1300px]">
         <PageBackButton />
-        <div className="mt-2 mb-6">
-          <h1 className="text-3xl text-gray-900" style={{ fontWeight: 700 }}>
-            Profile
-          </h1>
-          <p className="mt-2 text-sm leading-relaxed text-gray-600">
-            Stored per <code className="rounded bg-white/80 px-1 text-xs">FORESIGHT_USER_ID</code> under{' '}
-            <code className="rounded bg-white/80 px-1 text-xs">data/profile/</code>. Keep your own priorities curated,
-            and audit structured memory captured from Shadow chat.
-          </p>
+        <div className="mt-1 mb-3 md:flex md:items-end md:justify-between md:gap-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl text-gray-900 md:text-3xl" style={{ fontWeight: 700 }}>
+              Profile
+            </h1>
+            <p className="mt-1 text-xs leading-snug text-gray-600 md:text-sm md:leading-relaxed">
+              Scoped to <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">FORESIGHT_USER_ID</code> ·{' '}
+              <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">data/profile/</code>. Priorities you
+              edit; other blocks expand on demand.
+            </p>
+          </div>
         </div>
 
-        {error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-        {message && <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{message}</div>}
+        {error && <div className="mb-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-800">{error}</div>}
+        {message && (
+          <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-sm text-emerald-900">{message}</div>
+        )}
 
-        <div className="space-y-4">
+        <div className="space-y-2">
           <div className="flex items-center justify-end">
             <button
               type="button"
               onClick={() => void save()}
-              className="rounded-full bg-gradient-to-r from-purple-600 to-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md"
+              className="rounded-full bg-gradient-to-r from-purple-600 to-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-md md:text-sm"
             >
               Save profile
             </button>
           </div>
 
-          <main className="space-y-4">
-            <section id="profile-priorities" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md">
-            <div className="mb-2 flex items-center justify-between">
-            <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 600 }}>
+          <main className="space-y-2">
+            <section
+              id="profile-priorities"
+              className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl md:p-3.5"
+            >
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+            <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
               Your priorities (one per line)
             </label>
-            <button type="button" onClick={() => toggleSection('priorities')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+            <button type="button" onClick={() => toggleSection('priorities')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
               {openSections.priorities ? 'Collapse' : 'Expand'}
             </button>
             </div>
             {openSections.priorities ? (
               <>
-            <p className="text-xs text-gray-500 mb-2 leading-relaxed">
-              Only rows you enter here. Clarification answers and system-inferred lines are kept separate so nothing
-              automatic overwrites this list.
+            <p className="mb-1.5 text-[11px] leading-snug text-gray-500">
+              Your lines only — clarifications and system rows live in their own sections.
             </p>
             <textarea
               value={userPriorities}
               onChange={(e) => setUserPriorities(e.target.value)}
-              className="w-full min-h-[100px] px-4 py-3 rounded-2xl border border-gray-200/80 bg-white/70 text-sm"
+              className="w-full min-h-[72px] rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 text-sm md:min-h-[88px] md:rounded-2xl md:px-4 md:py-2.5"
               placeholder={'Family first\nCareer growth in AI'}
             />
               </>
             ) : null}
             </section>
 
-            <section id="profile-memory" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md">
-              <div className="mb-3 flex items-center justify-between">
-                <label className="block text-sm text-gray-700" style={{ fontWeight: 600 }}>
-                  Structured memory (from Shadow &amp; imports)
+            <section
+              id="profile-memory"
+              className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl md:p-3.5"
+            >
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
+                  Structured memory (Shadow &amp; imports)
                 </label>
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => toggleSection('memory')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <button type="button" onClick={() => toggleSection('memory')} className="rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
                     {openSections.memory ? 'Collapse' : 'Expand'}
                   </button>
                   <button
                     type="button"
                     onClick={() => setMemoryEditMode((v) => !v)}
-                    className={`rounded-full px-3 py-1 text-xs ${memoryEditMode ? 'bg-indigo-600 text-white' : 'border border-gray-200 bg-white text-gray-700'}`}
+                    className={`rounded-full px-2.5 py-0.5 text-[11px] md:px-3 md:py-1 md:text-xs ${memoryEditMode ? 'bg-indigo-600 text-white' : 'border border-gray-200 bg-white text-gray-700'}`}
                   >
                     {memoryEditMode ? 'Done' : 'Edit'}
                   </button>
@@ -286,22 +295,22 @@ export default function ProfilePage() {
               </div>
               {openSections.memory ? (
                 <>
-              <p className="mb-3 text-xs leading-relaxed text-gray-500">
-                Short, categorized facts — not therapist paraphrases. Delete only in Edit mode.
+              <p className="mb-2 text-[11px] leading-snug text-gray-500">
+                Categorized facts. Delete only in Edit mode.
               </p>
               {memoryFacts.length === 0 ? (
-                <div className="rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm text-gray-500">
-                  No structured facts yet — they appear when Shadow chat stores concrete details you stated.
+                <div className="rounded-lg border border-violet-100 bg-violet-50/40 px-2.5 py-1.5 text-xs text-gray-500">
+                  No structured facts yet — they appear when Shadow stores details you stated.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
-                  <div className="rounded-xl border border-gray-200 bg-white/80 p-2">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-[200px_1fr]">
+                  <div className="rounded-lg border border-gray-200 bg-white/80 p-1.5">
                     {memoryCatOrder.map((cat) => (
                       <button
                         key={cat}
                         type="button"
                         onClick={() => setSelectedMemoryCat(cat)}
-                        className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${
+                        className={`mb-0.5 w-full rounded-md px-2 py-1.5 text-left text-xs md:text-sm ${
                           selectedMemoryCat === cat ? 'bg-indigo-50 text-indigo-900' : 'text-gray-700 hover:bg-gray-50'
                         }`}
                       >
@@ -310,15 +319,15 @@ export default function ProfilePage() {
                     ))}
                   </div>
 
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {memoryCatOrder.filter((c) => c === selectedMemoryCat).map((cat) => (
                       <div key={cat}>
-                        <p className="mb-2 text-[11px] uppercase tracking-wide text-indigo-700" style={{ fontWeight: 700 }}>
+                        <p className="mb-1 text-[10px] uppercase tracking-wide text-indigo-700" style={{ fontWeight: 700 }}>
                           {MEMORY_CAT_LABEL[cat] || cat}
                         </p>
-                        <div className="space-y-2">
+                        <div className="space-y-1.5">
                           {(factsByCat[cat] || []).map((f) => (
-                            <div key={f.id || f.text} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800">
+                            <div key={f.id || f.text} className="rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-800">
                               <div className="flex items-start justify-between gap-2">
                                 <span className="min-w-0 leading-snug">{f.text}</span>
                                 {memoryEditMode ? (
@@ -351,21 +360,21 @@ export default function ProfilePage() {
             </section>
 
             {clarificationRows.length > 0 && (
-              <section id="profile-clarifications" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md">
-              <div className="mb-2 flex items-center justify-between">
-              <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 600 }}>
-                From clarification (saved with a decision run)
+              <section id="profile-clarifications" className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+              <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
+                Clarification answers
               </label>
-              <button type="button" onClick={() => toggleSection('clarifications')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+              <button type="button" onClick={() => toggleSection('clarifications')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
                 {openSections.clarifications ? 'Collapse' : 'Expand'}
               </button>
               </div>
               {openSections.clarifications ? (
                 <>
-              <p className="text-xs text-gray-500 mb-2 leading-relaxed">
-                These came from multiple-choice prompts — not the same as free-form priorities. You can remove any row.
+              <p className="mb-1.5 text-[11px] leading-snug text-gray-500">
+                From decision-run prompts — not the same as your priority list.
               </p>
-              <div className="w-full min-h-[60px] px-4 py-3 rounded-2xl border border-amber-100 bg-amber-50/50 text-sm text-gray-800 space-y-2">
+              <div className="min-h-[48px] w-full space-y-1.5 rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-2 text-sm text-gray-800">
                 {clarificationRows.map((row, idx) => (
                   <div key={row.id || `clar-${idx}`} className="flex flex-wrap items-start gap-2 justify-between">
                     <div className="flex flex-wrap items-start gap-2 min-w-0">
@@ -390,22 +399,21 @@ export default function ProfilePage() {
               </section>
           )}
 
-          <section id="profile-legacy" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md">
-            <div className="mb-2 flex items-center justify-between">
-            <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 600 }}>
-              Legacy system lines (one-line notes)
+          <section id="profile-legacy" className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+            <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
+              Legacy system lines
             </label>
-            <button type="button" onClick={() => toggleSection('legacy')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+            <button type="button" onClick={() => toggleSection('legacy')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
               {openSections.legacy ? 'Collapse' : 'Expand'}
             </button>
             </div>
             {openSections.legacy ? (
               <>
-            <p className="text-xs text-gray-500 mb-2 leading-relaxed">
-              Older inferred lines (e.g. from Personalize). Prefer structured memory above for new data. You can delete
-              rows here.
+            <p className="mb-1.5 text-[11px] leading-snug text-gray-500">
+              Older inferred one-liners. Prefer structured memory; delete rows you do not want.
             </p>
-            <div className="w-full min-h-[80px] px-4 py-3 rounded-2xl border border-indigo-100 bg-indigo-50/50 text-sm text-gray-800 space-y-2">
+            <div className="min-h-[56px] w-full space-y-1.5 rounded-xl border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-sm text-gray-800">
               {systemRows.length === 0 ? (
                 <span className="text-gray-400">None.</span>
               ) : (
@@ -433,45 +441,45 @@ export default function ProfilePage() {
             ) : null}
           </section>
 
-          <section id="profile-context" className="rounded-2xl border border-white/90 bg-white/70 p-4 shadow-[0_12px_34px_rgba(99,102,241,0.06)] backdrop-blur-md space-y-4">
-            <div className="mb-1 flex items-center justify-between">
+          <section id="profile-context" className="space-y-2 rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
+            <div className="flex items-center justify-between gap-2">
               <p className="text-sm text-gray-700" style={{ fontWeight: 600 }}>Personal context</p>
-              <button type="button" onClick={() => toggleSection('context')} className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-700">
+              <button type="button" onClick={() => toggleSection('context')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
                 {openSections.context ? 'Collapse' : 'Expand'}
               </button>
             </div>
             {openSections.context ? (
               <>
             <div>
-            <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>
+            <label className="mb-1 block text-xs text-gray-700 md:text-sm" style={{ fontWeight: 500 }}>
               About me
             </label>
             <textarea
               value={aboutMe}
               onChange={(e) => setAboutMe(e.target.value)}
-              className="w-full min-h-[120px] px-4 py-3 rounded-2xl border border-gray-200/80 bg-white/70 text-sm"
+              className="w-full min-h-[88px] rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 text-sm md:min-h-[100px] md:rounded-2xl md:px-4"
               placeholder="Short narrative: values, risk tolerance, context…"
             />
             </div>
             <div>
-            <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>
+            <label className="mb-1 block text-xs text-gray-700 md:text-sm" style={{ fontWeight: 500 }}>
               Constraints (one per line)
             </label>
             <textarea
               value={constraints}
               onChange={(e) => setConstraints(e.target.value)}
-              className="w-full min-h-[80px] px-4 py-3 rounded-2xl border border-gray-200/80 bg-white/70 text-sm"
+              className="w-full min-h-[64px] rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 text-sm md:min-h-[72px] md:rounded-2xl md:px-4"
               placeholder="Cannot relocate before 2027&#10;Max 50h weeks"
             />
             </div>
             <div>
-            <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>
+            <label className="mb-1 block text-xs text-gray-700 md:text-sm" style={{ fontWeight: 500 }}>
               Values (one per line)
             </label>
             <textarea
               value={values}
               onChange={(e) => setValues(e.target.value)}
-              className="w-full min-h-[80px] px-4 py-3 rounded-2xl border border-gray-200/80 bg-white/70 text-sm"
+              className="w-full min-h-[64px] rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 text-sm md:min-h-[72px] md:rounded-2xl md:px-4"
               placeholder="Honesty&#10;Autonomy"
             />
             </div>

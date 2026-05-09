@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { Sparkles, X } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { MainNavButtons } from '../MainNavButtons';
-import { ClarifyDialog, type ClarifyQuestion } from '../ClarifyDialog';
+import type { ClarifyQuestion } from '../ClarifyDialog';
+import { ClarificationCard, type ClarificationGateMeta } from './ClarificationCard';
 import { apiUrl } from '../../../utils/apiOrigin';
 import { parseSseBlocks } from '../../../utils/parseSse';
 import { useDecisionReportStream } from '../../../hooks/useDecisionReportStream';
@@ -14,6 +16,18 @@ import { DecisionSuggestionCard } from './DecisionSuggestionCard';
 import { ProfileUpdateCard } from './ProfileUpdateCard';
 import { ShadowChatInput } from './ShadowChatInput';
 import type { AgentStatus, ShadowMessage, ShadowSuggestion, ShadowThread } from './types';
+import { detectCalendarFeedbackIntent } from '../../../utils/calendarFeedbackIntent';
+import {
+  loadCoachSchedulerOptions,
+  mergeRefinedScheduleIntoStorage,
+  readExecutionPlannerSnapshot,
+  refineScheduleWithFeedback,
+} from '../../../utils/calendarRefineSchedule';
+import {
+  clearSelectedBlocksContext,
+  loadSelectedBlocksContext,
+} from '../../../utils/executionCalendarSelection';
+import { EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY } from '../../../utils/executionStorageKeys';
 
 export function ShadowChatShell({
   initialThreadId = null,
@@ -30,16 +44,31 @@ export function ShadowChatShell({
   const [timeline, setTimeline] = useState<string[]>(['Ready']);
   const [suggestion, setSuggestion] = useState<ShadowSuggestion | null>(null);
   const [profileUpdates, setProfileUpdates] = useState<string[]>([]);
+  /** Profile saves from thread JSON — shown inside the chat transcript after reload */
+  const [threadMemoryLog, setThreadMemoryLog] = useState<Array<{ kind: string; items: string[]; at: string }>>([]);
   const [reportOpen, setReportOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [clarifyOpen, setClarifyOpen] = useState(false);
-  const [clarifyPayload, setClarifyPayload] = useState<{ questions: ClarifyQuestion[]; note: string } | null>(null);
-  const [clarifyChecking, setClarifyChecking] = useState(false);
+  const [clarifyPayload, setClarifyPayload] = useState<{
+    questions: ClarifyQuestion[];
+    note: string;
+    meta?: ClarificationGateMeta | null;
+  } | null>(null);
   const [pendingClarifyAction, setPendingClarifyAction] = useState<{
     kind: 'chat' | 'report';
     text: string;
   } | null>(null);
+  const [calendarCoachHint, setCalendarCoachHint] = useState<string | null>(null);
+  const [calendarCoachBusy, setCalendarCoachBusy] = useState(false);
+  const [plannerSelectionContext, setPlannerSelectionContext] = useState(() => loadSelectedBlocksContext());
   const bottomRef = useRef<HTMLDivElement>(null);
+  /** Hold decision_suggestion until `done` + thread reload so the card does not flash then disappear. */
+  const lastDecisionSuggestionRef = useRef<ShadowSuggestion | null>(null);
+  const reportGeneratingRef = useRef(false);
+  const streamTurnSeqRef = useRef(0);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const [inputBootstrap, setInputBootstrap] = useState<string | null>(null);
   const reportStream = useDecisionReportStream();
   const { loadExistingTrace } = reportStream;
 
@@ -56,14 +85,22 @@ export function ShadowChatShell({
     setThreads(data.threads || []);
   };
 
-  const loadThread = async (id: string) => {
+  const loadThread = async (id: string, opts?: { preservePendingSuggestion?: boolean }) => {
     const res = await fetch(apiUrl(`/api/shadow-chat/threads/${encodeURIComponent(id)}`));
     if (!res.ok) return;
     const data = (await res.json()) as { thread: ShadowThread };
     setActiveThreadId(data.thread.thread_id);
     setMessages(data.thread.messages || []);
     setSuggestion(null);
+    if (!opts?.preservePendingSuggestion) {
+      lastDecisionSuggestionRef.current = null;
+    }
     setProfileUpdates([]);
+    setThreadMemoryLog(
+      Array.isArray(data.thread.memory_events)
+        ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string }>)
+        : [],
+    );
   };
 
   const newChat = async () => {
@@ -91,13 +128,32 @@ export function ShadowChatShell({
     } else if (threads.length === 0 && !activeThreadId) {
       setMessages([]);
       setSuggestion(null);
+      lastDecisionSuggestionRef.current = null;
       setProfileUpdates([]);
+      setThreadMemoryLog([]);
     }
   }, [threads, activeThreadId, initialThreadId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, timeline]);
+  }, [messages, timeline, threadMemoryLog]);
+
+  /** Recover `report_generating` if chat streaming callbacks briefly set `idle` during report generation. */
+  useEffect(() => {
+    if (reportOpen && reportStream.status === 'streaming') {
+      setAgentStatus('report_generating');
+    }
+  }, [reportOpen, reportStream.status]);
+
+  useEffect(() => {
+    setPlannerSelectionContext(loadSelectedBlocksContext());
+    const last = [...messages].reverse().find((m) => m.role === 'user');
+    if (last?.content && detectCalendarFeedbackIntent(last.content)) {
+      setCalendarCoachHint(last.content);
+    } else {
+      setCalendarCoachHint(null);
+    }
+  }, [messages]);
 
   const pinRevisionContext = useCallback(async (decisionId: string) => {
     if (!activeThreadId) return;
@@ -163,6 +219,13 @@ export function ShadowChatShell({
     if (!activeThreadId) return;
     setSending(true);
     try {
+      setSuggestion(null);
+      lastDecisionSuggestionRef.current = null;
+      setClarifyOpen(false);
+      setClarifyPayload(null);
+      setPendingClarifyAction(null);
+
+      const streamSeq = ++streamTurnSeqRef.current;
       setAgentStatus('reading_memory');
       pushTimeline('Reading memory');
       setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: 'user', content: text }]);
@@ -177,6 +240,7 @@ export function ShadowChatShell({
             user_action: userAction,
             clarification_answers: clarificationAnswers,
             save_clarification_to_profile: Boolean(saveClarificationToProfile),
+            client_turn_seq: streamSeq,
           }),
         });
       } catch (e) {
@@ -211,6 +275,7 @@ export function ShadowChatShell({
       const onEvent = (ev: Record<string, unknown>) => {
         const type = String(ev.type || '');
         if (type === 'status') {
+          if (reportGeneratingRef.current) return;
           const st = String(ev.status || 'idle') as AgentStatus;
           const label = String(ev.label || st);
           flushSync(() => {
@@ -223,26 +288,56 @@ export function ShadowChatShell({
         } else if (type === 'profile_update') {
           const items = Array.isArray(ev.items) ? ev.items.map(String) : [];
           setProfileUpdates(items);
+        } else if (type === 'thread_context_note') {
+          const note =
+            typeof ev.message === 'string' && ev.message.trim()
+              ? ev.message.trim()
+              : 'Keeping this in the current chat context';
+          pushTimeline(note);
+        } else if (type === 'clarification') {
+          const seqEv = ev.client_turn_seq;
+          if (seqEv != null && seqEv !== streamSeq) return;
+          const qs = ev.questions;
+          if (!Array.isArray(qs) || qs.length === 0) return;
+          const metaRaw = ev.clarification_meta;
+          const meta =
+            metaRaw && typeof metaRaw === 'object' ? (metaRaw as ClarificationGateMeta) : null;
+          setClarifyPayload({
+            questions: qs as ClarifyQuestion[],
+            note: typeof ev.note === 'string' ? ev.note : '',
+            meta,
+          });
+          setClarifyOpen(true);
+          setPendingClarifyAction(null);
         } else if (type === 'decision_suggestion') {
-          const s = (ev.suggestion || null) as ShadowSuggestion | null;
-          setSuggestion(s);
+          lastDecisionSuggestionRef.current = (ev.suggestion || null) as ShadowSuggestion | null;
         } else if (type === 'done') {
           done = true;
           if (ev.stream_error) {
             setAgentStatus('error');
-            return;
+          } else {
+            if (ev.metrics && typeof ev.metrics === 'object') {
+              pushTimeline(`response ${String((ev.metrics as Record<string, unknown>).response_total_ms ?? '')}ms`);
+            }
+            if (!reportGeneratingRef.current) {
+              setAgentStatus('idle');
+            }
           }
-          const msg = ev.message as ShadowMessage | undefined;
-          if (msg && msg.id) {
-            setMessages((prev) => {
-              const withoutDraft = prev.filter((x) => x.id !== draftId);
-              return [...withoutDraft, msg];
+          // Drop streaming draft; reload thread from server so user text matches merged clarification
+          // and assistant rows are never stuck missing after a partial stream failure.
+          setMessages((prev) => prev.filter((x) => x.id !== draftId));
+          if (activeThreadId) {
+            void loadThread(activeThreadId, { preservePendingSuggestion: true }).then(() => {
+              const fromDone =
+                ev && typeof ev === 'object' && 'suggestion' in ev
+                  ? ((ev as { suggestion?: ShadowSuggestion | null }).suggestion ?? null)
+                  : undefined;
+              setSuggestion(
+                fromDone !== undefined ? fromDone : lastDecisionSuggestionRef.current,
+              );
+              lastDecisionSuggestionRef.current = null;
             });
           }
-          if (ev.metrics && typeof ev.metrics === 'object') {
-            pushTimeline(`response ${String((ev.metrics as Record<string, unknown>).response_total_ms ?? '')}ms`);
-          }
-          setAgentStatus('idle');
         } else if (type === 'error') {
           setAgentStatus('error');
           const detail = typeof ev.message === 'string' ? ev.message : 'Request failed';
@@ -292,7 +387,11 @@ export function ShadowChatShell({
     clarificationAnswers?: Record<string, string>,
     saveClarificationToProfile?: boolean,
   ) => {
-    if (!activeThreadId) return;
+    if (!activeThreadId) {
+      pushTimeline('Pick or create a chat thread first');
+      return;
+    }
+    reportGeneratingRef.current = true;
     try {
       const lastUser = seedPrompt ?? (messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.');
       setSuggestion(null);
@@ -319,50 +418,101 @@ export function ShadowChatShell({
     } catch (e) {
       setAgentStatus('error');
       pushTimeline(e instanceof Error ? e.message : 'Decision report failed');
+    } finally {
+      reportGeneratingRef.current = false;
     }
   };
+
+  /** Always invoke latest beginDecisionReport — avoids stale useCallback closing over null activeThreadId. */
+  const beginDecisionReportRef = useRef(beginDecisionReport);
+  beginDecisionReportRef.current = beginDecisionReport;
 
   const requestClarifyIfNeeded = useCallback(
     async (text: string, kind: 'chat' | 'report'): Promise<boolean> => {
       if (!text.trim()) return false;
-      setClarifyChecking(true);
+      if (kind === 'report') {
+        pushTimeline('Checking if a quick clarification helps…');
+      }
       try {
+        const body: Record<string, unknown> = { raw_input: text, purpose: 'shadow_chat' };
+        if (activeThreadId) {
+          body.thread_id = activeThreadId;
+          body.recent_messages = messages.slice(-8).map((m) => ({ role: m.role, content: m.content }));
+        }
         const cr = await fetch(apiUrl('/api/clarify'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ raw_input: text }),
+          body: JSON.stringify(body),
         });
         if (cr.ok) {
           const gate = (await cr.json()) as {
             need_clarification?: boolean;
             questions?: ClarifyQuestion[];
             note?: string;
+            clarification_meta?: ClarificationGateMeta;
           };
           if (gate.need_clarification && Array.isArray(gate.questions) && gate.questions.length > 0) {
             setPendingClarifyAction({ kind, text });
-            setClarifyPayload({ questions: gate.questions, note: String(gate.note ?? '') });
+            setClarifyPayload({
+              questions: gate.questions,
+              note: String(gate.note ?? ''),
+              meta: gate.clarification_meta ?? null,
+            });
             setClarifyOpen(true);
             return true;
           }
         }
       } catch {
         // Optional gate. Ignore failures and continue.
-      } finally {
-        setClarifyChecking(false);
       }
       return false;
     },
-    [],
+    [activeThreadId, messages],
   );
+
+  const applyCalendarCoachFromChat = useCallback(async () => {
+    if (!calendarCoachHint?.trim()) return;
+    setCalendarCoachBusy(true);
+    try {
+      const { tasks, events } = readExecutionPlannerSnapshot();
+      if (tasks.length === 0) {
+        sessionStorage.setItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY, calendarCoachHint.trim());
+        setCalendarCoachHint(null);
+        navigate('/execution?from=shadow');
+        return;
+      }
+      const ctx = loadSelectedBlocksContext();
+      const targetTaskIds = ctx?.taskIds?.length ? ctx.taskIds : undefined;
+      const res = await refineScheduleWithFeedback({
+        feedback: calendarCoachHint.trim(),
+        tasks,
+        plannerEvents: events,
+        targetTaskIds,
+        options: loadCoachSchedulerOptions(),
+      });
+      mergeRefinedScheduleIntoStorage(res, { targetTaskIds });
+      clearSelectedBlocksContext();
+      setPlannerSelectionContext(null);
+      pushTimeline('Execution calendar updated from chat');
+      setCalendarCoachHint(null);
+    } catch (e) {
+      pushTimeline(e instanceof Error ? e.message.slice(0, 80) : 'Calendar update failed');
+    } finally {
+      setCalendarCoachBusy(false);
+    }
+  }, [calendarCoachHint, navigate, pushTimeline]);
 
   const onGenerateDecisionReport = useCallback(async () => {
     const lastUser = messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.';
-    if (clarifyOpen || clarifyChecking) return;
+    if (clarifyOpen) {
+      pushTimeline('Answer or skip the clarification card below first');
+      return;
+    }
     const blockedByClarify = await requestClarifyIfNeeded(lastUser, 'report');
     if (!blockedByClarify) {
-      await beginDecisionReport(lastUser);
+      await beginDecisionReportRef.current(lastUser);
     }
-  }, [messages, clarifyOpen, clarifyChecking, requestClarifyIfNeeded]);
+  }, [messages, clarifyOpen, requestClarifyIfNeeded]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
@@ -391,32 +541,151 @@ export function ShadowChatShell({
               <div className="min-h-[58vh] max-h-[66vh] overflow-y-auto px-1 py-3">
                 <ChatMessageList
                   messages={messages}
+                  memoryLog={threadMemoryLog}
                   onOpenReportArtifact={onOpenReportArtifact}
                   onReviseArtifact={onReviseFromArtifactOrPanel}
                   onArtifactExecutionCalendar={openExecutionCalendar}
+                  onSuggestionChip={(label) => setInputBootstrap(label)}
                 />
                 <div ref={bottomRef} />
               </div>
               <div className="mt-3 space-y-3 border-t border-gray-200/80 pt-3">
                 <DecisionSuggestionCard
                   suggestion={suggestion}
+                  disabled={sending || (clarifyOpen && pendingClarifyAction?.kind === 'report')}
                   onGenerate={() => void onGenerateDecisionReport()}
                   onKeep={() => setSuggestion(null)}
                 />
                 <ProfileUpdateCard items={profileUpdates} />
+                {calendarCoachHint ? (
+                  <div className="relative overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-white/95 via-indigo-50/40 to-violet-50/50 px-3 py-3 shadow-[0_8px_30px_rgba(99,102,241,0.12)]">
+                    <button
+                      type="button"
+                      className="absolute right-2 top-2 rounded-full p-1 text-slate-400 hover:bg-white/80 hover:text-slate-700"
+                      aria-label="Dismiss calendar hint"
+                      onClick={() => setCalendarCoachHint(null)}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                    <div className="flex items-center gap-2 pr-8 text-indigo-900">
+                      <Sparkles className="h-4 w-4 shrink-0 text-indigo-600" aria-hidden />
+                      <span className="text-xs font-semibold uppercase tracking-wide">Calendar insight</span>
+                    </div>
+                    <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-slate-700">{calendarCoachHint}</p>
+                    {plannerSelectionContext && plannerSelectionContext.taskIds.length > 0 ? (
+                      <div className="mt-2 rounded-lg border border-violet-200/80 bg-violet-50/90 px-2 py-1.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-900">Planner selection</p>
+                        <p className="mt-0.5 text-[11px] text-violet-950">
+                          Apply only to {plannerSelectionContext.taskIds.length} block(s):{' '}
+                          {plannerSelectionContext.titles.slice(0, 4).join(' · ')}
+                          {plannerSelectionContext.titles.length > 4 ? '…' : ''}
+                        </p>
+                        <button
+                          type="button"
+                          className="mt-1 text-[10px] font-medium text-violet-800 underline hover:text-violet-950"
+                          onClick={() => {
+                            clearSelectedBlocksContext();
+                            setPlannerSelectionContext(null);
+                          }}
+                        >
+                          Clear selection scope
+                        </button>
+                      </div>
+                    ) : null}
+                    <div className="mt-2.5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={calendarCoachBusy}
+                        onClick={() => void applyCalendarCoachFromChat()}
+                        className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50"
+                      >
+                        {calendarCoachBusy ? 'Applying…' : 'Apply to execution calendar'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={calendarCoachBusy}
+                        onClick={() => {
+                          sessionStorage.setItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY, calendarCoachHint.trim());
+                          navigate('/execution?from=shadow');
+                        }}
+                        className="rounded-full border border-indigo-200/90 bg-white/80 px-3 py-2 text-xs font-medium text-indigo-900 hover:bg-white"
+                      >
+                        Open planner
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 {!activeThreadId ? (
                   <p className="rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-900">
                     Click <span className="font-semibold">New Chat</span> to start. Threads are only created manually now.
                   </p>
                 ) : null}
+                {clarifyOpen && clarifyPayload ? (
+                  <ClarificationCard
+                    questions={clarifyPayload.questions}
+                    meta={clarifyPayload.meta}
+                    disabled={sending}
+                    onSkip={async () => {
+                      const pending = pendingClarifyAction;
+                      const payload = clarifyPayload;
+                      const q0 = payload?.questions[0];
+                      const dim = (payload?.meta?.target_dimension || q0?.id || "").trim();
+                      const qp = q0?.prompt ?? '';
+                      setClarifyOpen(false);
+                      setClarifyPayload(null);
+                      setPendingClarifyAction(null);
+                      if (activeThreadId && dim) {
+                        try {
+                          await fetch(
+                            apiUrl(
+                              `/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/clarification-skip`,
+                            ),
+                            {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                target_dimension: dim,
+                                question_prompt: qp,
+                              }),
+                            },
+                          );
+                        } catch {
+                          /* optional */
+                        }
+                      }
+                      if (!pending) return;
+                      if (pending.kind === 'chat') {
+                        await streamMessage(pending.text);
+                        return;
+                      }
+                      await beginDecisionReport(pending.text);
+                    }}
+                    onAnswer={(answers, saveToProfile) => {
+                      const pending = pendingClarifyAction;
+                      setClarifyOpen(false);
+                      setClarifyPayload(null);
+                      setPendingClarifyAction(null);
+                      if (pending?.kind === 'report') {
+                        void beginDecisionReport(pending.text, answers, saveToProfile);
+                        return;
+                      }
+                      if (pending?.kind === 'chat') {
+                        void streamMessage(pending.text, 'send_message', answers, saveToProfile);
+                        return;
+                      }
+                      const users = messagesRef.current.filter((m) => m.role === 'user');
+                      const lastUser = users[users.length - 1]?.content?.trim();
+                      if (lastUser) void streamMessage(lastUser, 'send_message', answers, saveToProfile);
+                    }}
+                  />
+                ) : null}
                 <ShadowChatInput
-                  disabled={sending || !activeThreadId || clarifyChecking}
+                  disabled={sending || !activeThreadId}
+                  bootstrapText={inputBootstrap}
+                  onBootstrapConsumed={() => setInputBootstrap(null)}
                   onSend={async (t) => {
-                    if (!activeThreadId || clarifyOpen || clarifyChecking) return;
-                    const blockedByClarify = await requestClarifyIfNeeded(t, 'chat');
-                    if (!blockedByClarify) {
-                      await streamMessage(t);
-                    }
+                    if (!activeThreadId || sending) return;
+                    await streamMessage(t);
                   }}
                 />
               </div>
@@ -427,7 +696,13 @@ export function ShadowChatShell({
               status={agentStatus}
               timeline={timeline}
               suggestion={suggestion}
+              generateReportDisabled={sending || (clarifyOpen && pendingClarifyAction?.kind === 'report')}
               onGenerateReport={() => void onGenerateDecisionReport()}
+              reportOverlaySession={
+                reportOpen
+                  ? { streaming: reportStream.isStreaming, progressStep: reportStream.progressStep }
+                  : null
+              }
             />
           </div>
         </div>
@@ -452,29 +727,6 @@ export function ShadowChatShell({
           setAgentStatus('idle');
         }}
         onReviseReport={(decisionId) => void onReviseFromArtifactOrPanel(decisionId)}
-      />
-      <ClarifyDialog
-        open={clarifyOpen}
-        onOpenChange={(open) => {
-          setClarifyOpen(open);
-          if (!open) {
-            setPendingClarifyAction(null);
-            setClarifyPayload(null);
-          }
-        }}
-        note={clarifyPayload?.note}
-        questions={clarifyPayload?.questions ?? []}
-        onConfirm={(answers, saveToProfile) => {
-          const pending = pendingClarifyAction;
-          setPendingClarifyAction(null);
-          setClarifyPayload(null);
-          if (!pending) return;
-          if (pending.kind === 'chat') {
-            void streamMessage(pending.text, 'send_message', answers, saveToProfile);
-            return;
-          }
-          void beginDecisionReport(pending.text, answers, saveToProfile);
-        }}
       />
     </div>
   );

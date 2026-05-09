@@ -69,6 +69,14 @@ def _heuristic(message: str) -> ChatIntentResult:
         reasons.append(f"roleplay cues: {', '.join(role_hits[:3])}")
     if dec_hits:
         reasons.append(f"decision cues: {', '.join(dec_hits[:3])}")
+    # Typing "A or B" / "school or work" is a strong fork signal even when only one keyword matched.
+    if " or " in text and len(text) > 12:
+        conf_dec = min(1.0, conf_dec + 0.18)
+        reasons.append("binary fork phrasing (or)")
+    # Clarification modal answers almost always mean the user is in a decision workflow.
+    if "user clarification (structured):" in text:
+        conf_dec = min(1.0, conf_dec + 0.34)
+        reasons.append("structured clarification present")
     if conf_role >= 0.66 and conf_role > conf_dec:
         return ChatIntentResult(
             intent="roleplay_candidate",

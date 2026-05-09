@@ -128,9 +128,16 @@ def build_shadow_decision_context_block(
     last_user_message: str,
     thread_id: str | None = None,
     retrieval_mode: str = "chat_fast",
+    minimal_long_term_context: bool = False,
 ) -> str:
     """Single block for the Shadow system prompt: traces on disk + optional Chroma matches."""
     s = settings or load_settings()
+    if minimal_long_term_context:
+        return (
+            "Indexed long-term recall is intentionally LIGHT for this turn because the user is likely asking about "
+            "this chat thread. Prefer [Recent conversation in this thread] and [Thread working summary]. "
+            "Do not substitute vector-memory guesses for explicit recent messages."
+        )
     parts: list[str] = []
 
     trace_part = _format_recent_traces_block(s)

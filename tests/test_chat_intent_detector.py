@@ -20,3 +20,21 @@ def test_casual_message_not_triggered() -> None:
     out = detect_chat_intent("How to cook pasta quickly?", [], llm_enabled=False)
     assert out.intent == "normal"
 
+
+def test_fork_should_i_or_triggers_decision() -> None:
+    out = detect_chat_intent(
+        "Should I go to Grad school or work?",
+        [],
+        llm_enabled=False,
+    )
+    assert out.intent == "decision_candidate"
+
+
+def test_structured_clarification_suffix_triggers_decision() -> None:
+    out = detect_chat_intent(
+        "Should I buy X?\n\nUser clarification (structured):\n- axis: value",
+        [],
+        llm_enabled=False,
+    )
+    assert out.intent == "decision_candidate"
+

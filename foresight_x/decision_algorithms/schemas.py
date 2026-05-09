@@ -132,6 +132,10 @@ class SchedulerOptions(BaseModel):
     days: int = 7
     slot_minutes: int = 30
     min_gap_minutes: int = 10
+    #: 0 = unlimited; e.g. 2 caps how many *new* AI blocks may land on the same calendar day (spread workload).
+    max_ai_blocks_per_day: int = Field(default=0, ge=0, le=12)
+    #: Empty = any weekday allowed; else Python weekday() 0=Monday … 6=Sunday.
+    allowed_weekdays: list[int] = Field(default_factory=list)
 
 
 class ScheduleResult(BaseModel):

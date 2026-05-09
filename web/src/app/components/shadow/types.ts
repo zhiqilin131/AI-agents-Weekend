@@ -18,6 +18,10 @@ export type ShadowThread = {
   memory_events?: Array<{ kind: string; items: string[]; at: string }>;
   linked_decision_ids?: string[];
   active_report_context?: { decision_id: string; mode: string } | null;
+  /** Rolling local summary — not durable profile memory */
+  working_summary?: string;
+  /** Ephemeral thread notes (jokes, roleplay, etc.) — never promoted without confirmation */
+  temporary_context?: Array<Record<string, unknown>>;
 };
 
 export type ShadowSuggestion = {
