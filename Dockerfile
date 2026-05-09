@@ -26,5 +26,5 @@ RUN mkdir -p /data/chroma
 
 EXPOSE 8765
 
-CMD ["sh", "-c", "uvicorn foresight_x.ui.api_server:app --host 0.0.0.0 --port $PORT --workers 2"]
+CMD uvicorn foresight_x.ui.api_server:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2
 
