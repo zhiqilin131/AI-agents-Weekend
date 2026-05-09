@@ -1,4 +1,6 @@
 import { Calendar, FileText, MessageSquareText, Sparkles } from 'lucide-react';
+import { SlimeAdvisor } from '../report/SlimeAdvisor';
+import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
 
 export type ArtifactStatus = 'complete' | 'generating' | 'error';
 
@@ -21,6 +23,7 @@ export function DecisionReportArtifactCard({
   onReviseChat: () => void;
   onOpenExecutionCalendar: () => void;
 }) {
+  const { slimeProfile } = useSlimeProfile();
   const pill =
     status === 'complete' ? (
       <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">Complete</span>
@@ -43,6 +46,9 @@ export function DecisionReportArtifactCard({
           </div>
           <p className="mt-1 text-xs text-gray-600 leading-relaxed">{summary || 'Generated from this conversation.'}</p>
           {createdAt ? <p className="mt-1 text-[10px] text-gray-400">{createdAt}</p> : null}
+          <div className="mt-1.5">
+            <SlimeAdvisor size="sm" profile={slimeProfile} state={status === 'generating' ? 'thinking' : 'idle'} className="scale-[0.7] origin-left" />
+          </div>
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">

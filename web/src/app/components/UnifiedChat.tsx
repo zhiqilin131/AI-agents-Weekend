@@ -6,6 +6,7 @@ import { DecisionReportPanel } from './DecisionReportPanel';
 import { MainNavButtons } from './MainNavButtons';
 import { ModePill } from './ModePill';
 import { ModeSuggestionBanner } from './ModeSuggestionBanner';
+import { primeSpeechSynthesisFromGesture } from '../hooks/useSpeechSynthesis';
 
 type Message = {
   id: string;
@@ -34,6 +35,9 @@ export function UnifiedChat() {
   }, [messages, suggestion]);
 
   const callUnified = async (payload: Record<string, unknown>) => {
+    if (payload.user_action === 'generate_decision_report') {
+      primeSpeechSynthesisFromGesture();
+    }
     const res = await fetch(apiUrl('/api/chat/unified'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -71,7 +75,9 @@ export function UnifiedChat() {
       <div className="mx-auto max-w-5xl">
         <MainNavButtons />
         <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-2xl text-gray-900" style={{ fontWeight: 700 }}>Foresight-X</h1>
+          <h1 className="text-2xl text-gray-900" style={{ fontWeight: 700 }}>
+            Foresight-<span className="text-purple-600">X</span>
+          </h1>
           <ModePill mode={mode} />
         </div>
         <div className="rounded-[28px] border border-white/90 bg-white/65 p-4 shadow-[0_16px_42px_rgba(99,102,241,0.09)] backdrop-blur-md">

@@ -29,6 +29,7 @@ web = [
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.32,<1",
     "python-multipart>=0.0.9,<1",
+    "faster-whisper>=1.0,<2",
 ]
 decision = [
     "ortools>=9.10,<10",

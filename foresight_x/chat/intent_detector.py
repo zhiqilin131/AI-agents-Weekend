@@ -34,6 +34,12 @@ _ROLEPLAY_HINTS = [
 ]
 _DECISION_HINTS = [
     "should i",
+    "shall i",
+    "what shall",
+    "what should i do",
+    "whether to",
+    "trying to decide",
+    "deciding whether",
     "help me decide",
     "which option",
     "tradeoff",
@@ -41,6 +47,8 @@ _DECISION_HINTS = [
     "deadline",
     "offer",
     "risk",
+    "what do i do",
+    "我该怎么办",
     "我该不该",
     "要不要",
     "帮我决定",
@@ -69,6 +77,10 @@ def _heuristic(message: str) -> ChatIntentResult:
         reasons.append(f"roleplay cues: {', '.join(role_hits[:3])}")
     if dec_hits:
         reasons.append(f"decision cues: {', '.join(dec_hits[:3])}")
+    # Voice/common phrasing: "whether to X ... but I'm busy with Y" is a fork without "or".
+    if "whether" in text and len(text) > 24 and any(k in text for k in ("busy", "conflict", "at the same time", "but also")):
+        conf_dec = min(1.0, conf_dec + 0.24)
+        reasons.append("whether + competing commitment")
     # Typing "A or B" / "school or work" is a strong fork signal even when only one keyword matched.
     if " or " in text and len(text) > 12:
         conf_dec = min(1.0, conf_dec + 0.18)

@@ -1,5 +1,7 @@
 import { cn } from '../ui/utils';
 import type { AgentStatus } from './types';
+import { SlimeAdvisor } from '../report/SlimeAdvisor';
+import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
 
 const statusLabel: Record<AgentStatus, string> = {
   idle: 'Idle',
@@ -22,10 +24,12 @@ export function AgentPresenceCard({
   status: AgentStatus;
   timeline: string[];
 }) {
+  const { slimeProfile } = useSlimeProfile();
   return (
     <aside className="rounded-3xl border border-white/90 bg-white/65 p-4 shadow-[0_10px_28px_rgba(99,102,241,0.10)] backdrop-blur-md">
       <p className="text-xs font-semibold uppercase tracking-wide text-indigo-500">Shadow Chat</p>
       <div className="mt-2 flex items-center gap-3">
+        <SlimeAdvisor size="sm" profile={slimeProfile} state={status === 'thinking' ? 'thinking' : 'idle'} />
         <div
           className={cn(
             'h-4 w-4 rounded-full',

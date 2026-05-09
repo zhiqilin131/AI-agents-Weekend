@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router';
 import { CheckCircle2 } from 'lucide-react';
 import type { DecisionReport, ResourceDrop } from '../../model';
@@ -15,6 +15,8 @@ import { SlimeAdvisor, type SlimeAdvisorState } from './SlimeAdvisor';
 import { SpeechBubble } from './SpeechBubble';
 import { MiniReadAloudControl } from './MiniReadAloudControl';
 import { ResourceDrops } from './ResourceDrops';
+import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
+import { slimeBubbleLabel } from '../../../utils/slimeBubbleLabel';
 
 export function RecommendationCard({
   report,
@@ -55,8 +57,38 @@ export function RecommendationCard({
   const preview = useMemo(() => conciseReasoningPreview(reasoning), [reasoning]);
 
   const { supported, isSpeaking, isPaused, speak, pause, resume, cancel } = useSpeechSynthesis();
+  const { slimeProfile, refreshSlimeProfile } = useSlimeProfile();
+  /** After a streaming phase, fire one auto read-aloud when the card settles (same gesture chain as “generate report” if primed). */
+  const autoSpokenAfterIdleRef = useRef(false);
 
   useEffect(() => () => cancel(), [cancel]);
+
+  /** Report view often mounts while streaming; refetch slime when the card settles so colors/voice match Profile. */
+  useEffect(() => {
+    if (isStreaming) return;
+    void refreshSlimeProfile();
+  }, [isStreaming, refreshSlimeProfile]);
+
+  const ttsOpts = useMemo(
+    () => ({
+      rate: slimeProfile.voice?.rate,
+      pitch: slimeProfile.voice?.pitch,
+      preferredVoiceName: slimeProfile.voice?.preferredVoiceName,
+      onMayHaveBlocked: () => cancel(),
+    }),
+    [slimeProfile.voice?.rate, slimeProfile.voice?.pitch, slimeProfile.voice?.preferredVoiceName, cancel],
+  );
+
+  useEffect(() => {
+    if (isStreaming) {
+      autoSpokenAfterIdleRef.current = false;
+      return;
+    }
+    if (!supported || !speechText.trim()) return;
+    if (autoSpokenAfterIdleRef.current) return;
+    autoSpokenAfterIdleRef.current = true;
+    speak(speechText, ttsOpts);
+  }, [isStreaming, speechText, supported, speak, ttsOpts]);
 
   const dropsLoading = Boolean(resourceDropsLoading);
   const dropsList = resourceDrops ?? [];
@@ -77,7 +109,7 @@ export function RecommendationCard({
   const handleReadAloud = () => {
     if (!supported) return;
     if (!isSpeaking) {
-      speak(speechText);
+      speak(speechText, ttsOpts);
       return;
     }
     if (isPaused) {
@@ -106,14 +138,22 @@ export function RecommendationCard({
     <section className="rounded-[24px] border border-white/90 bg-gradient-to-br from-white/85 to-purple-50/45 p-6 shadow-[0_8px_40px_rgba(0,0,0,0.06)] backdrop-blur-md">
       <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start">
         <div className="flex shrink-0 flex-row items-end gap-2 sm:flex-col sm:items-center">
-          <SlimeAdvisor state={effectiveSlimeState} size="md" />
-          <MiniReadAloudControl
-            supported={supported}
-            isPlaying={isSpeaking}
-            isPaused={isPaused}
-            disabled={isStreaming || !speechText.trim()}
-            onPress={handleReadAloud}
+          {/* Report slime is decorative — disable hit targets so pulsing SVG/Motion layers cannot sit above the play control */}
+          <SlimeAdvisor
+            className="pointer-events-none"
+            state={effectiveSlimeState}
+            size="md"
+            profile={slimeProfile}
           />
+          <div className="relative z-20">
+            <MiniReadAloudControl
+              supported={supported}
+              isPlaying={isSpeaking}
+              isPaused={isPaused}
+              disabled={Boolean(isStreaming) || !speechText.trim()}
+              onPress={handleReadAloud}
+            />
+          </div>
         </div>
         <div className="min-w-0 flex-1 space-y-3">
           <div>
@@ -124,6 +164,9 @@ export function RecommendationCard({
             </p>
           </div>
           <SpeechBubble speaking={mouthSpeaking} tailToward="start">
+            <p className="mb-1 text-[11px] uppercase tracking-wide text-purple-700/90">
+              {slimeBubbleLabel(slimeProfile)}
+            </p>
             <p className="text-sm font-medium leading-relaxed text-gray-800">{bubbleText}</p>
           </SpeechBubble>
           {executionCalendar ? (

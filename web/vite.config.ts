@@ -16,10 +16,20 @@ const apiProxy = {
 
 export default defineConfig({
   server: {
+    // Align with `web/.env.development` (`127.0.0.1:8765` API) and stable HMR WebSocket URL.
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
     proxy: { ...apiProxy },
+    // Avoid stale JS when switching branches — Cursor/simple-browser often picks up latest, system browser may not.
+    headers: { 'Cache-Control': 'no-store' },
   },
   preview: {
+    host: '127.0.0.1',
+    port: 4173,
+    strictPort: true,
     proxy: { ...apiProxy },
+    headers: { 'Cache-Control': 'no-store' },
   },
   plugins: [
     // The React and Tailwind plugins are both required for Make, even if

@@ -529,12 +529,12 @@ function CompanionMesh({
     const eyeX = pointer.x * 0.015;
     const eyeY = pointer.y * 0.012;
     if (leftEyeRef.current) {
-      leftEyeRef.current.position.x = -0.14 + eyeX;
-      leftEyeRef.current.position.y = 0.1 + eyeY;
+      leftEyeRef.current.position.x = -0.17 + eyeX;
+      leftEyeRef.current.position.y = 0.075 + eyeY;
     }
     if (rightEyeRef.current) {
-      rightEyeRef.current.position.x = 0.14 + eyeX;
-      rightEyeRef.current.position.y = 0.1 + eyeY;
+      rightEyeRef.current.position.x = 0.17 + eyeX;
+      rightEyeRef.current.position.y = 0.075 + eyeY;
     }
 
     if (nodesRef.current) {
@@ -653,7 +653,7 @@ function CompanionMesh({
           <sphereGeometry args={[0.046, 12, 12]} />
           <meshBasicMaterial transparent />
         </mesh>
-        <mesh position={[0, -0.08, 0.5]} scale={[1, 0.6, 1]}>
+        <mesh position={[0, -0.035, 0.5]} scale={[1, 0.6, 1]}>
           <torusGeometry args={[0.1, 0.012, 8, 30, Math.PI]} />
           <meshBasicMaterial ref={smileMatRef} />
         </mesh>

@@ -11,6 +11,7 @@ import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
 import { apiUrl } from '../utils/apiOrigin';
 import { parseSseBlocks } from '../utils/parseSse';
 import type { AppState, DecisionReport } from '../app/model';
+import { HomeRoamingSlime } from '../app/components/home/HomeRoamingSlime';
 
 const PIPELINE_STAGES = ['enhance', 'perceive', 'retrieve', 'infer', 'simulate', 'evaluate', 'finalize'] as const;
 
@@ -261,7 +262,7 @@ export default function HomePage() {
         let msg = e instanceof Error ? e.message : 'Run failed';
         if (e instanceof Error && e.name === 'AbortError') {
           msg =
-            'Run timed out (5 min). Ensure uvicorn is on 8765, OPENAI_API_KEY is set, and `.env.development` has VITE_API_ORIGIN=http://127.0.0.1:8765 for streaming.';
+            'Run timed out (5 min). Ensure API is on 8765 (`npm run dev:all` from web/ or `python -m uvicorn …`), OPENAI_API_KEY is set, and `.env.development` has VITE_API_ORIGIN=http://127.0.0.1:8765 for streaming.';
         }
         setError(msg);
         setClarifyGateHint(null);
@@ -412,7 +413,7 @@ export default function HomePage() {
 
       <header className="mb-6">
         <h1 className="text-3xl md:text-4xl text-gray-900 tracking-tight" style={{ fontWeight: 700, letterSpacing: '-0.03em' }}>
-          Foresight-X
+          Foresight-<span className="text-purple-600">X</span>
         </h1>
         <p className="text-sm md:text-base text-gray-500 mt-1" style={{ fontWeight: 400 }}>
           Evidence-grounded decision agent
@@ -490,7 +491,7 @@ export default function HomePage() {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] relative overflow-hidden">
+    <div className="relative min-h-screen overflow-x-hidden bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff]">
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-20 left-10 w-[500px] h-[500px] bg-gradient-to-br from-purple-300/30 to-pink-300/30 rounded-full blur-3xl"></div>
         <div className="absolute bottom-20 right-10 w-[500px] h-[500px] bg-gradient-to-br from-blue-300/30 to-purple-300/30 rounded-full blur-3xl"></div>
@@ -499,13 +500,13 @@ export default function HomePage() {
 
       <div className="relative z-10">
         {state === 'empty' ? (
-          <div className="flex min-h-screen flex-col items-center px-6 pb-12 pt-3 sm:px-8 sm:pt-4 md:pt-5">
+          <div className="relative flex min-h-screen flex-col items-center px-6 pb-12 pt-3 sm:px-8 sm:pt-4 md:pt-5">
             <div className="w-full max-w-3xl">
               {navLanding}
               <div className="mt-10 w-full sm:mt-14 md:mt-20">
                 <div className="mb-12 text-center sm:mb-14">
                   <h1 className="mb-4 text-6xl text-gray-900 tracking-tight sm:mb-5 sm:text-7xl" style={{ fontWeight: 700, letterSpacing: '-0.04em' }}>
-                    Foresight-X
+                    Foresight-<span className="text-purple-600">X</span>
                   </h1>
                   <p className="text-lg text-gray-500 sm:text-xl" style={{ fontWeight: 400 }}>
                     Evidence-grounded decision agent
@@ -535,6 +536,7 @@ export default function HomePage() {
         ) : (
           workspace
         )}
+        {state === 'empty' ? <HomeRoamingSlime /> : null}
       </div>
 
       <ClarifyDialog

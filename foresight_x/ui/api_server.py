@@ -7,6 +7,9 @@ from typing import Any
 import json
 import uuid
 from datetime import datetime, timezone
+import asyncio
+import tempfile
+from contextlib import asynccontextmanager
 
 import io
 import logging
@@ -18,10 +21,10 @@ from concurrent.futures import TimeoutError as FuturesTimeout
 import time
 
 import chromadb
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from foresight_x.config import load_settings
 from foresight_x.harness.improvement_loop import apply_outcome_to_memory
@@ -55,7 +58,20 @@ from foresight_x.profile.merge import (
     delete_priority_line_by_id,
 )
 from foresight_x.profile.store import load_user_profile, save_user_profile
-from foresight_x.schemas import DecisionCommit, DecisionOutcome, ProfileLine, UserProfile
+from foresight_x.schemas import (
+    DecisionCommit,
+    DecisionOutcome,
+    ProfileLine,
+    SlimeAccessory,
+    SlimeColorTheme,
+    SlimeCustomColors,
+    SlimeMotion,
+    SlimePersonality,
+    SlimeProfile,
+    SlimeShape,
+    SlimeVoicePreferences,
+    UserProfile,
+)
 from foresight_x.ui.cli import _build_context
 from foresight_x.memory_graph import TemporalGraphMemory
 from foresight_x.memory.profile_store import empty_profile as load_tier3_empty_profile
@@ -261,7 +277,37 @@ def _trace_visible_to_current(trace_user_id: str, current_user_id: str) -> bool:
     return current == "demo_user"
 
 
-app = FastAPI(title="Foresight-X API", version="0.1.0")
+def _default_slime_profile() -> SlimeProfile:
+    return SlimeProfile(
+        name="Mochi",
+        color_theme=SlimeColorTheme.VIOLET,
+        personality=SlimePersonality.CALM,
+        shape=SlimeShape.CLASSIC,
+        accessory=SlimeAccessory.NONE,
+        motion=SlimeMotion.NORMAL,
+        updated_at=_utc_now(),
+    )
+
+
+def _resolved_slime_profile(profile: UserProfile) -> SlimeProfile:
+    if profile.slime_profile is None:
+        return _default_slime_profile()
+    return profile.slime_profile
+
+
+@asynccontextmanager
+async def _app_lifespan(_: FastAPI):
+    if os.getenv("ASR_WARMUP_ON_START", "").strip().lower() in ("1", "true", "yes"):
+        try:
+            from foresight_x.voice.asr import warmup_asr_model
+
+            warmup_asr_model()
+        except Exception as e:
+            _log.warning("ASR warmup skipped: %s", e)
+    yield
+
+
+app = FastAPI(title="Foresight-X API", version="0.1.0", lifespan=_app_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -283,6 +329,41 @@ class RunRequest(BaseModel):
     preserve_raw_input: bool = Field(default=False)
 
 
+class SlimeProfilePatch(BaseModel):
+    name: str | None = Field(default=None, max_length=24)
+    color_theme: SlimeColorTheme | None = None
+    custom_colors: SlimeCustomColors | None = None
+    personality: SlimePersonality | None = None
+    shape: SlimeShape | None = None
+    accessory: SlimeAccessory | None = None
+    motion: SlimeMotion | None = None
+    voice: SlimeVoicePreferences | None = None
+
+    @classmethod
+    def from_api_payload(cls, body: dict[str, Any]) -> "SlimeProfilePatch":
+        transformed = dict(body or {})
+        for src, dst in [("colorTheme", "color_theme"), ("customColors", "custom_colors")]:
+            if src in transformed and dst not in transformed:
+                transformed[dst] = transformed.pop(src)
+        voice = transformed.get("voice")
+        if isinstance(voice, dict):
+            v2 = dict(voice)
+            if "preferredVoiceName" in v2 and "preferred_voice_name" not in v2:
+                v2["preferred_voice_name"] = v2.pop("preferredVoiceName")
+            transformed["voice"] = v2
+        return cls.model_validate(transformed)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s:
+            raise ValueError("name cannot be empty")
+        return s[:24]
+
+
 class ExternalEventRequest(BaseModel):
     text: str = Field(min_length=1)
     event_type: str = Field(default="external_event", min_length=1)
@@ -300,6 +381,19 @@ class ClarifyRequest(BaseModel):
 class ClarifySkipRequest(BaseModel):
     target_dimension: str = Field(min_length=1)
     question_prompt: str = Field(default="", max_length=900)
+
+
+class SlimeConfirmCalendarBody(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    start: str = Field(min_length=1)
+    end: str = Field(min_length=1)
+    description: str | None = Field(default=None, max_length=500)
+
+
+class SlimeTtsBody(BaseModel):
+    """Buddy auto-play: MP3 bytes for <audio> (avoids speechSynthesis gesture loss after async)."""
+
+    text: str = Field(..., min_length=1, max_length=4096)
 
 
 class RunResponse(BaseModel):
@@ -331,6 +425,10 @@ def root() -> dict[str, object]:
             "/api/run",
             "/api/run/stream",
             "/api/profile",
+            "/api/profile/slime",
+            "/api/slime/voice-command",
+            "/api/slime/tts",
+            "/api/slime/confirm-calendar-block",
             "/api/profile/priority-line/{line_id}",
             "/api/profile/memory-fact/{fact_id}",
             "/api/profile/tier3",
@@ -533,6 +631,8 @@ def get_profile() -> dict:
     p = load_user_profile(settings).model_dump(mode="json")
     mfs = p.get("memory_facts") or []
     p["memory_facts"] = [x for x in mfs if (x or {}).get("status", "active") != "deprecated"]
+    if not p.get("slime_profile"):
+        p["slime_profile"] = _default_slime_profile().model_dump(mode="json")
     return p
 
 
@@ -578,6 +678,35 @@ def put_profile(body: UserProfile) -> dict:
     )
     path = save_user_profile(merged, settings=settings)
     return {"ok": True, "path": str(path)}
+
+
+@app.get("/api/profile/slime")
+def get_slime_profile() -> JSONResponse:
+    settings = _settings_for_active_user()
+    profile = load_user_profile(settings)
+    body = _resolved_slime_profile(profile).model_dump(mode="json")
+    return JSONResponse(content=body, headers={"Cache-Control": "no-store, must-revalidate"})
+
+
+@app.patch("/api/profile/slime")
+def patch_slime_profile(body: dict[str, Any]) -> JSONResponse:
+    settings = _settings_for_active_user()
+    existing = load_user_profile(settings)
+    try:
+        patch = SlimeProfilePatch.from_api_payload(body)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"invalid_slime_profile_patch: {e.errors()}") from e
+    base = _resolved_slime_profile(existing)
+    updates = patch.model_dump(exclude_unset=True)
+    if "custom_colors" in updates and "color_theme" not in updates:
+        updates["color_theme"] = SlimeColorTheme.CUSTOM
+    merged = SlimeProfile.model_validate(base.model_copy(update=updates).model_dump(mode="json"))
+    merged = merged.model_copy(update={"updated_at": _utc_now()})
+    save_user_profile(existing.model_copy(update={"slime_profile": merged}), settings=settings)
+    return JSONResponse(
+        content=merged.model_dump(mode="json"),
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 @app.delete("/api/profile/priority-line/{line_id}")
@@ -2048,6 +2177,291 @@ async def transcribe_audio(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=502, detail=f"Transcription failed: {e!s}") from e
     text = getattr(tr, "text", None) or ""
     return {"text": text.strip()}
+
+
+def _run_slime_voice_pipeline(
+    raw: bytes,
+    filename: str | None,
+    current_route: str | None,
+    thread_id: str | None,
+    slime_profile_s: str | None,
+    recent_ui_s: str | None,
+    settings,
+) -> dict[str, Any]:
+    from foresight_x.chat.conversation_service import ensure_slime_voice_thread, process_conversation_turn
+    from foresight_x.chat.thread_store import append_message
+    from foresight_x.shadow.thread_summary import maybe_update_thread_summary
+    from foresight_x.voice.asr import transcribe_audio
+    from foresight_x.voice.slime_voice_router import SlimeVoiceContext, route_slime_voice_command
+    from foresight_x.voice.slime_tools import execute_slime_tool
+
+    t_total0 = time.perf_counter()
+    if not raw:
+        raise ValueError("empty_audio")
+
+    suffix = Path(filename or "rec.webm").suffix
+    allowed = {".webm", ".wav", ".mp3", ".m4a", ".ogg", ".flac", ".mp4"}
+    if not suffix or suffix.lower() not in allowed:
+        suffix = ".webm"
+
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    try:
+        os.write(fd, raw)
+    finally:
+        os.close(fd)
+    try:
+        tr = transcribe_audio(tmp_path, settings=settings)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    transcript = (tr.text or "").strip()
+    if not transcript:
+        raise ValueError("no_speech_detected")
+
+    uid = settings.foresight_user_id
+    sp: dict[str, Any] = {}
+    if slime_profile_s:
+        try:
+            raw_sp = json.loads(slime_profile_s)
+            if isinstance(raw_sp, dict):
+                sp = raw_sp
+        except json.JSONDecodeError:
+            sp = {}
+    ruc: dict[str, Any] = {}
+    if recent_ui_s:
+        try:
+            raw_r = json.loads(recent_ui_s)
+            if isinstance(raw_r, dict):
+                ruc = raw_r
+        except json.JSONDecodeError:
+            ruc = {}
+
+    thread = ensure_slime_voice_thread(uid, thread_id)
+    resolved_tid = str(thread.get("thread_id") or "")
+
+    ctx = SlimeVoiceContext(
+        user_id=uid,
+        current_route=current_route,
+        thread_id=resolved_tid,
+        slime_profile=sp,
+        recent_ui_context=ruc,
+    )
+    t_route0 = time.perf_counter()
+    route = route_slime_voice_command(transcript, ctx, settings=settings)
+    route_ms = (time.perf_counter() - t_route0) * 1000
+
+    tr_timing = tr.timing or {}
+    timing: dict[str, Any] = {
+        "audio_duration_seconds": tr.duration_seconds,
+        "asr_provider": tr.provider,
+        "asr_model": tr_timing.get("model"),
+        "asr_model_load_ms": tr_timing.get("asr_model_load_ms"),
+        "transcription_ms": tr_timing.get("transcription_ms"),
+        "realtime_factor": tr_timing.get("realtime_factor"),
+        "intent_route_ms": route_ms,
+        "tool_execute_ms": 0.0,
+        "total_ms": 0.0,
+    }
+
+    tool_executables = {
+        "navigate",
+        "search_memory",
+        "create_calendar_draft",
+        "update_slime_profile",
+        "open_shadow_chat",
+    }
+    if route.tool_name in tool_executables:
+        t_tool0 = time.perf_counter()
+        tool_result, fe, assistant_text = execute_slime_tool(
+            route, ctx, settings=settings, transcript=transcript
+        )
+        tool_ms = (time.perf_counter() - t_tool0) * 1000
+        timing["tool_execute_ms"] = tool_ms
+        timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
+
+        append_message(
+            thread,
+            role="user",
+            content=transcript,
+            mode="normal",
+            metadata_extra={"interaction_source": "slime_voice", "modality": "voice"},
+        )
+        append_message(
+            thread,
+            role="assistant",
+            content=assistant_text,
+            mode="normal",
+            memory_used=route.tool_name == "search_memory",
+        )
+        maybe_update_thread_summary(thread, settings=settings)
+
+        voice_ui: dict[str, Any] = {
+            "intent": route.intent,
+            "memory_phases": ["searching_memory", "synthesizing"] if route.tool_name == "search_memory" else [],
+            "evidence_items": tool_result.get("evidence_items", []) if isinstance(tool_result, dict) else [],
+            "should_show_evidence_drawer": (
+                tool_result.get("should_show_evidence_drawer", False) if isinstance(tool_result, dict) else False
+            ),
+        }
+        return {
+            "transcript": transcript,
+            "asr_provider": tr.provider,
+            "language": tr.language,
+            "assistant_text": assistant_text,
+            "spoken_text": assistant_text,
+            "spoken_sequence": [assistant_text],
+            "thread_id": resolved_tid,
+            "intent": route.intent,
+            "decision_suggestion": None,
+            "memory_updates": [],
+            "tool_call": {"name": route.tool_name, "arguments": route.arguments},
+            "tool_result": tool_result,
+            "frontend_action": fe,
+            "requires_confirmation": route.requires_confirmation,
+            "timing": timing,
+            "voice_ui": voice_ui,
+        }
+
+    t_conv0 = time.perf_counter()
+    turn = process_conversation_turn(
+        settings=settings,
+        user_id=uid,
+        thread=thread,
+        user_message=transcript,
+        source="slime_voice",
+        modality="voice",
+        clarification_answers=None,
+    )
+    timing["tool_execute_ms"] = (time.perf_counter() - t_conv0) * 1000
+    timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
+
+    assistant_text = str(turn.get("assistant_text") or "")
+    spoken_seq = [x for x in (turn.get("spoken_sequence") or []) if str(x).strip()]
+    spoken_text = " ".join(spoken_seq).strip() or assistant_text
+    ds = turn.get("decision_suggestion")
+    fe_out = turn.get("frontend_action") or {"type": "none", "route": "", "payload": {}}
+
+    voice_ui = {
+        "intent": str(turn.get("intent") or route.intent),
+        "memory_phases": [],
+        "evidence_items": [],
+        "should_show_evidence_drawer": False,
+    }
+    return {
+        "transcript": transcript,
+        "asr_provider": tr.provider,
+        "language": tr.language,
+        "assistant_text": assistant_text,
+        "spoken_text": spoken_text,
+        "spoken_sequence": spoken_seq,
+        "thread_id": str(turn.get("thread_id") or resolved_tid),
+        "intent": str(turn.get("intent") or route.intent),
+        "decision_suggestion": ds,
+        "memory_updates": turn.get("memory_updates") or [],
+        "tool_call": {"name": route.tool_name, "arguments": route.arguments},
+        "tool_result": {"ok": True, "conversation_turn": True},
+        "frontend_action": fe_out,
+        "requires_confirmation": bool(ds and ds.get("should_show")),
+        "timing": timing,
+        "voice_ui": voice_ui,
+    }
+
+
+@app.post("/api/slime/tts")
+def slime_tts(body: SlimeTtsBody) -> Response:
+    """Text → MP3 via OpenAI TTS. Used by Slime Buddy for auto-play after voice-command (browser-friendly)."""
+    settings = _settings_for_active_user()
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="OPENAI_API_KEY is required for server TTS (Slime Buddy auto-play).",
+        )
+    try:
+        from openai import OpenAI
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail="openai package required for TTS") from e
+
+    text = body.text.strip()[:4096]
+    client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_api_base or None)
+    try:
+        resp = client.audio.speech.create(model="tts-1", voice="alloy", input=text)
+    except Exception as e:
+        _log.exception("slime TTS OpenAI call failed")
+        raise HTTPException(status_code=502, detail=f"TTS failed: {e!s}") from e
+
+    try:
+        audio_bytes = resp.read()
+    except Exception:
+        buf = io.BytesIO()
+        resp.stream_to_file(buf)
+        audio_bytes = buf.getvalue()
+    if not audio_bytes:
+        raise HTTPException(status_code=502, detail="TTS returned empty audio")
+    return Response(content=audio_bytes, media_type="audio/mpeg")
+
+
+@app.post("/api/slime/confirm-calendar-block")
+def slime_confirm_calendar_block(body: SlimeConfirmCalendarBody) -> dict[str, Any]:
+    """Validate voice-proposed times and return a normalized calendar event (client persists locally)."""
+    try:
+        datetime.fromisoformat(body.start.replace("Z", "+00:00"))
+        datetime.fromisoformat(body.end.replace("Z", "+00:00"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"invalid_datetimes: {e!s}") from e
+    eid = f"voice-{uuid.uuid4().hex[:12]}"
+    return {
+        "ok": True,
+        "event": {
+            "id": eid,
+            "title": body.title.strip()[:200],
+            "start": body.start,
+            "end": body.end,
+            "source": "manual",
+            "description": (body.description or "")[:500],
+            "locked": False,
+        },
+    }
+
+
+@app.post("/api/slime/voice-command")
+async def slime_voice_command(
+    audio: UploadFile = File(...),
+    current_route: str | None = Form(None),
+    thread_id: str | None = Form(None),
+    slime_profile: str | None = Form(None),
+    recent_ui_context: str | None = Form(None),
+) -> JSONResponse:
+    """Push-to-talk: local ASR (default faster-whisper) + GPT-4o-mini tool routing."""
+    settings = _settings_for_active_user()
+    raw = await audio.read()
+    try:
+        body = await asyncio.to_thread(
+            _run_slime_voice_pipeline,
+            raw,
+            audio.filename,
+            current_route,
+            thread_id,
+            slime_profile,
+            recent_ui_context,
+            settings,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except ModuleNotFoundError as e:
+        _log.exception("slime voice command missing dependency")
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Missing Python dependency: {e!s}. Install web extras from the repo root: "
+                "pip install -e '.[web]'"
+            ),
+        ) from e
+    except Exception as e:
+        _log.exception("slime voice command failed")
+        raise HTTPException(status_code=500, detail=f"voice_command_failed: {e!s}") from e
+    return JSONResponse(content=body)
 
 
 @app.get("/api/traces/{decision_id}/resource-drops")

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { apiFetchErrorMessage, apiUrl } from '../../utils/apiOrigin';
+import { refetchSlimeProfileGlobal } from '../../hooks/useSlimeProfile';
 
 type PersonaItem = {
   user_id: string;
@@ -176,6 +177,7 @@ export function PersonaSwitcher({ compact: _compact = false }: { compact?: boole
       if (!res.ok) throw new Error(await res.text());
       setNewId('');
       await load();
+      void refetchSlimeProfileGlobal();
       setMsg(`Created ${uid}`);
     } catch (e) {
       setErr(apiFetchErrorMessage(e));
@@ -194,6 +196,7 @@ export function PersonaSwitcher({ compact: _compact = false }: { compact?: boole
       const res = await fetch(apiUrl(`/api/personas/${encodeURIComponent(current)}`), { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
       await load();
+      void refetchSlimeProfileGlobal();
       setMsg(`Deleted ${current}`);
     } catch (e) {
       setErr(apiFetchErrorMessage(e));

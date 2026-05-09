@@ -44,6 +44,13 @@ from foresight_x.schemas import (
 
 _log = logging.getLogger(__name__)
 
+_RRF_K = 60
+_RRF_BLEND = 0.22
+_MMR_LAMBDA = 0.75
+_MMR_MAX_PER_THEME = 3
+_LOW_CONF_TOP_GAP = 0.045
+_LOW_CONF_EXPAND_BY = 2
+
 
 @dataclass
 class MemoryCandidate:
@@ -248,11 +255,71 @@ def _lexical_similarity(a: str, b: str) -> float:
     return len(aw & bw) / len(aw | bw)
 
 
+def _rrf_score(rank_maps: list[dict[str, int]], key: str, *, k: int = _RRF_K) -> float:
+    """Reciprocal-rank fusion across rank maps; missing entries contribute 0."""
+    total = 0.0
+    for rm in rank_maps:
+        r = rm.get(key)
+        if r is None:
+            continue
+        total += 1.0 / (k + r)
+    return total
+
+
+def _blend_legacy_with_rrf(
+    candidates: list[MemoryCandidate],
+    lexical_signal: dict[str, float],
+    recency_signal: dict[str, float],
+    *,
+    rrf_blend: float = _RRF_BLEND,
+) -> list[MemoryCandidate]:
+    """
+    Keep legacy fused score as primary signal, then add a bounded RRF blend.
+    This keeps behavior stable while improving cross-signal robustness.
+    """
+    if not candidates:
+        return []
+    clamped_blend = max(0.0, min(0.5, rrf_blend))
+    key_order = [f"{idx}:{_candidate_text_key(c.text)}:{c.decision_id or ''}" for idx, c in enumerate(candidates)]
+    vec_sorted = sorted(
+        zip(key_order, candidates),
+        key=lambda p: p[1].similarity_score,
+        reverse=True,
+    )
+    lex_sorted = sorted(key_order, key=lambda k: lexical_signal.get(k, 0.0), reverse=True)
+    rec_sorted = sorted(key_order, key=lambda k: recency_signal.get(k, 0.0), reverse=True)
+    vec_rank = {k: i + 1 for i, (k, _) in enumerate(vec_sorted)}
+    lex_rank = {k: i + 1 for i, k in enumerate(lex_sorted)}
+    rec_rank = {k: i + 1 for i, k in enumerate(rec_sorted)}
+    rank_maps = [vec_rank, lex_rank, rec_rank]
+    rrf_vals = {k: _rrf_score(rank_maps, k) for k in key_order}
+    max_rrf = max(rrf_vals.values()) if rrf_vals else 1.0
+    out: list[MemoryCandidate] = []
+    for key, cand in zip(key_order, candidates):
+        rrf_norm = (rrf_vals.get(key, 0.0) / max_rrf) if max_rrf > 0 else 0.0
+        fused = (1.0 - clamped_blend) * max(0.0, cand.fused_score) + clamped_blend * rrf_norm
+        out.append(cand.__class__(**{**cand.__dict__, "fused_score": fused}))
+    out.sort(key=lambda x: x.fused_score, reverse=True)
+    return out
+
+
+def _should_expand_low_confidence_selection(selected: list[MemoryCandidate]) -> bool:
+    """
+    Conservative fallback: when top scores are too flat, keep a few extra rows
+    to reduce recall misses in ambiguous queries.
+    """
+    if len(selected) < 3:
+        return False
+    s0 = selected[0].fused_score
+    s2 = selected[min(2, len(selected) - 1)].fused_score
+    return (s0 - s2) < _LOW_CONF_TOP_GAP
+
+
 def _select_diverse_memory_candidates(
     candidates: list[MemoryCandidate],
     top_k: int,
-    lambda_relevance: float = 0.72,
-    max_per_theme: int = 2,
+    lambda_relevance: float = _MMR_LAMBDA,
+    max_per_theme: int = _MMR_MAX_PER_THEME,
 ) -> list[MemoryCandidate]:
     """Select relevant + diverse candidates with theme caps and text-similarity penalty."""
     if top_k <= 0 or not candidates:
@@ -520,9 +587,22 @@ class UserMemory:
             candidates.append(cand)
 
         deduped = _dedupe_candidates_by_decision_id(candidates)
-        selected = _select_diverse_memory_candidates(deduped, top_k=top_k)
+        deduped = _dedupe_candidates_by_decision_id(candidates)
+        reranked = _blend_legacy_with_rrf(
+            deduped,
+            {f"{i}:{_candidate_text_key(c.text)}:{c.decision_id or ''}": _priority_word_overlap(extra, c.text) for i, c in enumerate(deduped)},
+            {f"{i}:{_candidate_text_key(c.text)}:{c.decision_id or ''}": _recency_multiplier(c.timestamp or "") for i, c in enumerate(deduped)},
+        )
+        selected = _select_diverse_memory_candidates(reranked, top_k=top_k)
+        if _should_expand_low_confidence_selection(reranked[: max(top_k, 3)]):
+            selected = _select_diverse_memory_candidates(
+                reranked,
+                top_k=min(len(reranked), top_k + _LOW_CONF_EXPAND_BY),
+            )
         selected_nodes: list[Any] = []
         matched_keys: set[str] = set()
+        selected_ids = {x.decision_id for x in selected if x.decision_id}
+        selected_text_keys = {_candidate_text_key(x.text) for x in selected if not x.decision_id}
         for node in raw_nodes:
             md_raw: dict[str, Any] = {}
             inner = getattr(node, "node", None)
@@ -531,21 +611,18 @@ class UserMemory:
             md0 = _decode_meta(md_raw)
             did = str(md0.get("decision_id", "") or "").strip() or None
             text = _node_document_text(node)
-            for cand in selected:
-                if cand.decision_id and did and cand.decision_id == did:
-                    key = f"did:{cand.decision_id}"
-                    if key in matched_keys:
-                        break
+            if did and did in selected_ids:
+                key = f"did:{did}"
+                if key not in matched_keys:
                     matched_keys.add(key)
                     selected_nodes.append(node)
-                    break
-                if not cand.decision_id and _candidate_text_key(cand.text) == _candidate_text_key(text):
-                    key = f"text:{_candidate_text_key(cand.text)}"
-                    if key in matched_keys:
-                        break
+                continue
+            text_key = _candidate_text_key(text)
+            if text_key in selected_text_keys:
+                key = f"text:{text_key}"
+                if key not in matched_keys:
                     matched_keys.add(key)
                     selected_nodes.append(node)
-                    break
 
         pasts: list[PastDecision] = []
         patterns_acc: list[str] = []

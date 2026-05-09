@@ -44,6 +44,33 @@ export interface ReportSurface {
   primaryNextAction: PrimaryNextAction;
 }
 
+export type SlimeColorTheme = 'aurora' | 'violet' | 'mint' | 'sunset' | 'lime' | 'silver' | 'custom';
+export type SlimePersonality = 'calm' | 'direct' | 'encouraging' | 'analytical' | 'playful' | 'cautious';
+export type SlimeShape = 'classic' | 'orb' | 'robot' | 'crystal' | 'ghost';
+export type SlimeAccessory = 'none' | 'glasses' | 'halo' | 'antenna' | 'scarf' | 'spark';
+export type SlimeMotion = 'subtle' | 'normal' | 'expressive';
+
+export interface SlimeProfile {
+  name: string;
+  colorTheme: SlimeColorTheme;
+  customColors?: {
+    primary: string;
+    secondary: string;
+    glow: string;
+  };
+  personality: SlimePersonality;
+  shape: SlimeShape;
+  accessory: SlimeAccessory;
+  motion: SlimeMotion;
+  voice?: {
+    enabled: boolean;
+    rate: number;
+    pitch: number;
+    preferredVoiceName?: string;
+  };
+  updated_at: string;
+}
+
 /** Slime “resource drops” — URLs only from Tavily/curated; internal rows may omit url. */
 export type ResourceDropActionType =
   | 'website'

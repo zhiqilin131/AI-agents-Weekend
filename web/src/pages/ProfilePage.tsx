@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
 import { apiUrl } from '../utils/apiOrigin';
+import { cn } from '../app/components/ui/utils';
 
 function linesToList(text: string): string[] {
   return text
@@ -52,6 +54,7 @@ const MEMORY_CAT_LABEL: Record<string, string> = {
 };
 
 export default function ProfilePage() {
+  const navigate = useNavigate();
   const [userPriorities, setUserPriorities] = useState('');
   const [clarificationRows, setClarificationRows] = useState<ProfileLineRow[]>([]);
   const [systemRows, setSystemRows] = useState<ProfileLineRow[]>([]);
@@ -221,9 +224,17 @@ export default function ProfilePage() {
               Profile
             </h1>
             <p className="mt-1 text-xs leading-snug text-gray-600 md:text-sm md:leading-relaxed">
-              Scoped to <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">FORESIGHT_USER_ID</code> ·{' '}
-              <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">data/profile/</code>. Priorities you
-              edit; other blocks expand on demand.
+              Edit priorities and structured memory below. Customize your Slime Advisor (look, motion, voice) on{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/buddy')}
+                className="font-semibold text-violet-800 underline decoration-violet-300 underline-offset-2 hover:text-violet-950"
+              >
+                Buddy home
+              </button>{' '}
+              — same profile powers reports and Shadow. Scoped to{' '}
+              <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">FORESIGHT_USER_ID</code> ·{' '}
+              <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">data/profile/</code>.
             </p>
           </div>
         </div>

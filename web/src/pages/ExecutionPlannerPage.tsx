@@ -30,6 +30,7 @@ import {
   EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY,
   EXECUTION_SCHEDULE_COACH_OPTIONS_KEY,
   EXECUTION_TASKS_STORAGE_KEY,
+  SLIME_VOICE_CALENDAR_RESOLVED_KEY,
 } from '../utils/executionStorageKeys';
 import {
   loadCoachSchedulerOptions,
@@ -40,6 +41,9 @@ import {
   type PlannerCoachOptions,
 } from '../utils/calendarRefineSchedule';
 import { saveSelectedBlocksContext, taskIdFromAiCalendarEventId } from '../utils/executionCalendarSelection';
+import { SLIME_VOICE_CALENDAR_DRAFT_KEY } from '../utils/slimeVoiceActions';
+import { SlimeAdvisor } from '../app/components/report/SlimeAdvisor';
+import { useSlimeProfile } from '../hooks/useSlimeProfile';
 
 type TraceShape = {
   decision_id: string;
@@ -79,6 +83,7 @@ const COACH_QUICK_ACTIONS: { label: string; text: string }[] = [
 ];
 
 export default function ExecutionPlannerPage() {
+  const { slimeProfile } = useSlimeProfile();
   const navigate = useNavigate();
   const { decisionId } = useParams();
   const [searchParams] = useSearchParams();
@@ -178,6 +183,72 @@ export default function ExecutionPlannerPage() {
         sessionStorage.removeItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY);
         setScheduleCoachNote('Loaded feedback from chat — review and tap Re-plan below.');
       }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(SLIME_VOICE_CALENDAR_DRAFT_KEY);
+      if (!raw) return;
+      sessionStorage.removeItem(SLIME_VOICE_CALENDAR_DRAFT_KEY);
+      const d = JSON.parse(raw) as {
+        title?: string;
+        duration_minutes?: number;
+        date_hint?: string | null;
+        description?: string | null;
+      };
+      const hint = (d.date_hint || '').toLowerCase();
+      const baseDay =
+        hint.includes('today') ? new Date() : addDays(new Date(), hint.includes('yesterday') ? -1 : 1);
+      const dayStart = startOfDay(baseDay);
+      const start = setMinutes(setHours(dayStart, SCHEDULER_DAY_START_HOUR), 0);
+      const dur = Math.max(5, Math.min(Number(d.duration_minutes) || 30, 480));
+      const end = addMinutes(start, dur);
+      setEvents((prev) => [
+        ...prev,
+        {
+          id: `voice-draft-${Date.now()}`,
+          title: (d.title || 'Planning block').slice(0, 200),
+          start: start.toISOString(),
+          end: end.toISOString(),
+          source: 'manual',
+          description: (d.description || 'Draft from Slime voice').slice(0, 500),
+          locked: false,
+        },
+      ]);
+      setScheduleCoachNote('Draft block from Slime voice — adjust time or delete if you do not need it.');
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(SLIME_VOICE_CALENDAR_RESOLVED_KEY);
+      if (!raw) return;
+      sessionStorage.removeItem(SLIME_VOICE_CALENDAR_RESOLVED_KEY);
+      const r = JSON.parse(raw) as {
+        title?: string;
+        start_iso?: string;
+        end_iso?: string;
+        display_summary?: string;
+      };
+      if (!r.start_iso || !r.end_iso) return;
+      setEvents((prev) => [
+        ...prev,
+        {
+          id: `voice-resolved-${Date.now()}`,
+          title: (r.title || 'Event').slice(0, 200),
+          start: r.start_iso,
+          end: r.end_iso,
+          source: 'manual',
+          description: (r.display_summary || 'From Slime voice').slice(0, 500),
+          locked: false,
+        },
+      ]);
+      setScheduleCoachNote('Loaded times from Slime — drag to adjust if needed.');
     } catch {
       // ignore
     }
@@ -908,6 +979,7 @@ export default function ExecutionPlannerPage() {
                 <div className="flex items-center gap-2 text-indigo-900">
                   <Sparkles className="h-4 w-4 shrink-0 text-indigo-600" aria-hidden />
                   <span className="text-xs font-semibold uppercase tracking-wide">Schedule coach</span>
+                  <SlimeAdvisor size="sm" profile={slimeProfile} state={scheduleCoachBusy ? 'thinking' : 'idle'} className="scale-[0.65] origin-left" />
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {COACH_QUICK_ACTIONS.map((q) => (

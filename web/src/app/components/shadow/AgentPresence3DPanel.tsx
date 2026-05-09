@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { Agent3DCompanion } from './Agent3DCompanion';
 import type { AgentStatus, ShadowSuggestion } from './types';
+import { SlimeAdvisor } from '../report/SlimeAdvisor';
+import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
 
 /** Short line under companion — plain language */
 const statusRibbon: Record<AgentStatus, string> = {
@@ -141,6 +143,7 @@ export function AgentPresence3DPanel({
   /** Decision-report overlay is open — keep a persistent session card until the user closes it */
   reportOverlaySession?: { streaming: boolean; progressStep: string } | null;
 }) {
+  const { slimeProfile } = useSlimeProfile();
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const [feedLines, setFeedLines] = useState<FeedLine[]>([]);
   const timeoutsRef = useRef<number[]>([]);
@@ -240,7 +243,10 @@ export function AgentPresence3DPanel({
       className="rounded-3xl border border-white/90 bg-white/65 p-4 shadow-[0_10px_28px_rgba(99,102,241,0.10)] backdrop-blur-md"
     >
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wide text-indigo-500">Shadow Chat</p>
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-500">Shadow Chat</p>
+          <SlimeAdvisor size="sm" profile={slimeProfile} state={status === 'thinking' ? 'thinking' : 'idle'} className="scale-[0.72] origin-left" />
+        </div>
         <span className="inline-flex h-2.5 w-2.5 rounded-full bg-indigo-500/90 shadow-[0_0_12px_rgba(99,102,241,0.9)]" />
       </div>
 

@@ -27,7 +27,9 @@ import {
   clearSelectedBlocksContext,
   loadSelectedBlocksContext,
 } from '../../../utils/executionCalendarSelection';
+import { SLIME_VOICE_CHAT_PREFILL_KEY } from '../../../utils/slimeVoiceActions';
 import { EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY } from '../../../utils/executionStorageKeys';
+import { primeSpeechSynthesisFromGesture } from '../../../app/hooks/useSpeechSynthesis';
 
 export function ShadowChatShell({
   initialThreadId = null,
@@ -122,6 +124,17 @@ export function ShadowChatShell({
   }, []);
 
   useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(SLIME_VOICE_CHAT_PREFILL_KEY);
+      if (!raw?.trim()) return;
+      sessionStorage.removeItem(SLIME_VOICE_CHAT_PREFILL_KEY);
+      setInputBootstrap(raw.trim());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
     if (threads.length > 0 && !activeThreadId) {
       const prefer = initialThreadId && threads.some((t) => t.thread_id === initialThreadId) ? initialThreadId : threads[0].thread_id;
       void loadThread(prefer);
@@ -179,6 +192,7 @@ export function ShadowChatShell({
 
   const onOpenReportArtifact = useCallback(
     (decisionId: string) => {
+      primeSpeechSynthesisFromGesture();
       setReportOpen(true);
       void loadExistingTrace(decisionId);
     },
@@ -391,6 +405,7 @@ export function ShadowChatShell({
       pushTimeline('Pick or create a chat thread first');
       return;
     }
+    primeSpeechSynthesisFromGesture();
     reportGeneratingRef.current = true;
     try {
       const lastUser = seedPrompt ?? (messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.');
@@ -503,6 +518,7 @@ export function ShadowChatShell({
   }, [calendarCoachHint, navigate, pushTimeline]);
 
   const onGenerateDecisionReport = useCallback(async () => {
+    primeSpeechSynthesisFromGesture();
     const lastUser = messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.';
     if (clarifyOpen) {
       pushTimeline('Answer or skip the clarification card below first');
@@ -626,6 +642,7 @@ export function ShadowChatShell({
                     meta={clarifyPayload.meta}
                     disabled={sending}
                     onSkip={async () => {
+                      primeSpeechSynthesisFromGesture();
                       const pending = pendingClarifyAction;
                       const payload = clarifyPayload;
                       const q0 = payload?.questions[0];

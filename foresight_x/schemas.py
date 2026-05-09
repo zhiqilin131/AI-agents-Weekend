@@ -106,6 +106,96 @@ class ProfileMemoryFact(BaseModel):
         return str(v or "").strip()
 
 
+class SlimeColorTheme(str, Enum):
+    AURORA = "aurora"
+    VIOLET = "violet"
+    MINT = "mint"
+    SUNSET = "sunset"
+    LIME = "lime"
+    SILVER = "silver"
+    CUSTOM = "custom"
+
+
+class SlimePersonality(str, Enum):
+    CALM = "calm"
+    DIRECT = "direct"
+    ENCOURAGING = "encouraging"
+    ANALYTICAL = "analytical"
+    PLAYFUL = "playful"
+    CAUTIOUS = "cautious"
+
+
+class SlimeShape(str, Enum):
+    CLASSIC = "classic"
+    ORB = "orb"
+    ROBOT = "robot"
+    CRYSTAL = "crystal"
+    GHOST = "ghost"
+
+
+class SlimeAccessory(str, Enum):
+    NONE = "none"
+    GLASSES = "glasses"
+    HALO = "halo"
+    ANTENNA = "antenna"
+    SCARF = "scarf"
+    SPARK = "spark"
+
+
+class SlimeMotion(str, Enum):
+    SUBTLE = "subtle"
+    NORMAL = "normal"
+    EXPRESSIVE = "expressive"
+
+
+class SlimeCustomColors(BaseModel):
+    primary: str
+    secondary: str
+    glow: str
+
+    @field_validator("primary", "secondary", "glow", mode="before")
+    @classmethod
+    def _sanitize_hex_color(cls, v: Any) -> str:
+        s = str(v or "").strip()
+        if len(s) == 7 and s.startswith("#") and all(c in "0123456789abcdefABCDEF" for c in s[1:]):
+            return s.lower()
+        raise ValueError("custom colors must be #RRGGBB hex")
+
+
+class SlimeVoicePreferences(BaseModel):
+    """Slime TTS: default on so voice replies speak unless the user turns them off."""
+    enabled: bool = True
+    rate: float = Field(default=1.0, ge=0.5, le=2.0)
+    pitch: float = Field(default=1.0, ge=0.5, le=2.0)
+    preferred_voice_name: str | None = Field(default=None, max_length=120)
+
+    @field_validator("preferred_voice_name", mode="before")
+    @classmethod
+    def _strip_voice_name(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
+
+class SlimeProfile(BaseModel):
+    name: str = Field(default="Mochi", max_length=24)
+    color_theme: SlimeColorTheme = SlimeColorTheme.VIOLET
+    custom_colors: SlimeCustomColors | None = None
+    personality: SlimePersonality = SlimePersonality.CALM
+    shape: SlimeShape = SlimeShape.CLASSIC
+    accessory: SlimeAccessory = SlimeAccessory.NONE
+    motion: SlimeMotion = SlimeMotion.NORMAL
+    voice: SlimeVoicePreferences | None = None
+    updated_at: str = ""
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, v: Any) -> str:
+        s = str(v or "").strip()
+        return s[:24] or "Mochi"
+
+
 class TimePressure(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
@@ -171,6 +261,10 @@ class UserProfile(BaseModel):
     memory_facts: list[ProfileMemoryFact] = Field(
         default_factory=list,
         description="Categorized concrete facts (identity, views, behavior, …) — preferred over vague one-line summaries.",
+    )
+    slime_profile: SlimeProfile | None = Field(
+        default=None,
+        description="Optional visual/tone preferences for the UI slime advisor.",
     )
 
     @model_validator(mode="before")

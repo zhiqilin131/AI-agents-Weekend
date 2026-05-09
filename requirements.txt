@@ -12,6 +12,7 @@ icalendar>=5,<7
 # Web API stack
 fastapi>=0.115,<1
 uvicorn[standard]>=0.32,<1
+faster-whisper>=1.0,<2
 
 # Streamlit demo UI (foresight_x/ui/app.py)
 streamlit

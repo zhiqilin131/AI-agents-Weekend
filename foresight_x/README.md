@@ -29,20 +29,15 @@ Phase 6 adds UI entry points:
 Requires Python extras **`web`** (FastAPI + Uvicorn) and Node/npm.
 
 1. Install backend: `pip install -e ".[web]"`
-2. Start API:
+2. From `web/`, start API + Vite together:
 
    ```bash
-   uvicorn foresight_x.ui.api_server:app --host 127.0.0.1 --port 8765
-   ```
-
-3. Frontend (dev server proxies `/api` → port 8765):
-
-   ```bash
-   cd web
    npm install
-   npm run dev
+   npm run dev:all
    ```
 
-4. Open the URL Vite prints (usually `http://localhost:5173`). Use repo-root `.env` for `OPENAI_API_KEY` / `TAVILY_API_KEY` (same as CLI).
+   Or run separately: `python -m uvicorn foresight_x.ui.api_server:app --host 127.0.0.1 --port 8765 --reload` (repo root) and `npm run dev` (`web/`).
+
+3. Open **`http://127.0.0.1:5173`**. Use repo-root `.env` for `OPENAI_API_KEY` / `TAVILY_API_KEY` (same as CLI). `web/.env.development` should keep `VITE_API_ORIGIN=http://127.0.0.1:8765`.
 
 Production: `cd web && npm run build` — output in `web/dist/` (serve static files + run the API separately).

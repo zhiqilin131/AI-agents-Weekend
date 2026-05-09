@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
-import { VoiceInputButton } from '../app/components/VoiceInputButton';
+import { VoiceRecorderTranscribeButton } from '../app/components/VoiceRecorderTranscribeButton';
 import { apiUrl } from '../utils/apiOrigin';
 
 type Role = 'user' | 'assistant';
@@ -194,7 +194,12 @@ export default function ShadowChatPage() {
               className="w-full px-4 py-3 pr-28 bg-white/80 border border-gray-200/80 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-purple-400/40 text-sm text-gray-900"
             />
             <div className="absolute bottom-3 right-3">
-              <VoiceInputButton onTranscript={appendVoice} disabled={sending} compact />
+              <VoiceRecorderTranscribeButton
+                onTranscript={appendVoice}
+                disabled={sending}
+                compact
+                showUploadFallback
+              />
             </div>
           </div>
           <button

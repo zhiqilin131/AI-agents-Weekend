@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "cd .. && python -m uvicorn foresight_x.ui.api_server:app --host 127.0.0.1 --port 8765 --reload",
+    "dev:all": "concurrently -k -n api,web -c blue,green \"npm run dev:api\" \"vite\"",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest"
@@ -80,6 +82,7 @@
     "tailwindcss": "4.1.12",
     "typescript": "5.7.3",
     "vite": "6.3.5",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
+    "concurrently": "^9.1.2"
   }
 }

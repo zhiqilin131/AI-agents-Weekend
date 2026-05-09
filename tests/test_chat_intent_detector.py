@@ -30,6 +30,15 @@ def test_fork_should_i_or_triggers_decision() -> None:
     assert out.intent == "decision_candidate"
 
 
+def test_whether_to_attend_busy_voice_style_triggers_decision() -> None:
+    out = detect_chat_intent(
+        "I'm deciding whether to attend my friend's graduation. At the same time I'm very busy with work. What shall I do?",
+        [],
+        llm_enabled=False,
+    )
+    assert out.intent == "decision_candidate"
+
+
 def test_structured_clarification_suffix_triggers_decision() -> None:
     out = detect_chat_intent(
         "Should I buy X?\n\nUser clarification (structured):\n- axis: value",

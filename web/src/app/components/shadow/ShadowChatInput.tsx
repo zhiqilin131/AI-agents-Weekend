@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { VoiceInputButton } from '../VoiceInputButton';
+import { VoiceRecorderTranscribeButton } from '../VoiceRecorderTranscribeButton';
 
 export function ShadowChatInput({
   disabled,
@@ -46,7 +46,12 @@ export function ShadowChatInput({
         }}
       />
       <div className="mt-2 flex items-center justify-between gap-2">
-        <VoiceInputButton onTranscript={appendVoice} disabled={disabled} compact />
+        <VoiceRecorderTranscribeButton
+          onTranscript={appendVoice}
+          disabled={disabled}
+          compact
+          showUploadFallback
+        />
         <button type="button" onClick={send} disabled={!value.trim() || disabled} className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-40">
           Send
         </button>

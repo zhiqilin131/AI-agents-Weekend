@@ -34,22 +34,19 @@ If `python` raises `KeyError: 'TAVILY_API_KEY'`, the variable is missing from `.
 
 ## Run the web app
 
-1. API (repo root):
+One-shot (API **and** Vite; recommended):
 
-   ```bash
-   pip install -e ".[web]"
-   uvicorn foresight_x.ui.api_server:app --host 127.0.0.1 --port 8765 --reload
-   ```
+```bash
+pip install -e ".[web]"
+cd web && npm install && npm run dev:all
+```
 
-2. Frontend:
+Open **`http://127.0.0.1:5173`** (Vite is pinned to this host/port; `web/.env.development` points the browser at **`http://127.0.0.1:8765`** for the API and SSE).
 
-   ```bash
-   cd web && npm install && npm run dev
-   ```
+Split terminals (optional):
 
-   Point `web/.env.development` at the API, e.g. `VITE_API_ORIGIN=http://127.0.0.1:8765`.
-
-3. Open the URL Vite prints (often `http://localhost:5173`).
+1. API (repo root): `python -m uvicorn foresight_x.ui.api_server:app --host 127.0.0.1 --port 8765 --reload`
+2. Frontend: `cd web && npm run dev`
 
 **CLI:** `python -m foresight_x.ui.cli "…"` — see `foresight_x/README.md`.
 

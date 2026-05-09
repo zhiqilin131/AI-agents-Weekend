@@ -8,8 +8,23 @@ import ProfilePage from './pages/ProfilePage';
 import ShadowChatPage from './pages/ShadowChatPage';
 import PersonalizePage from './pages/PersonalizePage';
 import ExecutionPlannerPage from './pages/ExecutionPlannerPage';
+import SlimeCompanionPage from './pages/SlimeCompanionPage';
 import AppErrorPage from './pages/AppErrorPage';
+import { primeSpeechSynthesisFromGesture } from './app/hooks/useSpeechSynthesis';
+import { unlockSlimeAudioContext } from './utils/slimeAudioContext';
 import './styles/index.css';
+
+/** One user gesture warms speechSynthesis + AudioContext so later TTS is less likely to be blocked. */
+if (typeof window !== 'undefined') {
+  window.addEventListener(
+    'pointerdown',
+    () => {
+      unlockSlimeAudioContext();
+      primeSpeechSynthesisFromGesture({ skipUtterance: true });
+    },
+    { once: true, passive: true },
+  );
+}
 
 const router = createHashRouter([
   { path: '/', element: <HomePage />, errorElement: <AppErrorPage /> },
@@ -18,6 +33,7 @@ const router = createHashRouter([
   { path: '/history', element: <HistoryPage />, errorElement: <AppErrorPage /> },
   { path: '/reflect', element: <ShadowChatPage />, errorElement: <AppErrorPage /> },
   { path: '/profile', element: <ProfilePage />, errorElement: <AppErrorPage /> },
+  { path: '/buddy', element: <SlimeCompanionPage />, errorElement: <AppErrorPage /> },
   { path: '/personalize', element: <PersonalizePage />, errorElement: <AppErrorPage /> },
   { path: '/execution', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },
   { path: '/execution/:decisionId', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },
