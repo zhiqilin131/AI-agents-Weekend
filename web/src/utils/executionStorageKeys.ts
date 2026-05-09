@@ -9,3 +9,6 @@ export const EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY = 'fx.execution.pendingCale
 export const SLIME_VOICE_CALENDAR_RESOLVED_KEY = 'fx.slime.calendarResolved.v1';
 /** Selected AI task ids + labels when opening chat from execution calendar (session). */
 export const EXECUTION_SELECTED_BLOCKS_CONTEXT_KEY = 'fx.execution.selectedBlocksContext.v1';
+
+/** Full Calendar Agent draft payload when opening planner from report or Slime. */
+export const CALENDAR_AGENT_SESSION_DRAFT_KEY = 'fx.calendarAgent.sessionDraft.v1';

@@ -219,19 +219,27 @@ def test_profile_update_requires_confirmation() -> None:
     assert fe.get("type") == "confirm"
 
 
-def test_calendar_draft_is_not_final_event() -> None:
+def test_calendar_draft_is_not_final_event(tmp_path) -> None:
+    from foresight_x.config import Settings
     from foresight_x.voice.slime_tools import tool_create_calendar_draft
+    from foresight_x.voice.slime_voice_router import SlimeVoiceContext
 
+    settings = Settings(foresight_user_id="demo_user", foresight_data_dir=tmp_path)
+    ctx = SlimeVoiceContext(user_id="demo_user", recent_ui_context={})
     tr, fe = tool_create_calendar_draft(
         {"title": "Plan", "duration_minutes": 30, "date_hint": "tomorrow", "description": None},
         transcript="",
+        settings=settings,
         user_timezone="UTC",
+        context=ctx,
     )
     assert tr.get("requires_confirmation") is True
     assert fe["type"] == "calendar_draft_confirm"
     assert "resolved" in fe["payload"]
     assert tr["resolved"]["start_iso"]
     assert tr["resolved"]["end_iso"]
+    assert tr.get("draft_id")
+    assert fe["payload"].get("draft_id")
 
 
 def test_memory_search_returns_evidence_items_not_raw_dump(tmp_path: Path) -> None:

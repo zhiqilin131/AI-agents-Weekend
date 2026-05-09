@@ -744,6 +744,7 @@ export function ShadowChatShell({
           setAgentStatus('idle');
         }}
         onReviseReport={(decisionId) => void onReviseFromArtifactOrPanel(decisionId)}
+        shadowThreadId={activeThreadId}
       />
     </div>
   );

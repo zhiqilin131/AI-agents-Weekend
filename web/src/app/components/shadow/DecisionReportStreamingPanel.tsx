@@ -13,6 +13,7 @@ export function DecisionReportStreamingPanel({
   onContinueChat,
   onOpenExecutionCalendar,
   onReviseReport,
+  shadowThreadId = null,
 }: {
   open: boolean;
   trace: Record<string, unknown> | null;
@@ -23,6 +24,7 @@ export function DecisionReportStreamingPanel({
   onContinueChat: () => void;
   onOpenExecutionCalendar: (decisionId: string) => void;
   onReviseReport: (decisionId: string) => void;
+  shadowThreadId?: string | null;
 }) {
   if (!open) return null;
   const report = trace ? mapTraceToReport(trace) : null;
@@ -105,6 +107,7 @@ export function DecisionReportStreamingPanel({
                 fullTrace={trace}
                 isStreaming={isStreaming}
                 onExecutionCalendarNavigate={onOpenExecutionCalendar}
+                shadowThreadId={shadowThreadId}
               />
             </div>
           ) : null}

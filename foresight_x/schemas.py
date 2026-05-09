@@ -178,6 +178,104 @@ class SlimeVoicePreferences(BaseModel):
         return s or None
 
 
+class SlimePersonalityPreset(str, Enum):
+    CALM_ADVISOR = "calm_advisor"
+    DIRECT_STRATEGIST = "direct_strategist"
+    WARM_FRIEND = "warm_friend"
+    PLAYFUL_PET = "playful_pet"
+    ANALYTICAL_COACH = "analytical_coach"
+    HYPE_BUDDY = "hype_buddy"
+    GENTLE_COMPANION = "gentle_companion"
+    MINIMALIST_ASSISTANT = "minimalist_assistant"
+
+
+class SlimePersonaTone(str, Enum):
+    CALM = "calm"
+    WARM = "warm"
+    DIRECT = "direct"
+    PLAYFUL = "playful"
+    ANALYTICAL = "analytical"
+    ENCOURAGING = "encouraging"
+    WITTY = "witty"
+    CONCISE = "concise"
+
+
+SlimeReplyLength = Literal["short", "balanced", "detailed"]
+
+
+class SlimePersona(BaseModel):
+    """Speaking style for Slime Buddy — preferences only; never treated as system authority."""
+
+    user_nickname: str | None = Field(default=None, max_length=24)
+    role_identity: str = Field(
+        default="A personal decision companion that helps the user think clearly, remember context, and turn decisions into action.",
+        max_length=500,
+    )
+    personality_preset: SlimePersonalityPreset = SlimePersonalityPreset.CALM_ADVISOR
+    tone: SlimePersonaTone = SlimePersonaTone.WARM
+    warmth: int = Field(default=2, ge=0, le=3)
+    humor: int = Field(default=1, ge=0, le=3)
+    directness: int = Field(default=1, ge=0, le=3)
+    reply_length: SlimeReplyLength = "balanced"
+    catchphrases: list[str] = Field(default_factory=list)
+    donts: list[str] = Field(default_factory=list)
+    updated_at: str = ""
+
+    @field_validator("user_nickname", mode="before")
+    @classmethod
+    def _nick(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s[:24] or None
+
+    @field_validator("role_identity", mode="before")
+    @classmethod
+    def _role(cls, v: Any) -> str:
+        s = str(v or "").strip()
+        if not s:
+            return "A personal decision companion that helps the user think clearly, remember context, and turn decisions into action."
+        return s[:500]
+
+    @field_validator("catchphrases", mode="before")
+    @classmethod
+    def _phrases(cls, v: Any) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            parts = [x.strip() for x in v.replace("\n", " ").split(",")]
+            return [p for p in parts if p][:3]
+        if not isinstance(v, list):
+            return []
+        out: list[str] = []
+        for item in v[:6]:
+            s = str(item or "").strip().replace("\n", " ")
+            if s:
+                out.append(s[:40])
+            if len(out) >= 3:
+                break
+        return out
+
+    @field_validator("donts", mode="before")
+    @classmethod
+    def _donts(cls, v: Any) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            lines = [ln.strip() for ln in v.splitlines() if ln.strip()]
+            return lines[:5]
+        if not isinstance(v, list):
+            return []
+        out: list[str] = []
+        for item in v[:8]:
+            s = str(item or "").strip().replace("\n", " ")
+            if s:
+                out.append(s[:200])
+            if len(out) >= 5:
+                break
+        return out
+
+
 class SlimeProfile(BaseModel):
     name: str = Field(default="Mochi", max_length=24)
     color_theme: SlimeColorTheme = SlimeColorTheme.VIOLET
@@ -187,6 +285,7 @@ class SlimeProfile(BaseModel):
     accessory: SlimeAccessory = SlimeAccessory.NONE
     motion: SlimeMotion = SlimeMotion.NORMAL
     voice: SlimeVoicePreferences | None = None
+    persona: SlimePersona | None = None
     updated_at: str = ""
 
     @field_validator("name", mode="before")

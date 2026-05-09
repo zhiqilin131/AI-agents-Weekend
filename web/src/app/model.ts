@@ -50,6 +50,43 @@ export type SlimeShape = 'classic' | 'orb' | 'robot' | 'crystal' | 'ghost';
 export type SlimeAccessory = 'none' | 'glasses' | 'halo' | 'antenna' | 'scarf' | 'spark';
 export type SlimeMotion = 'subtle' | 'normal' | 'expressive';
 
+export type SlimePersonalityPreset =
+  | 'calm_advisor'
+  | 'direct_strategist'
+  | 'warm_friend'
+  | 'playful_pet'
+  | 'analytical_coach'
+  | 'hype_buddy'
+  | 'gentle_companion'
+  | 'minimalist_assistant';
+
+export type SlimePersonaTone =
+  | 'calm'
+  | 'warm'
+  | 'direct'
+  | 'playful'
+  | 'analytical'
+  | 'encouraging'
+  | 'witty'
+  | 'concise';
+
+export type SlimeReplyLength = 'short' | 'balanced' | 'detailed';
+
+export interface SlimePersona {
+  userNickname?: string | null;
+  roleIdentity: string;
+  personalityPreset: SlimePersonalityPreset;
+  tone: SlimePersonaTone;
+  warmth: 0 | 1 | 2 | 3;
+  humor: 0 | 1 | 2 | 3;
+  directness: 0 | 1 | 2 | 3;
+  replyLength: SlimeReplyLength;
+  catchphrases: string[];
+  /** Style boundaries — max ~5 lines on save (server validates). */
+  donts: string[];
+  updated_at?: string;
+}
+
 export interface SlimeProfile {
   name: string;
   colorTheme: SlimeColorTheme;
@@ -68,6 +105,7 @@ export interface SlimeProfile {
     pitch: number;
     preferredVoiceName?: string;
   };
+  persona?: SlimePersona | null;
   updated_at: string;
 }
 

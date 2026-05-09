@@ -6,7 +6,7 @@ import { RESOURCE_DROP_CALENDAR_ID } from '../../model';
 import { TypewriterText } from '../TypewriterText';
 import { useSpeechSynthesis } from '../../hooks/useSpeechSynthesis';
 import {
-  bubbleTextFromReasoning,
+  bubbleTextFromReasoningWithPersona,
   conciseReasoningPreview,
   isLongReasoning,
   speechTextFromRecommendation,
@@ -31,6 +31,8 @@ export function RecommendationCard({
     decisionId: string;
     navigate: NavigateFunction;
     onExecutionCalendarNavigate?: (decisionId: string) => void;
+    /** Optional: server-side Calendar Agent draft before navigation */
+    preNavigate?: () => Promise<void>;
   };
   resourceDrops?: ResourceDrop[];
   resourceDropsLoading?: boolean;
@@ -46,7 +48,13 @@ export function RecommendationCard({
   const hasRec = Boolean(reasoning || chosenOptionId);
   const firstAction = report.actions[0]?.text;
 
-  const bubbleText = useMemo(() => bubbleTextFromReasoning(reasoning, title), [reasoning, title]);
+  const { supported, isSpeaking, isPaused, speak, pause, resume, cancel } = useSpeechSynthesis();
+  const { slimeProfile, refreshSlimeProfile } = useSlimeProfile();
+
+  const bubbleText = useMemo(
+    () => bubbleTextFromReasoningWithPersona(reasoning, title, slimeProfile.persona),
+    [reasoning, title, slimeProfile.persona],
+  );
   const speechText = useMemo(
     () => speechTextFromRecommendation(title, bubbleText, firstAction),
     [title, bubbleText, firstAction],
@@ -55,9 +63,6 @@ export function RecommendationCard({
   const longBody = isLongReasoning(reasoning);
   const [showFullReasoning, setShowFullReasoning] = useState(false);
   const preview = useMemo(() => conciseReasoningPreview(reasoning), [reasoning]);
-
-  const { supported, isSpeaking, isPaused, speak, pause, resume, cancel } = useSpeechSynthesis();
-  const { slimeProfile, refreshSlimeProfile } = useSlimeProfile();
   /** After a streaming phase, fire one auto read-aloud when the card settles (same gesture chain as “generate report” if primed). */
   const autoSpokenAfterIdleRef = useRef(false);
 
@@ -122,10 +127,19 @@ export function RecommendationCard({
   const showCollapsedReasoning = longBody && !showFullReasoning && !isStreaming;
 
   const goCalendar = () => {
-    if (!executionCalendar) return;
-    executionCalendar.onExecutionCalendarNavigate
-      ? executionCalendar.onExecutionCalendarNavigate(executionCalendar.decisionId)
-      : executionCalendar.navigate(`/execution/${encodeURIComponent(executionCalendar.decisionId)}`);
+    void (async () => {
+      if (!executionCalendar) return;
+      try {
+        if (executionCalendar.preNavigate) {
+          await executionCalendar.preNavigate();
+        }
+      } catch {
+        /* still navigate — planner can build locally */
+      }
+      executionCalendar.onExecutionCalendarNavigate
+        ? executionCalendar.onExecutionCalendarNavigate(executionCalendar.decisionId)
+        : executionCalendar.navigate(`/execution/${encodeURIComponent(executionCalendar.decisionId)}`);
+    })();
   };
 
   /** Avoid duplicate CTAs: slim chip replaces the big button once drops have loaded. */

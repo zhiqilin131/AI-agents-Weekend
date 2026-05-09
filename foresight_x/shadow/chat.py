@@ -381,6 +381,7 @@ def run_shadow_turn(
     report_revision_decision_id: str | None = None,
     working_summary: str = "",
     temporary_context_prompt: str = "",
+    slime_voice_style_addendum: str | None = None,
 ) -> ShadowTurnOutput:
     """Run one shadow chat turn with separated thread vs profile memory pathways."""
     s = settings or load_settings()
@@ -440,6 +441,14 @@ def run_shadow_turn(
         recent_conversation_block=recent_conversation_block,
         atomic_claims_block=atomic_claims_block,
     )
+    add = (slime_voice_style_addendum or "").strip()
+    if add:
+        prompt += (
+            "\n\n--- Slime Buddy voice mode (style layer for reply_to_user only) ---\n"
+            f"{add}\n"
+            "Apply this to the *wording* of reply_to_user only. Do not change memory_facts structure or "
+            "invent facts. Stay accurate; keep suggest_decision_navigation logic unchanged."
+        )
     rid = (report_revision_decision_id or "").strip()
     if rid:
         prompt += (

@@ -14,9 +14,21 @@ from foresight_x.chat.intent_detector import detect_chat_intent
 from foresight_x.chat.thread_store import append_message, create_thread, load_thread, save_thread
 from foresight_x.config import Settings
 from foresight_x.perception.clarify_gate import merge_clarification_answers
+from foresight_x.schemas import SlimePersona
 from foresight_x.shadow.chat import run_shadow_turn
 from foresight_x.shadow.thread_context import append_temporary_context_items, format_temporary_context_prompt
 from foresight_x.shadow.thread_summary import maybe_update_thread_summary
+from foresight_x.voice.slime_identity import (
+    format_slime_identity_reply,
+    format_user_nickname_reply,
+    get_effective_slime_persona,
+    is_slime_identity_question,
+    is_user_saved_nickname_question,
+)
+from foresight_x.voice.slime_persona_prompt import (
+    build_slime_persona_prompt,
+    decision_mode_spoken_prompt,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -76,16 +88,19 @@ def _enrich_decision_suggestion_for_voice(
     base: dict[str, Any] | None,
     *,
     user_message: str,
+    slime_name: str,
+    persona: SlimePersona,
 ) -> dict[str, Any] | None:
     if not base or base.get("type") != "decision_report":
         return None
     dp = user_message.strip()
     if len(dp) > 1200:
         dp = dp[:1200]
+    display_text, spoken_prompt = decision_mode_spoken_prompt(slime_name=slime_name, persona=persona)
     return {
         "should_show": True,
-        "display_text": "Activate Decision Mode?",
-        "spoken_prompt": "Do you want me to activate Decision Mode for you?",
+        "display_text": display_text,
+        "spoken_prompt": spoken_prompt,
         "description": (
             "I can turn this into a structured decision report with options, trade-offs, risks, "
             "consequences, and an action plan."
@@ -128,6 +143,82 @@ def process_conversation_turn(
     if not raw_msg:
         raise ValueError("empty_message")
 
+    if source == "slime_voice" and is_user_saved_nickname_question(raw_msg):
+        eff = get_effective_slime_persona(settings)
+        text = format_user_nickname_reply(eff)
+        mode = str(thread.get("mode") or "normal")
+        meta_extra: dict[str, Any] = {"interaction_source": source, "modality": modality}
+        user_row = append_message(
+            thread,
+            role="user",
+            content=raw_msg,
+            mode=mode,
+            intent="slime_user_nickname",
+            metadata_extra=meta_extra,
+        )
+        user_msg_id = str(user_row.get("id") or "")
+        append_message(
+            thread,
+            role="assistant",
+            content=text,
+            mode=mode,
+            intent="slime_user_nickname",
+            memory_used=False,
+            profile_updated=False,
+        )
+        maybe_update_thread_summary(thread, settings=settings)
+        save_thread(thread)
+        return {
+            "thread_id": str(thread.get("thread_id") or ""),
+            "user_message_id": user_msg_id,
+            "assistant_text": text,
+            "spoken_sequence": [text],
+            "intent": "slime_user_nickname",
+            "decision_suggestion": None,
+            "shadow_suggestion": None,
+            "memory_updates": [],
+            "evidence_items": [],
+            "frontend_action": None,
+        }
+
+    if source == "slime_voice" and is_slime_identity_question(raw_msg):
+        eff = get_effective_slime_persona(settings)
+        text = format_slime_identity_reply(eff)
+        mode = str(thread.get("mode") or "normal")
+        meta_extra = {"interaction_source": source, "modality": modality}
+        user_row = append_message(
+            thread,
+            role="user",
+            content=raw_msg,
+            mode=mode,
+            intent="slime_identity",
+            metadata_extra=meta_extra,
+        )
+        user_msg_id = str(user_row.get("id") or "")
+        append_message(
+            thread,
+            role="assistant",
+            content=text,
+            mode=mode,
+            intent="slime_identity",
+            memory_used=False,
+            profile_updated=False,
+        )
+        maybe_update_thread_summary(thread, settings=settings)
+        save_thread(thread)
+        return {
+            "thread_id": str(thread.get("thread_id") or ""),
+            "user_message_id": user_msg_id,
+            "assistant_text": text,
+            "spoken_sequence": [text],
+            "intent": "slime_identity",
+            "decision_suggestion": None,
+            "shadow_suggestion": None,
+            "memory_updates": [],
+            "evidence_items": [],
+            "frontend_action": None,
+        }
+
     effective_message = merge_clarification_answers(raw_msg, clarification_answers)
     mode = str(thread.get("mode") or "normal")
     recent_for_intent = thread.get("messages", [])[-8:]
@@ -154,6 +245,20 @@ def process_conversation_turn(
         if d0:
             rev_id = d0
 
+    eff = get_effective_slime_persona(settings)
+    slime_name = eff.name
+    persona_merged = eff.persona
+    user_ref = eff.user_nickname_for_address
+    slime_addendum: str | None = None
+    if source == "slime_voice":
+        slime_addendum = build_slime_persona_prompt(
+            persona_merged,
+            "shadow_chat",
+            slime_name=slime_name,
+            user_ref=user_ref,
+            slime_profile_saved=eff.profile_saved,
+        )
+
     try:
         out = run_shadow_turn(
             msgs,
@@ -163,6 +268,7 @@ def process_conversation_turn(
             report_revision_decision_id=rev_id,
             working_summary=str(thread.get("working_summary") or ""),
             temporary_context_prompt=format_temporary_context_prompt(thread),
+            slime_voice_style_addendum=slime_addendum,
         )
     except Exception as e:
         _log.exception("run_shadow_turn failed in process_conversation_turn")
@@ -199,7 +305,12 @@ def process_conversation_turn(
     decision_suggestion: dict[str, Any] | None = None
     frontend_action: dict[str, Any] | None = None
     if source == "slime_voice":
-        decision_suggestion = _enrich_decision_suggestion_for_voice(suggestion, user_message=raw_msg)
+        decision_suggestion = _enrich_decision_suggestion_for_voice(
+            suggestion,
+            user_message=raw_msg,
+            slime_name=slime_name,
+            persona=persona_merged,
+        )
         if decision_suggestion:
             frontend_action = {
                 "type": "show_decision_mode_confirmation",

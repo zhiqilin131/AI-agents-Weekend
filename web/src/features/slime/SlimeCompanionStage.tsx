@@ -1,27 +1,125 @@
 import { useEffect, useRef, useState } from 'react';
 import { animate, motion, useMotionValue } from 'motion/react';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
+import { cn } from '../../app/components/ui/utils';
 import type { SlimeProfile } from '../../app/model';
 
-function pickRoamTarget() {
-  const rx = Math.min((typeof window !== 'undefined' ? window.innerWidth : 400) * 0.28, 220);
-  const ry = Math.min((typeof window !== 'undefined' ? window.innerHeight : 600) * 0.2, 150);
-  return { x: (Math.random() - 0.5) * 2 * rx, y: (Math.random() - 0.5) * 2 * ry };
+/** Approximate radius of the slime “body” for obstacle clearance (viewport px). */
+const SLIME_FOOTPRINT_RADIUS = 78;
+const AVOID_RECT_PADDING = 10;
+const ROAM_SAMPLE_TRIES = 28;
+/** Buddy stays in upper–middle band: anchor height as fraction of stage (from top). */
+const SLIME_ANCHOR_Y_FRAC = 0.36;
+/** Roam step default (px); larger for hide/pop teleport. */
+const ROAM_STEP_DEFAULT = 62;
+const ROAM_STEP_TELEPORT = 130;
+
+function collectAvoidRects(): Array<{ left: number; top: number; right: number; bottom: number }> {
+  if (typeof document === 'undefined') return [];
+  const out: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+  document.querySelectorAll<HTMLElement>('[data-slime-avoid]').forEach((el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return;
+    if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) return;
+    out.push({
+      left: r.left - AVOID_RECT_PADDING,
+      top: r.top - AVOID_RECT_PADDING,
+      right: r.right + AVOID_RECT_PADDING,
+      bottom: r.bottom + AVOID_RECT_PADDING,
+    });
+  });
+  return out;
+}
+
+function circleIntersectsRect(cx: number, cy: number, radius: number, R: { left: number; top: number; right: number; bottom: number }) {
+  const nx = Math.max(R.left, Math.min(cx, R.right));
+  const ny = Math.max(R.top, Math.min(cy, R.bottom));
+  const dx = cx - nx;
+  const dy = cy - ny;
+  return dx * dx + dy * dy < radius * radius;
+}
+
+/** Keep slime center (offset ox,oy from anchor) inside stage rect with margin. */
+function clampOffsetToStage(stageEl: HTMLElement | null, ox: number, oy: number): { x: number; y: number } {
+  if (!stageEl || typeof window === 'undefined') return { x: ox, y: oy };
+  const S = stageEl.getBoundingClientRect();
+  const margin = SLIME_FOOTPRINT_RADIUS + 12;
+  const anchorVx = S.left + S.width / 2;
+  const anchorVy = S.top + S.height * SLIME_ANCHOR_Y_FRAC;
+  const slimeCx = anchorVx + ox;
+  const slimeCy = anchorVy + oy;
+  const clampedCx = Math.min(Math.max(slimeCx, S.left + margin), S.right - margin);
+  const clampedCy = Math.min(Math.max(slimeCy, S.top + margin), S.bottom - margin);
+  return { x: clampedCx - anchorVx, y: clampedCy - anchorVy };
+}
+
+function computeDragLimits(stageEl: HTMLElement | null, roamXv: number, roamYv: number) {
+  if (!stageEl || typeof window === 'undefined') {
+    return { left: -175, right: 175, top: -155, bottom: 52 };
+  }
+  const S = stageEl.getBoundingClientRect();
+  const margin = SLIME_FOOTPRINT_RADIUS + 12;
+  const anchorVx = S.left + S.width / 2;
+  const anchorVy = S.top + S.height * SLIME_ANCHOR_Y_FRAC;
+  let left = S.left + margin - anchorVx - roamXv;
+  let right = S.right - margin - anchorVx - roamXv;
+  let top = S.top + margin - anchorVy - roamYv;
+  let bottom = S.bottom - margin - anchorVy - roamYv;
+  if (left > right) [left, right] = [right, left];
+  if (top > bottom) [top, bottom] = [bottom, top];
+  return { left, right, top, bottom };
+}
+
+/** Small wander step from current offset; stays on-screen and avoids `[data-slime-avoid]` rects. */
+function pickSafeRoamDelta(
+  stageEl: HTMLElement | null,
+  curX: number,
+  curY: number,
+  maxStep: number = ROAM_STEP_DEFAULT,
+): { x: number; y: number } {
+  if (!stageEl || typeof window === 'undefined') {
+    const dx = (Math.random() - 0.5) * maxStep * 1.4;
+    const dy = -Math.random() * maxStep * 0.85 + Math.random() * maxStep * 0.35;
+    return { x: curX + dx, y: curY + dy };
+  }
+
+  const rects = collectAvoidRects();
+  const r = SLIME_FOOTPRINT_RADIUS;
+  const S = stageEl.getBoundingClientRect();
+  const anchorVx = S.left + S.width / 2;
+  const anchorVy = S.top + S.height * SLIME_ANCHOR_Y_FRAC;
+  const hitsObstacle = (vx: number, vy: number) => rects.some((R) => circleIntersectsRect(vx, vy, r, R));
+
+  for (let i = 0; i < ROAM_SAMPLE_TRIES; i++) {
+    const dx = (Math.random() - 0.5) * 2 * maxStep;
+    const dy = -Math.random() * maxStep * 0.95 + Math.random() * maxStep * 0.38;
+    let nx = curX + dx;
+    let ny = curY + dy;
+    const cl = clampOffsetToStage(stageEl, nx, ny);
+    nx = cl.x;
+    ny = cl.y;
+    if (!hitsObstacle(anchorVx + nx, anchorVy + ny)) return { x: nx, y: ny };
+  }
+
+  return clampOffsetToStage(stageEl, curX, curY);
 }
 
 /**
- * Roaming pet: wander, hide/pop, play bursts; drag springs home; tap wiggles.
- * Buddy motion is 2D-only inside SlimeAdvisor (bounce / squash / faces) — no 3D card spin.
+ * Roaming pet: wander from current spot; drag merges into roam (no snap-back); clamped to stage.
  */
 export function SlimeCompanionStage({
   profile,
   advisorState = 'idle',
+  className,
 }: {
   profile: SlimeProfile;
   advisorState?: SlimeAdvisorState;
+  /** Merged onto the stage root (e.g. z-index vs voice UI layers). */
+  className?: string;
 }) {
   const roamX = useMotionValue(0);
-  const roamY = useMotionValue(0);
+  /** Start slightly above neutral so first paint matches “upper band” roam. */
+  const roamY = useMotionValue(-18);
   const dragX = useMotionValue(0);
   const dragY = useMotionValue(0);
   const fade = useMotionValue(1);
@@ -30,6 +128,29 @@ export function SlimeCompanionStage({
   const [playBurst, setPlayBurst] = useState(0);
   const draggingRef = useRef(false);
   const cancelledRef = useRef(false);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [dragLim, setDragLim] = useState({ left: -175, right: 175, top: -155, bottom: 52 });
+
+  const clampRoamIntoStage = () => {
+    const el = stageRef.current;
+    if (!el || draggingRef.current) return;
+    const cl = clampOffsetToStage(el, roamX.get(), roamY.get());
+    roamX.set(cl.x);
+    roamY.set(cl.y);
+  };
+
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    clampRoamIntoStage();
+    const ro = new ResizeObserver(() => clampRoamIntoStage());
+    ro.observe(el);
+    window.addEventListener('resize', clampRoamIntoStage);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', clampRoamIntoStage);
+    };
+  }, []);
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -46,10 +167,12 @@ export function SlimeCompanionStage({
           schedule();
           return;
         }
-        const { x: tx, y: ty } = pickRoamTarget();
+        const curX = roamX.get();
+        const curY = roamY.get();
         const r = Math.random();
         try {
           if (!reduced && r < 0.11) {
+            const { x: tx, y: ty } = pickSafeRoamDelta(stageRef.current, curX, curY, ROAM_STEP_TELEPORT);
             await Promise.all([
               animate(fade, 0, { duration: 0.34, ease: 'easeIn' }),
               animate(squish, 0.7, { duration: 0.34, ease: 'easeIn' }),
@@ -64,6 +187,7 @@ export function SlimeCompanionStage({
             setPlayBurst((n) => n + 1);
             await new Promise((res) => window.setTimeout(res, 880));
           } else {
+            const { x: tx, y: ty } = pickSafeRoamDelta(stageRef.current, curX, curY, ROAM_STEP_DEFAULT);
             await Promise.all([
               animate(roamX, tx, { type: 'spring', stiffness: 22, damping: 19, mass: 1.05 }),
               animate(roamY, ty, { type: 'spring', stiffness: 22, damping: 19, mass: 1.05 }),
@@ -84,8 +208,11 @@ export function SlimeCompanionStage({
   }, []);
 
   return (
-    <div className="relative h-full min-h-[280px] w-full overflow-visible">
-      <motion.div className="absolute left-1/2 top-1/2 z-10" style={{ x: roamX, y: roamY }}>
+    <div ref={stageRef} className={cn('relative h-full min-h-[280px] w-full overflow-visible', className)}>
+      <motion.div
+        className="absolute left-1/2 top-[36%] -translate-x-1/2 -translate-y-1/2"
+        style={{ x: roamX, y: roamY }}
+      >
         <motion.div
           className="-translate-x-1/2 -translate-y-1/2"
           style={{
@@ -98,19 +225,22 @@ export function SlimeCompanionStage({
           }}
           drag
           dragMomentum={false}
-          dragElastic={0.12}
-          dragConstraints={{ left: -175, right: 175, top: -130, bottom: 145 }}
+          dragElastic={0.06}
+          dragConstraints={dragLim}
           whileDrag={{ cursor: 'grabbing' }}
           onDragStart={() => {
             draggingRef.current = true;
+            setDragLim(computeDragLimits(stageRef.current, roamX.get(), roamY.get()));
           }}
           onDragEnd={() => {
-            void Promise.all([
-              animate(dragX, 0, { type: 'spring', stiffness: 28, damping: 20, mass: 1.1 }),
-              animate(dragY, 0, { type: 'spring', stiffness: 28, damping: 20, mass: 1.1 }),
-            ]).then(() => {
-              draggingRef.current = false;
-            });
+            const nx = roamX.get() + dragX.get();
+            const ny = roamY.get() + dragY.get();
+            const cl = clampOffsetToStage(stageRef.current, nx, ny);
+            roamX.set(cl.x);
+            roamY.set(cl.y);
+            dragX.set(0);
+            dragY.set(0);
+            draggingRef.current = false;
           }}
           onTap={() => setWiggle((n) => n + 1)}
         >

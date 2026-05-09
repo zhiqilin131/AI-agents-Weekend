@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { SlimeProfile } from '../app/model';
+import type { SlimePersona, SlimeProfile } from '../app/model';
+import { DEFAULT_SLIME_PERSONA } from '../features/slime/slimePersonaPresets';
 import { apiUrl } from '../utils/apiOrigin';
 
 /** PATCH body: use `null` to clear optional fields on the server. */
-export type SlimeProfileApiPatch = Partial<Omit<SlimeProfile, 'customColors' | 'voice'>> & {
+export type SlimeProfileApiPatch = Partial<Omit<SlimeProfile, 'customColors' | 'voice' | 'persona'>> & {
   customColors?: SlimeProfile['customColors'] | null;
   voice?: SlimeProfile['voice'] | null;
+  persona?: SlimeProfile['persona'] | null;
 };
 
 export const DEFAULT_SLIME_PROFILE: SlimeProfile = {
@@ -15,8 +17,51 @@ export const DEFAULT_SLIME_PROFILE: SlimeProfile = {
   shape: 'classic',
   accessory: 'none',
   motion: 'normal',
+  persona: { ...DEFAULT_SLIME_PERSONA },
   updated_at: '',
 };
+
+function clamp0to3(n: unknown, fallback: 0 | 1 | 2 | 3): 0 | 1 | 2 | 3 {
+  const x = Number(n);
+  if (Number.isNaN(x)) return fallback;
+  const r = Math.max(0, Math.min(3, Math.round(x)));
+  return r as 0 | 1 | 2 | 3;
+}
+
+function toCamelPersona(raw: unknown): SlimePersona {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_SLIME_PERSONA };
+  const r = raw as Record<string, unknown>;
+  const catchRaw = r.catchphrases;
+  const phrases = Array.isArray(catchRaw)
+    ? catchRaw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 3)
+    : [];
+  const dontRaw = r.donts;
+  const donts = Array.isArray(dontRaw)
+    ? dontRaw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 5)
+    : typeof dontRaw === 'string'
+      ? dontRaw
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .slice(0, 5)
+      : [];
+  const nick = r.userNickname ?? r.user_nickname;
+  return {
+    userNickname: nick === null || nick === undefined ? null : String(nick).trim().slice(0, 24) || null,
+    roleIdentity: String(r.roleIdentity ?? r.role_identity ?? DEFAULT_SLIME_PERSONA.roleIdentity).slice(0, 500),
+    personalityPreset: (r.personalityPreset ??
+      r.personality_preset ??
+      DEFAULT_SLIME_PERSONA.personalityPreset) as SlimePersona['personalityPreset'],
+    tone: (r.tone ?? DEFAULT_SLIME_PERSONA.tone) as SlimePersona['tone'],
+    warmth: clamp0to3(r.warmth, DEFAULT_SLIME_PERSONA.warmth),
+    humor: clamp0to3(r.humor, DEFAULT_SLIME_PERSONA.humor),
+    directness: clamp0to3(r.directness, DEFAULT_SLIME_PERSONA.directness),
+    replyLength: (r.replyLength ?? r.reply_length ?? DEFAULT_SLIME_PERSONA.replyLength) as SlimePersona['replyLength'],
+    catchphrases: phrases.map((p) => p.slice(0, 40)),
+    donts: donts.map((d) => d.slice(0, 200)),
+    updated_at: String(r.updated_at ?? r.updatedAt ?? ''),
+  };
+}
 
 let cached: SlimeProfile | null = null;
 let inflight: Promise<SlimeProfile> | null = null;
@@ -56,6 +101,7 @@ function toCamelProfile(raw: any): SlimeProfile {
     accessory: (raw.accessory ?? DEFAULT_SLIME_PROFILE.accessory) as SlimeProfile['accessory'],
     motion: (raw.motion ?? DEFAULT_SLIME_PROFILE.motion) as SlimeProfile['motion'],
     voice,
+    persona: toCamelPersona(raw.persona),
     updated_at: String(raw.updated_at ?? raw.updatedAt ?? ''),
   };
 }
@@ -162,6 +208,7 @@ export function useSlimeProfile() {
         motion: DEFAULT_SLIME_PROFILE.motion,
         customColors: null,
         voice: { enabled: false, rate: 1, pitch: 1 },
+        persona: null,
       }),
     [updateSlimeProfile],
   );

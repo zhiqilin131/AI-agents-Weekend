@@ -43,7 +43,10 @@ import {
 import { saveSelectedBlocksContext, taskIdFromAiCalendarEventId } from '../utils/executionCalendarSelection';
 import { SLIME_VOICE_CALENDAR_DRAFT_KEY } from '../utils/slimeVoiceActions';
 import { SlimeAdvisor } from '../app/components/report/SlimeAdvisor';
+import { CalendarAgentPanel } from '../app/components/calendar/CalendarAgentPanel';
 import { useSlimeProfile } from '../hooks/useSlimeProfile';
+import type { CalendarAgentDraft } from '../utils/calendarAgentApi';
+import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from '../utils/executionStorageKeys';
 
 type TraceShape = {
   decision_id: string;
@@ -108,7 +111,9 @@ export default function ExecutionPlannerPage() {
   const [coachBaseOptions, setCoachBaseOptions] = useState<PlannerCoachOptions>(() => loadCoachSchedulerOptions());
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [draftPlacement, setDraftPlacement] = useState<{ id: string; start: string; end: string; conflict: boolean } | null>(null);
+  const [sessionAgentDraft, setSessionAgentDraft] = useState<CalendarAgentDraft | null>(null);
   const calendarBodyRef = useRef<HTMLDivElement | null>(null);
+  const serverSyncSkipUntilRef = useRef<number>(0);
   const dragStateRef = useRef<{
     eventId: string;
     mode: 'move' | 'resize';
@@ -177,6 +182,22 @@ export default function ExecutionPlannerPage() {
 
   useEffect(() => {
     try {
+      const raw = sessionStorage.getItem(CALENDAR_AGENT_SESSION_DRAFT_KEY);
+      if (raw) {
+        sessionStorage.removeItem(CALENDAR_AGENT_SESSION_DRAFT_KEY);
+        const parsed = JSON.parse(raw) as { draft?: CalendarAgentDraft };
+        if (parsed.draft?.draft_id) {
+          setSessionAgentDraft(parsed.draft);
+          serverSyncSkipUntilRef.current = Date.now() + 2500;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
       const pending = sessionStorage.getItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY);
       if (pending?.trim()) {
         setScheduleFeedback(pending.trim());
@@ -235,19 +256,19 @@ export default function ExecutionPlannerPage() {
         end_iso?: string;
         display_summary?: string;
       };
-      if (!r.start_iso || !r.end_iso) return;
-      setEvents((prev) => [
-        ...prev,
-        {
-          id: `voice-resolved-${Date.now()}`,
-          title: (r.title || 'Event').slice(0, 200),
-          start: r.start_iso,
-          end: r.end_iso,
-          source: 'manual',
-          description: (r.display_summary || 'From Slime voice').slice(0, 500),
-          locked: false,
-        },
-      ]);
+      const st = r.start_iso;
+      const en = r.end_iso;
+      if (!st || !en) return;
+      const ev: CalendarEvent = {
+        id: `voice-resolved-${Date.now()}`,
+        title: (r.title || 'Event').slice(0, 200),
+        start: st,
+        end: en,
+        source: 'manual',
+        description: (r.display_summary || 'From Slime voice').slice(0, 500),
+        locked: false,
+      };
+      setEvents((prev) => [...prev, ev]);
       setScheduleCoachNote('Loaded times from Slime — drag to adjust if needed.');
     } catch {
       // ignore
@@ -272,7 +293,73 @@ export default function ExecutionPlannerPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(apiUrl('/api/calendar/events'));
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { events?: Array<Record<string, unknown>> };
+        const list = data.events;
+        if (!Array.isArray(list) || list.length === 0) return;
+        setEvents((prev) => {
+          const toPlanner = (raw: Record<string, unknown>): CalendarEvent => {
+            const src = raw.source;
+            const source: CalendarEvent['source'] =
+              src === 'uploaded' ? 'uploaded' : src === 'ai' || src === 'ai_draft' ? 'ai' : 'manual';
+            return {
+              id: String(raw.id ?? `srv-${Date.now()}`),
+              title: String(raw.title ?? ''),
+              start: String(raw.start ?? ''),
+              end: String(raw.end ?? ''),
+              source,
+              description: typeof raw.description === 'string' ? raw.description : undefined,
+              locked: Boolean(raw.locked),
+            };
+          };
+          if (prev.length === 0) return list.map(toPlanner);
+          const ids = new Set(prev.map((p) => p.id));
+          const merged = [...prev];
+          for (const raw of list) {
+            const e = toPlanner(raw);
+            if (!ids.has(e.id)) merged.push(e);
+          }
+          return merged;
+        });
+      } catch {
+        /* offline */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(EXECUTION_EVENTS_STORAGE_KEY, JSON.stringify(events));
+  }, [events]);
+
+  useEffect(() => {
+    if (Date.now() < serverSyncSkipUntilRef.current) return;
+    const t = window.setTimeout(() => {
+      const payload = events.map((x) => ({
+        id: x.id,
+        title: x.title,
+        start: x.start,
+        end: x.end,
+        source: x.source === 'ai' ? 'ai' : x.source === 'uploaded' ? 'uploaded' : 'manual',
+        description: x.description ?? '',
+        locked: Boolean(x.locked),
+        conflict: false,
+      }));
+      void fetch(apiUrl('/api/calendar/events'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: payload }),
+      }).catch(() => {
+        /* ignore */
+      });
+    }, 1200);
+    return () => clearTimeout(t);
   }, [events]);
 
   useEffect(() => {
@@ -740,6 +827,33 @@ export default function ExecutionPlannerPage() {
             )}
           </nav>
         </div>
+
+        {sessionAgentDraft ? (
+          <div className="mb-4">
+            <CalendarAgentPanel
+              draft={sessionAgentDraft}
+              onDismiss={() => setSessionAgentDraft(null)}
+              onEventsConfirmed={(confirmed) => {
+                setEvents((prev) => [
+                  ...prev,
+                  ...confirmed.map(
+                    (c): CalendarEvent => ({
+                      id: c.id,
+                      title: c.title,
+                      start: c.start,
+                      end: c.end,
+                      source: 'manual',
+                      description: c.description,
+                      locked: c.locked ?? false,
+                    }),
+                  ),
+                ]);
+                setSessionAgentDraft(null);
+                setScheduleCoachNote('Saved blocks from Calendar Agent — drag to adjust if needed.');
+              }}
+            />
+          </div>
+        ) : null}
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_minmax(260px,300px)] xl:items-start">
           <div className="min-w-0 space-y-0">

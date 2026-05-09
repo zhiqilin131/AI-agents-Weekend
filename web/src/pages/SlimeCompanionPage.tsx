@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
 import { Ghost, Home } from 'lucide-react';
+import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionReportStreamingPanel';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
@@ -18,16 +20,20 @@ import { primeSpeechSynthesisFromGesture } from '../app/hooks/useSpeechSynthesis
 
 const BUDDY_THREAD_STORAGE_KEY = 'slimeBuddyShadowThreadId';
 
+type BuddyCornerToast = {
+  message: string;
+  tone: 'memory_saved' | 'memory_retrieved' | 'neutral' | 'error';
+};
+
 export default function SlimeCompanionPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { slimeProfile, updateSlimeProfile, resetSlimeProfile } = useSlimeProfile();
+  const { slimeProfile, updateSlimeProfile, resetSlimeProfile, refreshSlimeProfile } = useSlimeProfile();
   const [slimeDraft, setSlimeDraft] = useState(DEFAULT_SLIME_PROFILE);
   const [panelOpen, setPanelOpen] = useState(false);
   const [browserVoices, setBrowserVoices] = useState<string[]>([]);
-  const [toast, setToast] = useState<string | null>(null);
-  const [memorySavedToast, setMemorySavedToast] = useState<string | null>(null);
-  const memorySavedToastTimerRef = useRef<number | null>(null);
+  const [buddyCornerToast, setBuddyCornerToast] = useState<BuddyCornerToast | null>(null);
+  const buddyCornerToastTimerRef = useRef<number | null>(null);
   const [advisorState, setAdvisorState] = useState<SlimeAdvisorState>('idle');
   const [memoryParticleItems, setMemoryParticleItems] = useState<MemoryEvidenceItem[]>([]);
   const [memoryParticlesActive, setMemoryParticlesActive] = useState(false);
@@ -51,22 +57,22 @@ export default function SlimeCompanionPage() {
     }
   }, []);
 
-  const flashMemorySavedToast = useCallback((message: string) => {
-    if (memorySavedToastTimerRef.current != null) {
-      window.clearTimeout(memorySavedToastTimerRef.current);
-      memorySavedToastTimerRef.current = null;
+  const flashBuddyCornerToast = useCallback((message: string, tone: BuddyCornerToast['tone']) => {
+    if (buddyCornerToastTimerRef.current != null) {
+      window.clearTimeout(buddyCornerToastTimerRef.current);
+      buddyCornerToastTimerRef.current = null;
     }
-    setMemorySavedToast(message);
-    memorySavedToastTimerRef.current = window.setTimeout(() => {
-      setMemorySavedToast(null);
-      memorySavedToastTimerRef.current = null;
+    setBuddyCornerToast({ message, tone });
+    buddyCornerToastTimerRef.current = window.setTimeout(() => {
+      setBuddyCornerToast(null);
+      buddyCornerToastTimerRef.current = null;
     }, 3800);
   }, []);
 
   useEffect(
     () => () => {
-      if (memorySavedToastTimerRef.current != null) {
-        window.clearTimeout(memorySavedToastTimerRef.current);
+      if (buddyCornerToastTimerRef.current != null) {
+        window.clearTimeout(buddyCornerToastTimerRef.current);
       }
     },
     [],
@@ -75,7 +81,7 @@ export default function SlimeCompanionPage() {
   const startDecisionReportFlow = async (prompt: string) => {
     const tid = buddyThreadId;
     if (!tid?.trim()) {
-      setToast('No chat thread yet — speak once first so I can link the report.');
+      flashBuddyCornerToast('No chat thread yet — speak once first so I can link the report.', 'error');
       return;
     }
     primeSpeechSynthesisFromGesture();
@@ -84,7 +90,7 @@ export default function SlimeCompanionPage() {
     setReportOpen(true);
     const { error } = await reportStream.start({ threadId: tid, decisionPrompt: p });
     if (error && error !== 'cancelled') {
-      setToast(error.length > 120 ? `${error.slice(0, 120)}…` : error);
+      flashBuddyCornerToast(error.length > 120 ? `${error.slice(0, 120)}…` : error, 'error');
     }
   };
 
@@ -109,27 +115,27 @@ export default function SlimeCompanionPage() {
   }, []);
 
   const saveSlime = async () => {
-    setToast(null);
     try {
       const next = await updateSlimeProfile({
         ...slimeDraft,
         ...(slimeDraft.colorTheme !== 'custom' ? { customColors: null } : {}),
       });
       setSlimeDraft(next);
-      setToast('Saved.');
+      void refreshSlimeProfile();
+      flashBuddyCornerToast('Saved.', 'neutral');
     } catch {
-      setToast('Could not save — try again.');
+      flashBuddyCornerToast('Could not save — try again.', 'error');
     }
   };
 
   const resetSlime = async () => {
-    setToast(null);
     try {
       const reset = await resetSlimeProfile();
       setSlimeDraft(reset);
-      setToast('Reset to default.');
+      void refreshSlimeProfile();
+      flashBuddyCornerToast('Reset to default.', 'neutral');
     } catch {
-      setToast('Could not reset.');
+      flashBuddyCornerToast('Could not reset.', 'error');
     }
   };
 
@@ -137,7 +143,10 @@ export default function SlimeCompanionPage() {
     <div className="relative min-h-[100dvh] overflow-hidden bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#e8f4ff]">
       <div className="pointer-events-none absolute inset-0 opacity-[0.4] bg-[radial-gradient(ellipse_at_50%_35%,rgba(139,92,246,0.14),transparent_62%)]" />
 
-      <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-2 sm:left-4 sm:top-4">
+      <div
+        data-slime-avoid
+        className="absolute left-3 top-3 z-[60] flex flex-wrap items-center gap-2 sm:left-4 sm:top-4"
+      >
         <button
           type="button"
           onClick={() => navigate('/')}
@@ -157,38 +166,49 @@ export default function SlimeCompanionPage() {
 
       <button
         type="button"
+        data-slime-avoid
         onClick={() => setPanelOpen(true)}
-        className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-full border border-violet-200/70 bg-white/80 px-3 py-1.5 text-xs font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400 sm:right-4 sm:top-4"
+        className="absolute right-3 top-3 z-[60] inline-flex items-center gap-1.5 rounded-full border border-violet-200/70 bg-white/80 px-3 py-1.5 text-xs font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400 sm:right-4 sm:top-4"
         aria-label="Personalize your Slime"
       >
         <Ghost className="h-3.5 w-3.5 text-violet-600" aria-hidden />
         Personalize
       </button>
 
+      {/* Bottom-left: hint opens personalize; logo below — stays clear of center mic column */}
       <div
-        className="pointer-events-none absolute bottom-6 left-6 z-20 sm:bottom-8 sm:left-8"
-        aria-hidden
+        data-slime-avoid
+        className="absolute bottom-6 left-4 z-[65] flex max-w-[min(280px,calc(100vw-6rem))] flex-col items-start gap-3 sm:bottom-8 sm:left-6"
       >
+        <motion.button
+          type="button"
+          onClick={() => setPanelOpen(true)}
+          className="cursor-pointer text-left"
+          animate={{ opacity: [0.55, 1, 0.55] }}
+          transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+          aria-label="Open Slime personalize"
+        >
+          <span className="bg-gradient-to-r from-violet-600 via-fuchsia-500 to-cyan-600 bg-clip-text text-xs font-semibold leading-snug tracking-wide text-transparent sm:text-sm">
+            Tap the slime to wiggle · text opens personalize
+          </span>
+        </motion.button>
         <img
           src="/ForesightXLogo.svg"
           alt=""
-          className="h-9 w-auto max-w-[min(100vw-3rem,280px)] opacity-95 drop-shadow-sm sm:h-10"
+          className="pointer-events-none h-8 w-auto max-w-[min(100vw-5rem,240px)] opacity-90 drop-shadow-sm sm:h-9"
           decoding="async"
+          aria-hidden
         />
       </div>
 
-      <div className="relative z-10 flex min-h-[100dvh] w-full flex-col items-center px-4 pb-28 pt-20">
-        <div className="relative h-[min(72vh,680px)] w-full max-w-5xl shrink-0">
-          <SlimeCompanionStage profile={slimeDraft} advisorState={advisorState} />
-          <div className="pointer-events-none absolute inset-0 z-[22] overflow-visible">
-            <MemoryEvidenceParticles
-              items={memoryParticleItems}
-              active={memoryParticlesActive}
-              onDone={() => setMemoryParticlesActive(false)}
-            />
-          </div>
+      <div className="relative flex min-h-[100dvh] w-full flex-col items-center px-4 pb-16 pt-16 sm:pb-20 sm:pt-20">
+        <div className="relative z-40 h-[min(72vh,680px)] w-full max-w-5xl shrink-0">
+          {/*
+            Voice UI is split z-index inside SlimeVoiceAgent (panels z-32, mic z-52).
+            Stage z-44 paints above bubbles/transcript so the buddy stays visible; mic stays on top for taps.
+            Memory particles sit between panels and slime (z-38).
+          */}
           <SlimeVoiceAgent
-            className="absolute bottom-2 left-1/2 w-[min(100%,380px)] -translate-x-1/2"
             slimeProfile={slimeDraft}
             currentRoute="/buddy"
             threadId={buddyThreadId ?? undefined}
@@ -200,16 +220,33 @@ export default function SlimeCompanionPage() {
               setMemoryParticleItems(items);
               setMemoryParticlesActive(true);
             }}
-            onProfileMemorySaved={flashMemorySavedToast}
+            onProfileMemorySaved={(msg) => flashBuddyCornerToast(msg, 'memory_saved')}
+            onMemoryEvidenceRetrieved={(count) =>
+              flashBuddyCornerToast(
+                count === 1 ? 'Retrieved 1 related memory' : `Retrieved ${count} related memories`,
+                'memory_retrieved',
+              )
+            }
             onUpdateSlimeProfile={async (patch) => {
               const next = await updateSlimeProfile(patch);
               setSlimeDraft(next);
             }}
           />
+          <div className="pointer-events-none absolute inset-0 z-[38] overflow-visible">
+            <MemoryEvidenceParticles
+              items={memoryParticleItems}
+              active={memoryParticlesActive}
+              onDone={() => setMemoryParticlesActive(false)}
+            />
+          </div>
+          <SlimeCompanionStage className="relative z-[44]" profile={slimeDraft} advisorState={advisorState} />
         </div>
 
         {pendingDecision?.should_show ? (
-          <div className="relative z-20 mx-auto mt-4 flex w-[min(100%,400px)] flex-col gap-2 rounded-2xl border border-violet-200/90 bg-white/90 px-4 py-3 text-left shadow-lg backdrop-blur-md">
+          <div
+            data-slime-avoid
+            className="relative z-50 mx-auto mt-8 flex w-[min(100%,400px)] flex-col gap-2 rounded-2xl border border-violet-200/90 bg-white/90 px-4 py-3 text-left shadow-lg backdrop-blur-md sm:mt-10"
+          >
             <p className="text-sm font-semibold text-violet-950">{pendingDecision.display_text || 'Activate Decision Mode?'}</p>
             <p className="text-xs leading-relaxed text-gray-700">
               {pendingDecision.description ||
@@ -233,19 +270,6 @@ export default function SlimeCompanionPage() {
             </div>
           </div>
         ) : null}
-
-        <motion.button
-          type="button"
-          className="mt-8 max-w-md cursor-pointer text-center"
-          animate={{ opacity: [0.5, 1, 0.5] }}
-          transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
-          onClick={() => setPanelOpen(true)}
-        >
-          <span className="bg-gradient-to-r from-violet-600 via-fuchsia-500 to-cyan-600 bg-clip-text text-sm font-semibold tracking-wide text-transparent">
-            Tap the slime to wiggle · text opens personalize
-          </span>
-        </motion.button>
-        {toast ? <p className="mt-6 text-center text-xs text-emerald-700">{toast}</p> : null}
       </div>
 
       <DecisionReportStreamingPanel
@@ -282,22 +306,41 @@ export default function SlimeCompanionPage() {
         }}
       />
 
-      <AnimatePresence>
-        {memorySavedToast ? (
-          <motion.div
-            key={memorySavedToast}
-            role="status"
-            aria-live="polite"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 8 }}
-            transition={{ duration: 0.22, ease: 'easeOut' }}
-            className="pointer-events-none fixed bottom-6 right-4 z-[200] max-w-[min(92vw,300px)] rounded-xl border border-emerald-200/90 bg-emerald-50/96 px-3.5 py-2.5 text-right shadow-[0_8px_30px_rgba(16,185,129,0.18)] backdrop-blur-md sm:bottom-8 sm:right-6"
-          >
-            <p className="text-[11px] font-medium leading-snug text-emerald-950">{memorySavedToast}</p>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
+      {typeof document !== 'undefined'
+        ? createPortal(
+            <AnimatePresence>
+              {buddyCornerToast ? (
+                <motion.div
+                  key={`${buddyCornerToast.tone}:${buddyCornerToast.message}`}
+                  role="status"
+                  aria-live="polite"
+                  initial={{ opacity: 0, y: 12, x: 6 }}
+                  animate={{ opacity: 1, y: 0, x: 0 }}
+                  exit={{ opacity: 0, y: 8, x: 4 }}
+                  transition={{ duration: 0.22, ease: 'easeOut' }}
+                  style={{
+                    bottom: 'max(1.5rem, env(safe-area-inset-bottom, 0px))',
+                    right: 'max(1rem, env(safe-area-inset-right, 0px))',
+                  }}
+                  className={cn(
+                    'pointer-events-none fixed z-[240] max-w-[min(92vw,300px)] rounded-xl border px-3.5 py-2.5 text-left text-[11px] font-medium leading-snug shadow-lg backdrop-blur-md',
+                    buddyCornerToast.tone === 'memory_saved' &&
+                      'border-emerald-200/90 bg-emerald-50/96 text-emerald-950 shadow-[0_8px_30px_rgba(16,185,129,0.18)]',
+                    buddyCornerToast.tone === 'memory_retrieved' &&
+                      'border-violet-200/90 bg-violet-50/96 text-violet-950 shadow-[0_8px_30px_rgba(139,92,246,0.14)]',
+                    buddyCornerToast.tone === 'neutral' &&
+                      'border-emerald-200/70 bg-white/95 text-emerald-900 shadow-[0_6px_24px_rgba(16,185,129,0.12)]',
+                    buddyCornerToast.tone === 'error' &&
+                      'border-red-200/90 bg-red-50/96 text-red-950 shadow-[0_8px_30px_rgba(239,68,68,0.12)]',
+                  )}
+                >
+                  {buddyCornerToast.message}
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body,
+          )
+        : null}
 
       <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
         <SheetContent
