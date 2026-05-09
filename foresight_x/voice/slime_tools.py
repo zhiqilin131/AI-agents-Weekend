@@ -18,12 +18,44 @@ from foresight_x.schemas import (
     SlimeCustomColors,
     SlimeMotion,
     SlimePersonality,
+    SlimePersona,
     SlimeProfile,
     SlimeShape,
     UserProfile,
 )
 from foresight_x.voice.slime_memory_synthesis import MemoryEvidenceItem, evidence_items_from_hits, synthesize_memory_answer
+from foresight_x.voice.slime_identity import EffectiveSlimePersona, get_effective_slime_persona
 from foresight_x.voice.slime_voice_router import SlimeVoiceContext, SlimeVoiceRouteResult
+from foresight_x.voice.slime_voice_synthesis import synthesize_persona_spoken_reply
+
+
+def _slime_voice_persona_bundle(settings: Settings) -> tuple[EffectiveSlimePersona, SlimePersona | None]:
+    eff = get_effective_slime_persona(settings)
+    prof = load_user_profile(settings)
+    raw_persona = prof.slime_profile.persona if prof.slime_profile else None
+    return eff, raw_persona
+
+
+def _persona_spoken(
+    neutral: str,
+    *,
+    tool_name: str,
+    transcript: str,
+    settings: Settings,
+) -> str:
+    eff, raw_persona = _slime_voice_persona_bundle(settings)
+    return synthesize_persona_spoken_reply(
+        neutral_reply=neutral,
+        transcript=transcript,
+        tool_name=tool_name,
+        slime_persona=raw_persona,
+        slime_name=eff.name,
+        user_ref=eff.user_nickname_for_address,
+        slime_profile_saved=eff.profile_saved,
+        settings=settings,
+        effective=eff,
+    )
+
 
 ROUTE_TO_PATH: dict[str, str] = {
     "home": "/",
@@ -31,7 +63,7 @@ ROUTE_TO_PATH: dict[str, str] = {
     "shadow_chat": "/chat",
     "execution_calendar": "/execution",
     "history": "/history",
-    "settings": "/personalize",
+    "settings": "/profile",
 }
 
 
@@ -214,26 +246,127 @@ def tool_create_calendar_draft(
     settings: Settings | None = None,
     user_timezone: str = "UTC",
     now: datetime | None = None,
+    context: SlimeVoiceContext | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    from foresight_x.calendar.datetime_resolver import resolve_calendar_draft
+    from foresight_x.calendar_agent.calendar_service import build_draft_from_intent
+    from foresight_x.calendar_agent.schemas import CalendarIntent
+    from foresight_x.calendar_agent.store import list_events as cal_list_events
     from foresight_x.voice.calendar_command_parser import merge_calendar_args_with_transcript
 
-    merged = merge_calendar_args_with_transcript(args, transcript, settings=settings)
-    resolved = resolve_calendar_draft(
-        merged,
+    s = settings or load_settings()
+    uid = s.foresight_user_id
+    merged = merge_calendar_args_with_transcript(args, transcript, settings=s)
+    ruc = (context.recent_ui_context if context else {}) or {}
+    did = ruc.get("decision_id")
+    tid = context.thread_id if context else None
+    intent = CalendarIntent(
+        intent_type="create_event",
+        title=merged.title,
+        description=merged.description,
+        date_hint=merged.date_hint,
+        time_hint=merged.time_hint,
+        duration_minutes=merged.duration_minutes,
+        source="slime_voice",
+        thread_id=str(tid) if tid else None,
+        decision_id=str(did).strip() if did else None,
+        confidence=float(merged.confidence),
+    )
+    existing = cal_list_events(s, uid)
+    draft = build_draft_from_intent(
+        intent,
+        settings=s,
+        user_id=uid,
+        existing_events=existing,
         user_timezone=user_timezone,
         now=now or datetime.now(timezone.utc),
     )
+    pe0 = draft.proposed_events[0] if draft.proposed_events else None
+    meta = (pe0.metadata if pe0 else {}) or {}
+    resolved_payload = {
+        "title": pe0.title if pe0 else merged.title,
+        "start_iso": pe0.start if pe0 else "",
+        "end_iso": pe0.end if pe0 else "",
+        "duration_minutes": merged.duration_minutes or 30,
+        "display_summary": str(meta.get("display_summary") or draft.explanation[:200]),
+        "requires_confirmation": True,
+        "ambiguity_note": pe0.description if pe0 else None,
+        "timezone": str(meta.get("timezone") or user_timezone),
+    }
     tr: dict[str, Any] = {
         "ok": True,
         "draft": merged.model_dump(mode="json"),
-        "resolved": resolved.model_dump(mode="json"),
+        "calendar_agent_draft": draft.model_dump(mode="json"),
+        "resolved": resolved_payload,
+        "draft_id": draft.draft_id,
         "requires_confirmation": True,
     }
     fe: dict[str, Any] = {
         "type": "calendar_draft_confirm",
         "route": "",
-        "payload": {"resolved": resolved.model_dump(mode="json")},
+        "payload": {
+            "resolved": resolved_payload,
+            "draft_id": draft.draft_id,
+            "calendar_agent_draft": draft.model_dump(mode="json"),
+            "conflicts": [c.model_dump(mode="json") for c in draft.conflicts],
+        },
+    }
+    return tr, fe
+
+
+def tool_schedule_decision_plan(
+    args: dict[str, Any],
+    *,
+    context: SlimeVoiceContext,
+    settings: Settings,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    from foresight_x.calendar_agent.calendar_service import draft_from_report
+    from foresight_x.calendar_agent.store import list_events as cal_list_events
+    from foresight_x.harness.trace import load_decision_trace
+
+    ruc = context.recent_ui_context or {}
+    did = str(args.get("decision_id") or ruc.get("decision_id") or "").strip()
+    if not did:
+        return (
+            {"ok": False, "error": "missing_decision_id"},
+            {"type": "none", "route": "", "payload": {}},
+        )
+    try:
+        trace = load_decision_trace(did, settings=settings)
+    except FileNotFoundError:
+        return (
+            {"ok": False, "error": "trace_not_found"},
+            {"type": "none", "route": "", "payload": {}},
+        )
+    trace_user = str(trace.user_state.active_user_id or "").strip()
+    uid = settings.foresight_user_id
+    visible = trace_user == uid if trace_user else uid == "demo_user"
+    if not visible:
+        return (
+            {"ok": False, "error": "trace_not_found"},
+            {"type": "none", "route": "", "payload": {}},
+        )
+    existing = cal_list_events(settings, uid)
+    draft = draft_from_report(
+        settings=settings,
+        user_id=uid,
+        decision_id=did,
+        thread_id=context.thread_id,
+        existing_events=existing,
+    )
+    tr = {
+        "ok": True,
+        "draft_id": draft.draft_id,
+        "calendar_agent_draft": draft.model_dump(mode="json"),
+    }
+    tid_q = f"&threadId={context.thread_id}" if context.thread_id else ""
+    fe = {
+        "type": "show_calendar_draft",
+        "route": f"/execution/{did}?from=slime{tid_q}",
+        "payload": {
+            "decision_id": did,
+            "draft_id": draft.draft_id,
+            "draft": draft.model_dump(mode="json"),
+        },
     }
     return tr, fe
 
@@ -371,25 +504,41 @@ def execute_slime_tool(
 
     if name == "no_op":
         text = _noop_assistant(route, transcript)
+        text = _persona_spoken(text, tool_name="no_op", transcript=transcript, settings=settings)
         return {"ok": True, "noop": True}, {"type": "none", "route": "", "payload": {}}, text
 
     if name == "navigate":
         tr, fe = tool_navigate(args)
         path = tr.get("path", "")
-        return tr, {"type": fe["type"], "route": fe.get("route", path), "payload": fe.get("payload", {})}, (
+        neutral = (
             f"Opening {args.get('route', 'that')}."
             if tr.get("ok")
             else "I couldn't open that page."
         )
+        text = _persona_spoken(neutral, tool_name="navigate", transcript=transcript, settings=settings)
+        return tr, {"type": fe["type"], "route": fe.get("route", path), "payload": fe.get("payload", {})}, text
 
     if name == "search_memory":
         tr, fe = tool_search_memory(args, context=context, settings=settings)
         if not str(args.get("query") or "").strip():
-            return tr, fe, "What should I search your memory for?"
+            neutral = "What should I search your memory for?"
+            text = _persona_spoken(neutral, tool_name="search_memory", transcript=transcript, settings=settings)
+            return tr, fe, text
         ev_raw = tr.get("evidence_items") or []
         ev = [MemoryEvidenceItem.model_validate(x) for x in ev_raw]
         q = str(args.get("query") or "").strip() or transcript.strip()
-        synth = synthesize_memory_answer(q, ev, context, settings=settings)
+        eff, raw_persona = _slime_voice_persona_bundle(settings)
+        synth = synthesize_memory_answer(
+            q,
+            ev,
+            context,
+            settings=settings,
+            slime_persona=raw_persona,
+            slime_name=eff.name,
+            user_ref=eff.user_nickname_for_address,
+            slime_profile_saved=eff.profile_saved,
+            effective=eff,
+        )
         tr_out: dict[str, Any] = {
             **tr,
             "synthesis_confidence": synth.confidence,
@@ -405,33 +554,52 @@ def execute_slime_tool(
             transcript=transcript,
             settings=settings,
             user_timezone=tz,
+            context=context,
         )
         r = tr.get("resolved") or {}
         disp = str(r.get("display_summary") or "")
         title = str(r.get("title") or "Calendar block")
-        text = f"I can add this to your calendar: {title}, {disp}. Confirm below to save it."
+        neutral = f"I can add this to your calendar: {title}, {disp}. Confirm below to save it."
+        text = _persona_spoken(neutral, tool_name="create_calendar_draft", transcript=transcript, settings=settings)
         return tr, {"type": fe["type"], "route": "", "payload": fe.get("payload", {})}, text
+
+    if name == "schedule_decision_plan":
+        tr, fe = tool_schedule_decision_plan(args, context=context, settings=settings)
+        if not tr.get("ok"):
+            neutral = "I need an open decision report to schedule — open a report first, or say which decision ID."
+            text = _persona_spoken(neutral, tool_name="schedule_decision_plan", transcript=transcript, settings=settings)
+            return tr, fe, text
+        n = len((tr.get("calendar_agent_draft") or {}).get("proposed_events") or [])
+        neutral = f"I drafted {n} calendar block(s) from your report. Open the planner to review and confirm."
+        text = _persona_spoken(neutral, tool_name="schedule_decision_plan", transcript=transcript, settings=settings)
+        return tr, fe, text
 
     if name == "open_decision_report_flow":
         tr, fe = tool_open_decision_report_flow(args)
-        return tr, {"type": fe["type"], "route": fe["route"], "payload": fe.get("payload", {})}, (
-            "Opening Shadow Chat with your decision prompt."
-        )
+        neutral = "Opening Shadow Chat with your decision prompt."
+        text = _persona_spoken(neutral, tool_name="open_decision_report_flow", transcript=transcript, settings=settings)
+        return tr, {"type": fe["type"], "route": fe["route"], "payload": fe.get("payload", {})}, text
 
     if name == "open_shadow_chat":
         tr, fe = tool_open_shadow_chat(args)
-        return tr, {"type": fe["type"], "route": fe["route"], "payload": fe.get("payload", {})}, "Opening Shadow Chat."
+        neutral = "Opening Shadow Chat."
+        text = _persona_spoken(neutral, tool_name="open_shadow_chat", transcript=transcript, settings=settings)
+        return tr, {"type": fe["type"], "route": fe["route"], "payload": fe.get("payload", {})}, text
 
     if name == "update_slime_profile":
         tr, fe = tool_update_slime_profile(args, route=route, settings=settings)
         if fe.get("type") == "confirm":
-            return tr, {"type": "confirm", "route": "", "payload": fe.get("payload", {})}, (
-                "Should I update your Slime like that? Tap confirm to save."
-            )
+            neutral = "Should I update your Slime like that? Tap confirm to save."
+            text = _persona_spoken(neutral, tool_name="update_slime_profile", transcript=transcript, settings=settings)
+            return tr, {"type": "confirm", "route": "", "payload": fe.get("payload", {})}, text
         if tr.get("ok"):
-            return tr, {"type": "none", "route": "", "payload": {}}, "Updated your Slime profile."
-        return tr, {"type": "none", "route": "", "payload": {}}, "I couldn't apply that Slime change."
+            neutral = "Updated your Slime profile."
+            text = _persona_spoken(neutral, tool_name="update_slime_profile", transcript=transcript, settings=settings)
+            return tr, {"type": "none", "route": "", "payload": {}}, text
+        neutral = "I couldn't apply that Slime change."
+        text = _persona_spoken(neutral, tool_name="update_slime_profile", transcript=transcript, settings=settings)
+        return tr, {"type": "none", "route": "", "payload": {}}, text
 
-    return {"ok": False, "error": "unknown_tool"}, {"type": "none", "route": "", "payload": {}}, (
-        "I could not run that action."
-    )
+    neutral = "I could not run that action."
+    text = _persona_spoken(neutral, tool_name="unknown", transcript=transcript, settings=settings)
+    return {"ok": False, "error": "unknown_tool"}, {"type": "none", "route": "", "payload": {}}, text

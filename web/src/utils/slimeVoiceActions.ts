@@ -1,4 +1,5 @@
 import type { NavigateFunction } from 'react-router';
+import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from './executionStorageKeys';
 
 /** Session keys — read/written only around navigation from voice commands. */
 export const SLIME_VOICE_CHAT_PREFILL_KEY = 'foresight_slime_voice_chat_prefill';
@@ -18,6 +19,17 @@ export function applySlimeVoiceFrontendAction(
   if (!action?.type) return;
   const path = (action.route || '').trim();
   const payload = action.payload;
+
+  if (action.type === 'show_calendar_draft') {
+    if (!path.startsWith('/') || path.startsWith('//')) return;
+    try {
+      sessionStorage.setItem(CALENDAR_AGENT_SESSION_DRAFT_KEY, JSON.stringify(payload ?? {}));
+    } catch {
+      /* ignore quota */
+    }
+    navigate(path);
+    return;
+  }
 
   if (action.type === 'navigate') {
     if (!path.startsWith('/') || path.startsWith('//')) return;

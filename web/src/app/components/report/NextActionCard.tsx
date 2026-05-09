@@ -13,6 +13,7 @@ export function NextActionCard({
   onExecutionCalendarNavigate,
   navigate,
   suppressCalendarButton = false,
+  preNavigate,
 }: {
   /** All recommended next steps (same order as the report). */
   actions: NextActionRow[];
@@ -23,6 +24,7 @@ export function NextActionCard({
   navigate: (path: string) => void;
   /** When true, calendar CTA lives on recommendation resource chips instead */
   suppressCalendarButton?: boolean;
+  preNavigate?: () => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const rows = useMemo(() => {
@@ -39,11 +41,16 @@ export function NextActionCard({
   }, [actions, fallbackPrimary]);
 
   const goCal = () =>
-    decisionId
-      ? onExecutionCalendarNavigate
-        ? onExecutionCalendarNavigate(decisionId)
-        : navigate(`/execution/${encodeURIComponent(decisionId)}`)
-      : undefined;
+    void (async () => {
+      if (!decisionId) return;
+      try {
+        if (preNavigate) await preNavigate();
+      } catch {
+        /* navigate anyway */
+      }
+      if (onExecutionCalendarNavigate) onExecutionCalendarNavigate(decisionId);
+      else navigate(`/execution/${encodeURIComponent(decisionId)}`);
+    })();
 
   if (rows.length === 0) return null;
 

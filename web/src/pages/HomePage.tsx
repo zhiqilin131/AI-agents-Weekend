@@ -526,9 +526,6 @@ export default function HomePage() {
                   >
                     Start Chatting
                   </button>
-                  <p className="mt-4 text-sm text-gray-500">
-                    Chat naturally. Foresight-X will detect when you need a decision report.
-                  </p>
                 </div>
               </div>
             </div>

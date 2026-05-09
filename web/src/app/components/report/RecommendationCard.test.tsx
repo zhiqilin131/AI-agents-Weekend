@@ -12,6 +12,19 @@ const { slimeMock } = vi.hoisted(() => {
     shape: 'classic',
     accessory: 'none',
     motion: 'normal',
+    persona: {
+      userNickname: null,
+      roleIdentity:
+        'A personal decision companion that helps the user think clearly, remember context, and turn decisions into action.',
+      personalityPreset: 'calm_advisor',
+      tone: 'warm',
+      warmth: 2,
+      humor: 1,
+      directness: 1,
+      replyLength: 'balanced',
+      catchphrases: [],
+      donts: [],
+    },
     updated_at: '',
   };
   return { slimeMock };
@@ -20,12 +33,26 @@ const { slimeMock } = vi.hoisted(() => {
 vi.mock('../../../hooks/useSlimeProfile', () => ({
   useSlimeProfile: () => ({
     slimeProfile: slimeMock,
+    refreshSlimeProfile: vi.fn(),
   }),
 }));
 
 afterEach(() => {
   slimeMock.name = 'Mochi';
   slimeMock.personality = 'calm';
+  slimeMock.persona = {
+    userNickname: null,
+    roleIdentity:
+      'A personal decision companion that helps the user think clearly, remember context, and turn decisions into action.',
+    personalityPreset: 'calm_advisor',
+    tone: 'warm',
+    warmth: 2,
+    humor: 1,
+    directness: 1,
+    replyLength: 'balanced',
+    catchphrases: [],
+    donts: [],
+  };
 });
 
 function makeReport(over: Partial<DecisionReport> = {}): DecisionReport {
@@ -61,13 +88,12 @@ describe('RecommendationCard', () => {
     expect(html).toContain('Mochi shares');
   });
 
-  it('uses slime profile name and personality for bubble label', () => {
+  it('uses slime persona tone for bubble label when set', () => {
     slimeMock.name = 'Ron';
-    slimeMock.personality = 'analytical';
+    slimeMock.personality = 'calm';
+    if (slimeMock.persona) slimeMock.persona.tone = 'analytical';
     const html = renderToStaticMarkup(<RecommendationCard report={makeReport()} />);
     expect(html).toContain('Ron notes');
-    slimeMock.name = 'Mochi';
-    slimeMock.personality = 'calm';
   });
 
   it('passes cautious slime state when bias risks exist', () => {

@@ -54,23 +54,35 @@ from foresight_x.perception.personalized_clarify import (
     run_personalized_clarify_gate,
 )
 from foresight_x.profile.merge import (
+    append_profile_memory_records,
     delete_memory_fact_by_id,
     delete_priority_line_by_id,
 )
 from foresight_x.profile.store import load_user_profile, save_user_profile
+from foresight_x.diary.generator import attach_links, generate_diary_entry
+from foresight_x.diary.source_adapter import bundle_has_activity, collect_diary_sources_for_date
+from foresight_x.diary.store import load_entry, load_entry_by_id, list_month_summaries, save_entry, stamp_times
 from foresight_x.schemas import (
     DecisionCommit,
     DecisionOutcome,
+    MemoryFactCategory,
     ProfileLine,
+    ProfileMemoryFact,
     SlimeAccessory,
     SlimeColorTheme,
     SlimeCustomColors,
     SlimeMotion,
     SlimePersonality,
+    SlimePersona,
     SlimeProfile,
     SlimeShape,
     SlimeVoicePreferences,
     UserProfile,
+)
+from foresight_x.voice.slime_persona_prompt import (
+    build_slime_persona_prompt,
+    merge_persona_patch,
+    merge_slime_persona_defaults,
 )
 from foresight_x.ui.cli import _build_context
 from foresight_x.memory_graph import TemporalGraphMemory
@@ -109,6 +121,25 @@ from foresight_x.decision_algorithms.schemas import (
     SchedulerOptions as AlgoSchedulerOptions,
 )
 from foresight_x.ui.calendar_feedback_interpreter import interpret_calendar_feedback
+from foresight_x.calendar_agent.calendar_service import (
+    alternatives_for_draft,
+    build_draft_from_intent,
+    confirm_draft,
+    draft_from_report,
+)
+from foresight_x.calendar_agent.memory_preferences import get_calendar_preferences
+from foresight_x.calendar_agent.nl_parser import parse_calendar_intent
+from foresight_x.calendar_agent.schemas import CalendarEvent as AgentCalendarEvent
+from foresight_x.calendar_agent.schemas import CalendarIntent as AgentCalendarIntent
+from foresight_x.calendar_agent.schemas import CalendarSource as AgentCalendarSource
+from foresight_x.calendar_agent.schemas import CalendarTask as AgentCalendarTask
+from foresight_x.calendar_agent.store import (
+    delete_event as cal_agent_delete_event,
+    list_events as cal_agent_list_events,
+    replace_events as cal_agent_replace_events,
+    upsert_event as cal_agent_upsert_event,
+)
+from foresight_x.calendar_agent import ics_service as cal_ics_service
 
 
 _log = logging.getLogger(__name__)
@@ -292,9 +323,13 @@ def _default_slime_profile() -> SlimeProfile:
 
 
 def _resolved_slime_profile(profile: UserProfile) -> SlimeProfile:
+    """API-facing slime profile: always includes a fully merged persona (defaults if missing)."""
     if profile.slime_profile is None:
-        return _default_slime_profile()
-    return profile.slime_profile
+        base = _default_slime_profile()
+    else:
+        base = profile.slime_profile
+    merged_persona = merge_slime_persona_defaults(base.persona)
+    return base.model_copy(update={"persona": merged_persona})
 
 
 @asynccontextmanager
@@ -344,6 +379,7 @@ class SlimeProfilePatch(BaseModel):
     accessory: SlimeAccessory | None = None
     motion: SlimeMotion | None = None
     voice: SlimeVoicePreferences | None = None
+    persona: dict[str, Any] | None = None
 
     @classmethod
     def from_api_payload(cls, body: dict[str, Any]) -> "SlimeProfilePatch":
@@ -468,6 +504,14 @@ def root() -> dict[str, object]:
             "/api/decision/schedule",
             "/api/calendar/parse-ics",
             "/api/calendar/refine-schedule",
+            "/api/calendar/events",
+            "/api/calendar-agent/parse",
+            "/api/calendar-agent/draft",
+            "/api/calendar-agent/confirm",
+            "/api/calendar-agent/alternatives",
+            "/api/calendar-agent/from-report",
+            "/api/calendar-agent/preferences",
+            "/api/calendar-agent/export-ics",
             "/api/chat/unified",
             "/api/shadow-chat/threads",
             "/api/shadow-chat/threads/{thread_id}",
@@ -478,6 +522,11 @@ def root() -> dict[str, object]:
             "/api/transcribe",
             "/api/personalization/ingest",
             "/api/memory-graph/external-event",
+            "/api/diary/entries",
+            "/api/diary/entries/{date}",
+            "/api/diary/generate",
+            "/api/diary/sources/{date}",
+            "/api/diary/entries/{entry_id}/save-insight",
         ],
     }
 
@@ -769,21 +818,154 @@ def get_slime_profile() -> JSONResponse:
 def patch_slime_profile(body: dict[str, Any]) -> JSONResponse:
     settings = _settings_for_active_user()
     existing = load_user_profile(settings)
+    raw_body = dict(body or {})
     try:
         patch = SlimeProfilePatch.from_api_payload(body)
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=f"invalid_slime_profile_patch: {e.errors()}") from e
-    base = _resolved_slime_profile(existing)
+    stored = existing.slime_profile or _default_slime_profile()
     updates = patch.model_dump(exclude_unset=True)
+    updates.pop("persona", None)
+    if "persona" in raw_body:
+        if raw_body.get("persona") is None:
+            updates["persona"] = None
+        elif isinstance(raw_body.get("persona"), dict):
+            cur = merge_slime_persona_defaults(stored.persona)
+            try:
+                new_persona = merge_persona_patch(cur, raw_body["persona"])
+            except ValidationError as e:
+                raise HTTPException(status_code=400, detail=f"invalid_slime_persona: {e.errors()}") from e
+            new_persona = new_persona.model_copy(update={"updated_at": _utc_now()})
+            updates["persona"] = new_persona
     if "custom_colors" in updates and "color_theme" not in updates:
         updates["color_theme"] = SlimeColorTheme.CUSTOM
-    merged = SlimeProfile.model_validate(base.model_copy(update=updates).model_dump(mode="json"))
-    merged = merged.model_copy(update={"updated_at": _utc_now()})
-    save_user_profile(existing.model_copy(update={"slime_profile": merged}), settings=settings)
+    merged_stored = SlimeProfile.model_validate(stored.model_copy(update=updates).model_dump(mode="json"))
+    merged_stored = merged_stored.model_copy(update={"updated_at": _utc_now()})
+    save_user_profile(existing.model_copy(update={"slime_profile": merged_stored}), settings=settings)
+    out = _resolved_slime_profile(existing.model_copy(update={"slime_profile": merged_stored}))
     return JSONResponse(
-        content=merged.model_dump(mode="json"),
+        content=out.model_dump(mode="json"),
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
+
+
+class SlimePersonaOnlyPatch(BaseModel):
+    """PATCH /api/profile/slime-persona — same validation as nested persona on slime patch."""
+
+    persona: dict[str, Any] = Field(default_factory=dict)
+
+
+class SlimePersonaPreviewBody(BaseModel):
+    persona: dict[str, Any] = Field(default_factory=dict)
+    sample_context: Literal["decision", "memory", "calendar", "casual"] = "casual"
+    slime_name: str | None = Field(default=None, max_length=24)
+
+
+class _SlimePersonaPreviewLLMOut(BaseModel):
+    preview_text: str
+
+
+@app.get("/api/profile/slime-persona")
+def get_slime_persona() -> JSONResponse:
+    settings = _settings_for_active_user()
+    profile = load_user_profile(settings)
+    sp = _resolved_slime_profile(profile)
+    return JSONResponse(
+        content={"persona": sp.persona.model_dump(mode="json") if sp.persona else {}},
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
+@app.patch("/api/profile/slime-persona")
+def patch_slime_persona(body: dict[str, Any]) -> JSONResponse:
+    settings = _settings_for_active_user()
+    existing = load_user_profile(settings)
+    try:
+        parsed = SlimePersonaOnlyPatch.model_validate(body or {})
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"invalid_slime_persona_patch: {e.errors()}") from e
+    stored = existing.slime_profile or _default_slime_profile()
+    cur = merge_slime_persona_defaults(stored.persona)
+    try:
+        new_persona = merge_persona_patch(cur, parsed.persona)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"invalid_slime_persona: {e.errors()}") from e
+    new_persona = new_persona.model_copy(update={"updated_at": _utc_now()})
+    merged_stored = stored.model_copy(update={"persona": new_persona, "updated_at": _utc_now()})
+    save_user_profile(existing.model_copy(update={"slime_profile": merged_stored}), settings=settings)
+    return JSONResponse(
+        content={"persona": merge_slime_persona_defaults(new_persona).model_dump(mode="json")},
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
+def _deterministic_slime_preview(slime_name: str, persona: SlimePersona, sample_context: str) -> str:
+    p = merge_slime_persona_defaults(persona)
+    nick = (p.user_nickname or "you").strip() or "you"
+    tone = p.tone.value if hasattr(p.tone, "value") else str(p.tone)
+    if sample_context == "memory":
+        seed = (
+            f"{slime_name} (to {nick}): From what I’ve saved, it looks like that ties back to your priorities — "
+            "I’m not totally certain without more detail, but the clues point that way."
+        )
+    elif sample_context == "calendar":
+        seed = (
+            f"{slime_name}: I found a slot that could work. I can add a short planning block there — "
+            "want me to draft it so you can confirm?"
+        )
+    elif sample_context == "decision":
+        seed = (
+            f"{slime_name}: That sounds like a fork-in-the-road choice, not a quick fact check. "
+            "I can switch on Decision Mode and structure it if you want."
+        )
+    else:
+        seed = (
+            f"{slime_name}: Quick take — pick the option that buys you room to learn without locking you in. "
+            "If you want, we can pressure-test the downside next."
+        )
+    return f"[{tone}] {seed}"
+
+
+@app.post("/api/profile/slime-persona/preview")
+def slime_persona_preview(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        parsed = SlimePersonaPreviewBody.model_validate(body or {})
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"invalid_slime_persona_preview: {e.errors()}") from e
+    name = (parsed.slime_name or "Mochi").strip()[:24] or "Mochi"
+    merged = merge_persona_patch(merge_slime_persona_defaults(None), parsed.persona)
+    preview_text = _deterministic_slime_preview(name, merged, parsed.sample_context)
+    settings = _settings_for_active_user()
+    if (settings.openai_api_key or "").strip():
+        try:
+            user_ref = (merged.user_nickname or "you").strip() or "you"
+            prof_prev = load_user_profile(settings)
+            pb = build_slime_persona_prompt(
+                merged,
+                f"preview:{parsed.sample_context}",
+                slime_name=name,
+                user_ref=user_ref,
+                slime_profile_saved=prof_prev.slime_profile is not None,
+            )
+            samples = {
+                "casual": "Give me a short recommendation.",
+                "memory": "Who is Alex in my life?",
+                "calendar": "Help me block time this weekend.",
+                "decision": "What should I do about this offer?",
+            }
+            q = samples.get(parsed.sample_context, samples["casual"])
+            prompt = (
+                f"{pb}\n\nSample user line: {q}\n"
+                "Write ONE short reply the slime would say (1–2 sentences), matching the persona. "
+                "No markdown. Do not claim private memory facts unless hedging uncertainty."
+            )
+            llm = build_openai_llm(settings, temperature=0.55)
+            out = structured_predict(llm, _SlimePersonaPreviewLLMOut, prompt)
+            if (out.preview_text or "").strip():
+                preview_text = out.preview_text.strip()[:500]
+        except Exception:
+            pass
+    return {"preview_text": preview_text}
 
 
 @app.delete("/api/profile/priority-line/{line_id}")
@@ -990,6 +1172,49 @@ class CalendarRefineScheduleRequest(BaseModel):
     options: AlgoSchedulerOptions | None = None
     #: When set, only these tasks are re-scheduled; caller should pin other AI blocks in existing_events.
     target_task_ids: list[str] | None = None
+
+
+class CalendarAgentParseRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+    thread_id: str | None = None
+    decision_id: str | None = None
+    current_event_id: str | None = None
+    source: str = Field(default="shadow_chat", max_length=32)
+
+
+class CalendarAgentDraftRequest(BaseModel):
+    intent: dict[str, Any]
+    tasks: list[dict[str, Any]] | None = None
+    existing_events: list[dict[str, Any]] | None = None
+    timezone: str = Field(default="UTC", max_length=80)
+
+
+class CalendarAgentConfirmRequest(BaseModel):
+    draft_id: str = Field(min_length=1)
+    selected_event_ids: list[str] | None = None
+    edits: list[dict[str, Any]] | None = None
+
+
+class CalendarAgentAlternativesRequest(BaseModel):
+    draft_id: str = Field(min_length=1)
+    preference: str = Field(min_length=1)
+
+
+class CalendarFromReportRequest(BaseModel):
+    decision_id: str = Field(min_length=1)
+    thread_id: str | None = None
+
+
+class CalendarEventsReplaceRequest(BaseModel):
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CalendarEventPatchRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    start: str | None = None
+    end: str | None = None
+    description: str | None = Field(default=None, max_length=2000)
+    locked: bool | None = None
 
 
 class UnifiedChatRequest(BaseModel):
@@ -2227,6 +2452,183 @@ def parse_calendar_ics(body: CalendarParseIcsRequest) -> dict:
         return {"events": _fallback_parse_ics(text), "parser": "fallback"}
 
 
+def _agent_calendar_source(val: str) -> AgentCalendarSource:
+    v = (val or "manual").strip().lower()
+    if v in ("slime_voice", "shadow_chat", "decision_report", "manual"):
+        return v  # type: ignore[return-value]
+    return "manual"
+
+
+@app.get("/api/calendar/events")
+def calendar_list_events() -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    events = cal_agent_list_events(settings, settings.foresight_user_id)
+    return {"events": [e.model_dump(mode="json") for e in events]}
+
+
+@app.put("/api/calendar/events")
+def calendar_replace_events(body: CalendarEventsReplaceRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    parsed: list[AgentCalendarEvent] = []
+    for raw in body.events:
+        try:
+            parsed.append(AgentCalendarEvent.model_validate(raw))
+        except ValidationError as e:
+            raise HTTPException(status_code=400, detail=f"invalid_event: {e!s}") from e
+    cal_agent_replace_events(settings, settings.foresight_user_id, parsed)
+    return {"ok": True, "count": len(parsed)}
+
+
+@app.post("/api/calendar/events")
+def calendar_create_event(body: dict[str, Any]) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    try:
+        ev = AgentCalendarEvent.model_validate(body)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"invalid_event: {e!s}") from e
+    cal_agent_upsert_event(settings, settings.foresight_user_id, ev)
+    return {"ok": True, "event": ev.model_dump(mode="json")}
+
+
+@app.patch("/api/calendar/events/{event_id}")
+def calendar_patch_event(event_id: str, body: CalendarEventPatchRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    events = cal_agent_list_events(settings, settings.foresight_user_id)
+    match = next((e for e in events if e.id == event_id), None)
+    if match is None:
+        raise HTTPException(status_code=404, detail="event_not_found")
+    patch = body.model_dump(exclude_none=True)
+    data = match.model_dump()
+    data.update(patch)
+    try:
+        updated = AgentCalendarEvent.model_validate(data)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    cal_agent_upsert_event(settings, settings.foresight_user_id, updated)
+    return {"ok": True, "event": updated.model_dump(mode="json")}
+
+
+@app.delete("/api/calendar/events/{event_id}")
+def calendar_delete_event(event_id: str) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    ok = cal_agent_delete_event(settings, settings.foresight_user_id, event_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="event_not_found")
+    return {"ok": True}
+
+
+@app.post("/api/calendar-agent/parse")
+def calendar_agent_parse(body: CalendarAgentParseRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    intent = parse_calendar_intent(
+        body.text,
+        {
+            "thread_id": body.thread_id,
+            "decision_id": body.decision_id,
+            "current_event_id": body.current_event_id,
+        },
+        settings=settings,
+        source=_agent_calendar_source(body.source),
+    )
+    return {"intent": intent.model_dump(mode="json")}
+
+
+@app.post("/api/calendar-agent/draft")
+def calendar_agent_draft(body: CalendarAgentDraftRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    try:
+        intent = AgentCalendarIntent.model_validate(body.intent)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"invalid_intent: {e!s}") from e
+    tasks: list[AgentCalendarTask] | None = None
+    if body.tasks:
+        tasks = []
+        for t in body.tasks:
+            tasks.append(AgentCalendarTask.model_validate(t))
+    existing: list[AgentCalendarEvent] = []
+    if body.existing_events:
+        for e in body.existing_events:
+            existing.append(AgentCalendarEvent.model_validate(e))
+    else:
+        existing = cal_agent_list_events(settings, uid)
+
+    draft = build_draft_from_intent(
+        intent,
+        settings=settings,
+        user_id=uid,
+        existing_events=existing,
+        tasks=tasks,
+        user_timezone=body.timezone.strip() or "UTC",
+        now=datetime.now(timezone.utc),
+    )
+    return {"draft": draft.model_dump(mode="json")}
+
+
+@app.post("/api/calendar-agent/confirm")
+def calendar_agent_confirm(body: CalendarAgentConfirmRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    confirmed, _prev = confirm_draft(
+        settings=settings,
+        user_id=settings.foresight_user_id,
+        draft_id=body.draft_id.strip(),
+        selected_event_ids=body.selected_event_ids,
+        edits=body.edits,
+    )
+    if not confirmed:
+        raise HTTPException(status_code=404, detail="draft_not_found")
+    return {"ok": True, "events": [e.model_dump(mode="json") for e in confirmed]}
+
+
+@app.post("/api/calendar-agent/alternatives")
+def calendar_agent_alternatives(body: CalendarAgentAlternativesRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    alts = alternatives_for_draft(
+        settings=settings,
+        user_id=settings.foresight_user_id,
+        draft_id=body.draft_id.strip(),
+        preference=body.preference.strip().lower(),
+    )
+    return {"alternatives": [a.model_dump(mode="json") for a in alts]}
+
+
+@app.post("/api/calendar-agent/from-report")
+def calendar_agent_from_report(body: CalendarFromReportRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    try:
+        trace = load_decision_trace(body.decision_id.strip(), settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="trace_not_found") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail="trace_not_found")
+    existing = cal_agent_list_events(settings, settings.foresight_user_id)
+    draft = draft_from_report(
+        settings=settings,
+        user_id=settings.foresight_user_id,
+        decision_id=body.decision_id.strip(),
+        thread_id=body.thread_id,
+        existing_events=existing,
+    )
+    return {"draft": draft.model_dump(mode="json")}
+
+
+@app.get("/api/calendar-agent/preferences")
+def calendar_agent_preferences() -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    pref = get_calendar_preferences(settings.foresight_user_id, load_user_profile(settings))
+    return {"preferences": pref.model_dump(mode="json")}
+
+
+@app.post("/api/calendar-agent/export-ics")
+def calendar_agent_export_ics(body: dict[str, Any]) -> Response:
+    raw_events = body.get("events") if isinstance(body, dict) else None
+    if not isinstance(raw_events, list):
+        raise HTTPException(status_code=400, detail="events array required")
+    text = cal_ics_service.events_to_ics(raw_events)
+    return Response(content=text, media_type="text/calendar; charset=utf-8")
+
+
 @app.post("/api/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)) -> dict:
     """Speech-to-text via OpenAI Whisper (same key as chat)."""
@@ -2269,6 +2671,13 @@ def _run_slime_voice_pipeline(
     from foresight_x.chat.thread_store import append_message
     from foresight_x.shadow.thread_summary import maybe_update_thread_summary
     from foresight_x.voice.asr import transcribe_audio
+    from foresight_x.voice.slime_identity import (
+        format_slime_identity_reply,
+        format_user_nickname_reply,
+        get_effective_slime_persona,
+        is_slime_identity_question,
+        is_user_saved_nickname_question,
+    )
     from foresight_x.voice.slime_voice_router import SlimeVoiceContext, route_slime_voice_command
     from foresight_x.voice.slime_tools import execute_slime_tool
 
@@ -2316,6 +2725,87 @@ def _run_slime_voice_pipeline(
     thread = ensure_slime_voice_thread(uid, thread_id)
     resolved_tid = str(thread.get("thread_id") or "")
 
+    early_eff = None
+    early_intent = ""
+    early_tool = ""
+    early_text: str | None = None
+    if is_user_saved_nickname_question(transcript):
+        early_eff = get_effective_slime_persona(settings)
+        early_intent = "slime_user_nickname"
+        early_tool = "slime_user_nickname"
+        early_text = format_user_nickname_reply(early_eff)
+    elif is_slime_identity_question(transcript):
+        early_eff = get_effective_slime_persona(settings)
+        early_intent = "slime_identity"
+        early_tool = "slime_identity"
+        early_text = format_slime_identity_reply(early_eff)
+
+    if early_text is not None:
+        assistant_text = early_text
+        tr_timing_early = tr.timing or {}
+        timing_identity: dict[str, Any] = {
+            "audio_duration_seconds": tr.duration_seconds,
+            "asr_provider": tr.provider,
+            "asr_model": tr_timing_early.get("model"),
+            "asr_model_load_ms": tr_timing_early.get("asr_model_load_ms"),
+            "transcription_ms": tr_timing_early.get("transcription_ms"),
+            "realtime_factor": tr_timing_early.get("realtime_factor"),
+            "intent_route_ms": 0.0,
+            "tool_execute_ms": 0.0,
+            "total_ms": (time.perf_counter() - t_total0) * 1000,
+        }
+        append_message(
+            thread,
+            role="user",
+            content=transcript,
+            mode="normal",
+            intent=early_intent,
+            metadata_extra={"interaction_source": "slime_voice", "modality": "voice"},
+        )
+        append_message(
+            thread,
+            role="assistant",
+            content=assistant_text,
+            mode="normal",
+            intent=early_intent,
+            memory_used=False,
+        )
+        maybe_update_thread_summary(thread, settings=settings)
+        voice_ui_id: dict[str, Any] = {
+            "intent": early_intent,
+            "memory_phases": [],
+            "evidence_items": [],
+            "should_show_evidence_drawer": False,
+        }
+        body_id: dict[str, Any] = {
+            "transcript": transcript,
+            "asr_provider": tr.provider,
+            "language": tr.language,
+            "assistant_text": assistant_text,
+            "spoken_text": assistant_text,
+            "spoken_sequence": [assistant_text],
+            "thread_id": resolved_tid,
+            "intent": early_intent,
+            "decision_suggestion": None,
+            "memory_updates": [],
+            "tool_call": {"name": early_tool, "arguments": {}},
+            "tool_result": {"ok": True, "early_handled": True, "handler": early_tool},
+            "frontend_action": {"type": "none", "route": "", "payload": {}},
+            "requires_confirmation": False,
+            "timing": timing_identity,
+            "voice_ui": voice_ui_id,
+        }
+        if os.getenv("SLIME_VOICE_DEBUG", "").strip().lower() in ("1", "true", "yes") and early_eff is not None:
+            un = early_eff.persona.user_nickname
+            body_id["slime_persona_used"] = {
+                "name": early_eff.name,
+                "userNickname": un,
+                "tone": early_eff.persona.tone.value,
+                "replyLength": early_eff.persona.reply_length,
+                "source": "profile_store",
+            }
+        return body_id
+
     ctx = SlimeVoiceContext(
         user_id=uid,
         current_route=current_route,
@@ -2344,6 +2834,7 @@ def _run_slime_voice_pipeline(
         "navigate",
         "search_memory",
         "create_calendar_draft",
+        "schedule_decision_plan",
         "update_slime_profile",
         "open_shadow_chat",
     }
@@ -2592,6 +3083,151 @@ def remove_trace(decision_id: str) -> dict:
         "outcome_deleted": outcome_deleted,
         "commit_deleted": commit_deleted,
     }
+
+
+_RE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_RE_MONTH = re.compile(r"^\d{4}-\d{2}$")
+
+
+class DiaryGenerateBody(BaseModel):
+    date: str = Field(min_length=10, max_length=10)
+    force: bool = False
+    timezone: str = Field(default="UTC", max_length=80)
+
+
+class DiarySaveInsightBody(BaseModel):
+    insight_text: str = Field(min_length=1, max_length=500)
+    confirmed: bool = False
+
+
+@app.get("/api/diary/entries")
+def diary_entries_month(month: str, timezone: str = "UTC") -> dict:
+    """Summaries for each day in ``month`` (YYYY-MM) for timeline nodes."""
+    if not _RE_MONTH.match((month or "").strip()):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    try:
+        rows = list_month_summaries(settings, uid, month.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "month": month.strip(),
+        "timezone": (timezone or "UTC").strip() or "UTC",
+        "days": [r.model_dump(mode="json") for r in rows],
+    }
+
+
+@app.get("/api/diary/entries/{date}")
+def diary_entry_by_date(date: str) -> dict:
+    if not _RE_DATE.match((date or "").strip()):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    entry = load_entry(settings, uid, date.strip())
+    if entry is None:
+        raise HTTPException(status_code=404, detail="diary_not_found")
+    return entry.model_dump(mode="json")
+
+
+@app.get("/api/diary/sources/{date}")
+def diary_sources(date: str, timezone: str = "UTC") -> dict:
+    if not _RE_DATE.match((date or "").strip()):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    tz = (timezone or "UTC").strip() or "UTC"
+    bundle = collect_diary_sources_for_date(uid, date.strip(), tz, settings=settings)
+    refs = bundle.source_refs
+    return {
+        "date": bundle.date,
+        "timezone": tz,
+        "source_counts": bundle.counts().model_dump(),
+        "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
+        "thread_refs": [{"thread_id": tid} for tid in refs.thread_ids],
+        "message_refs": [{"message_id": mid} for mid in refs.message_ids[:200]],
+        "decision_refs": [{"decision_id": d} for d in refs.decision_ids],
+        "calendar_event_refs": [{"event_id": e} for e in refs.calendar_event_ids],
+        "calendar_draft_refs": [{"draft_id": d} for d in refs.calendar_draft_ids],
+        "memory_refs": [{"memory_id": m} for m in refs.memory_ids],
+        "import_refs": [{"import_id": i} for i in refs.import_ids],
+    }
+
+
+@app.post("/api/diary/generate")
+def diary_generate(body: DiaryGenerateBody) -> dict:
+    if not _RE_DATE.match((body.date or "").strip()):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    tz = (body.timezone or "UTC").strip() or "UTC"
+    bundle = collect_diary_sources_for_date(uid, body.date.strip(), tz, settings=settings)
+
+    if not bundle_has_activity(bundle) and not body.force:
+        return {
+            "ok": True,
+            "empty": True,
+            "message": "no_meaningful_activity",
+            "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
+        }
+
+    existing = load_entry(settings, uid, body.date.strip())
+    if existing is not None and not body.force:
+        return {"ok": True, "cached": True, "entry": existing.model_dump(mode="json")}
+
+    entry = generate_diary_entry(uid, bundle, settings=settings)
+    if entry is None:
+        return {
+            "ok": True,
+            "empty": True,
+            "message": "no_meaningful_activity",
+            "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
+        }
+
+    created_new = existing is None
+    if existing is not None:
+        entry = entry.model_copy(
+            update={
+                "id": existing.id,
+                "created_at": existing.created_at,
+                "user_edited": existing.user_edited,
+                "memory_status": existing.memory_status,
+            }
+        )
+    entry = attach_links(entry, bundle)
+    save_entry(settings, uid, stamp_times(entry, created=created_new))
+    loaded = load_entry(settings, uid, body.date.strip())
+    return {"ok": True, "empty": False, "entry": (loaded or entry).model_dump(mode="json")}
+
+
+@app.post("/api/diary/entries/{entry_id}/save-insight")
+def diary_save_insight(entry_id: str, body: DiarySaveInsightBody) -> dict:
+    if not body.confirmed:
+        raise HTTPException(status_code=400, detail="confirmation_required")
+    insight = body.insight_text.strip()
+    if not insight:
+        raise HTTPException(status_code=400, detail="empty_insight")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    entry = load_entry_by_id(settings, uid, entry_id.strip())
+    if entry is None:
+        raise HTTPException(status_code=404, detail="diary_not_found")
+
+    fact = ProfileMemoryFact(
+        id=str(uuid.uuid4()),
+        category=MemoryFactCategory.GOALS,
+        text=insight[:500],
+        source="user",
+        evidence=f"From diary entry {entry.id} ({entry.date})",
+        qualifiers={"diary_entry_id": entry.id},
+    )
+    profile = load_user_profile(settings)
+    updated_profile = append_profile_memory_records(profile, [fact])
+    save_user_profile(updated_profile, settings=settings)
+
+    next_entry = entry.model_copy(update={"memory_status": "saved_selected_insights"})
+    save_entry(settings, uid, stamp_times(next_entry, created=False))
+    return {"ok": True, "memory_fact_id": fact.id, "diary_entry_id": entry.id}
 
 
 class RecordOutcomeRequest(BaseModel):

@@ -11,6 +11,7 @@ import { playMp3BlobWithWebAudio, unlockSlimeAudioContext } from '../../utils/sl
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import type { SlimeProfile } from '../../app/model';
 import { apiFetchErrorMessage, apiUrl } from '../../utils/apiOrigin';
+import { confirmCalendarDraft } from '../../utils/calendarAgentApi';
 import { EXECUTION_EVENTS_STORAGE_KEY, SLIME_VOICE_CALENDAR_RESOLVED_KEY } from '../../utils/executionStorageKeys';
 import {
   applySlimeVoiceFrontendAction,
@@ -51,8 +52,10 @@ export type SlimeVoiceAgentProps = {
   threadId?: string;
   onThreadId?: (id: string) => void;
   onDecisionSuggestion?: (s: SlimeDecisionSuggestion | null) => void;
-  /** Brief toast copy when the turn persisted profile-memory facts (Buddy page shows bottom-right). */
+  /** Buddy page: corner toast when profile-memory facts were saved. */
   onProfileMemorySaved?: (message: string) => void;
+  /** Buddy page: corner toast when a memory search returned evidence snippets. */
+  onMemoryEvidenceRetrieved?: (count: number) => void;
   currentRoute?: string;
   className?: string;
 };
@@ -126,10 +129,13 @@ type VoiceResponse = {
   transcript?: string;
   asr_provider?: string;
   assistant_text?: string;
+  /** Persona-aware line for TTS (falls back to assistant_text if omitted). */
+  spoken_text?: string;
   spoken_sequence?: string[];
   thread_id?: string;
   decision_suggestion?: SlimeDecisionSuggestion | null;
   memory_updates?: string[];
+  tool_call?: { name?: string };
   frontend_action?: SlimeVoiceFrontendAction;
   tool_result?: { evidence_items?: MemoryEvidenceItem[]; conversation_turn?: boolean };
   voice_ui?: {
@@ -198,6 +204,7 @@ export function SlimeVoiceAgent({
   onThreadId,
   onDecisionSuggestion,
   onProfileMemorySaved,
+  onMemoryEvidenceRetrieved,
   currentRoute,
   className,
 }: SlimeVoiceAgentProps) {
@@ -221,7 +228,6 @@ export function SlimeVoiceAgent({
   const [voiceState, setVoiceState] = useState<VoiceAgentState>('idle');
   const [transcriptPreview, setTranscriptPreview] = useState<string | null>(null);
   const [bubbleText, setBubbleText] = useState<string | null>(null);
-  const [warmupNote, setWarmupNote] = useState<string | null>(null);
   const [ttsHint, setTtsHint] = useState<string | null>(null);
   const [buddyAudioPlaying, setBuddyAudioPlaying] = useState(false);
   const buddyAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -236,6 +242,7 @@ export function SlimeVoiceAgent({
     patch: Record<string, unknown>;
   } | null>(null);
   const [pendingCalendar, setPendingCalendar] = useState<ResolvedCalendar | null>(null);
+  const [pendingAgentDraftId, setPendingAgentDraftId] = useState<string | null>(null);
   const [drawerItems, setDrawerItems] = useState<MemoryEvidenceItem[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showEvidenceCta, setShowEvidenceCta] = useState(false);
@@ -408,9 +415,24 @@ export function SlimeVoiceAgent({
   }, []);
 
   const onConfirmCalendar = useCallback(async () => {
-    if (!pendingCalendar) return;
     primeSpeechSynthesisFromGesture();
     try {
+      if (pendingAgentDraftId) {
+        const events = await confirmCalendarDraft(pendingAgentDraftId);
+        for (const ev of events) {
+          mergeCalendarEvent(ev);
+        }
+        setPendingAgentDraftId(null);
+        setPendingCalendar(null);
+        setBubbleText('Done — I added it to your execution calendar.');
+        runTts('Done — I added it to your execution calendar.', {
+          force: true,
+          onMayHaveBlocked: () =>
+            setTtsHint('No audio? Tap “Play reply” below after the message appears.'),
+        });
+        return;
+      }
+      if (!pendingCalendar) return;
       const res = await fetch(apiUrl('/api/slime/confirm-calendar-block'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -438,7 +460,7 @@ export function SlimeVoiceAgent({
       setBubbleText(apiFetchErrorMessage(e));
       setVoiceState('error');
     }
-  }, [pendingCalendar, mergeCalendarEvent, runTts]);
+  }, [pendingAgentDraftId, pendingCalendar, mergeCalendarEvent, runTts]);
 
   const onEditCalendar = useCallback(() => {
     if (!pendingCalendar) return;
@@ -447,6 +469,7 @@ export function SlimeVoiceAgent({
     } catch {
       /* ignore */
     }
+    setPendingAgentDraftId(null);
     setPendingCalendar(null);
     navigate('/execution');
   }, [pendingCalendar, navigate]);
@@ -487,11 +510,6 @@ export function SlimeVoiceAgent({
           if (toastMsg) onProfileMemorySaved?.(toastMsg);
         }
 
-        const loadMs = data.timing?.asr_model_load_ms;
-        if (typeof loadMs === 'number' && loadMs > 500) {
-          setWarmupNote('Voice model warmed up — next time should feel snappier.');
-        }
-
         const phases = data.voice_ui?.memory_phases ?? [];
         if (phases.includes('searching_memory')) {
           setVoiceState('searching_memory');
@@ -508,9 +526,16 @@ export function SlimeVoiceAgent({
           Boolean(evidenceItems.length && (data.voice_ui?.should_show_evidence_drawer ?? true)),
         );
 
+        const hadMemorySearch =
+          phases.includes('searching_memory') || data.tool_call?.name === 'search_memory';
+        if (hadMemorySearch && evidenceItems.length > 0) {
+          onMemoryEvidenceRetrieved?.(evidenceItems.length);
+        }
+
         setTranscriptPreview(data.transcript || null);
         const assistant = (data.assistant_text || '').trim();
-        setBubbleText(assistant || null);
+        const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
+        setBubbleText(toSpeak || null);
 
         const fe = data.frontend_action;
         const convTurn = Boolean(
@@ -518,19 +543,39 @@ export function SlimeVoiceAgent({
         );
 
         if (fe?.type === 'calendar_draft_confirm' && fe.payload && typeof fe.payload === 'object') {
-          const resolved = (fe.payload as { resolved?: ResolvedCalendar }).resolved;
+          const pl = fe.payload as { resolved?: ResolvedCalendar; draft_id?: string };
+          const resolved = pl.resolved;
+          if (typeof pl.draft_id === 'string' && pl.draft_id.trim()) {
+            setPendingAgentDraftId(pl.draft_id.trim());
+          } else {
+            setPendingAgentDraftId(null);
+          }
           if (resolved?.start_iso && resolved?.end_iso) {
             setPendingCalendar(resolved);
             setPendingConfirm(null);
             onDecisionSuggestion?.(null);
             setVoiceState('awaiting_confirmation');
-            runTts(assistant || `I can add this to your calendar: ${resolved.display_summary}.`, {
+            runTts(toSpeak || `I can add this to your calendar: ${resolved.display_summary}.`, {
               force: true,
               onMayHaveBlocked: () =>
                 setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
             });
             return;
           }
+        }
+
+        if (fe?.type === 'show_calendar_draft' && fe.route) {
+          applySlimeVoiceFrontendAction(navigate, fe as SlimeVoiceFrontendAction);
+          setPendingConfirm(null);
+          setPendingCalendar(null);
+          setPendingAgentDraftId(null);
+          onDecisionSuggestion?.(null);
+          setVoiceState('idle');
+          runTts(toSpeak || 'Opening your planner with a draft schedule.', {
+            force: true,
+            onMayHaveBlocked: () => setTtsHint('No audio? Tap “Play reply” below.'),
+          });
+          return;
         }
 
         if (fe?.type === 'confirm' && fe.payload && typeof fe.payload === 'object') {
@@ -578,7 +623,7 @@ export function SlimeVoiceAgent({
           return;
         }
 
-        runTts(assistant, {
+        runTts(toSpeak, {
           force: true,
           onMayHaveBlocked: () =>
             setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
@@ -599,6 +644,7 @@ export function SlimeVoiceAgent({
       onThreadId,
       onDecisionSuggestion,
       onProfileMemorySaved,
+      onMemoryEvidenceRetrieved,
     ],
   );
 
@@ -608,7 +654,6 @@ export function SlimeVoiceAgent({
 
   const pushToTalk = useCallback(async () => {
     setError(null);
-    setWarmupNote(null);
     setTtsHint(null);
     if (recording) {
       unlockSlimeAudioContext();
@@ -665,154 +710,172 @@ export function SlimeVoiceAgent({
 
   const petName = slimeProfile.name?.trim() || 'your Slime';
 
+  /** Bottom-anchored lane; split z-index so SlimeCompanionStage can paint between panels and mic (see Buddy page). */
+  const voiceLane = 'absolute left-1/2 w-[min(100%,380px)] -translate-x-1/2';
+
   return (
-    <div className={cn('pointer-events-auto z-30 flex flex-col items-center gap-2', className)}>
-      <div className="relative">
-        {recording ? (
-          <motion.span
-            className="pointer-events-none absolute inset-0 rounded-full bg-violet-400/25"
-            animate={{ scale: [1, 1.35, 1], opacity: [0.5, 0.15, 0.5] }}
-            transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
-          />
+    <>
+      <div
+        data-slime-avoid
+        className={cn(
+          voiceLane,
+          /* Slightly lower than before; stay above mic stack (~8px bottom + ~92px tall → keep panel floor ≥ ~108px) */
+          'bottom-[108px] z-[32] flex flex-col items-center gap-2 pointer-events-auto sm:bottom-[110px]',
+          className,
+        )}
+      >
+        {ttsHint ? <p className="max-w-xs text-center text-[11px] text-amber-900/90">{ttsHint}</p> : null}
+
+        {error ? <p className="max-w-xs text-center text-xs text-red-700">{error}</p> : null}
+
+        {transcriptPreview ? (
+          <p className="max-w-sm text-center text-[11px] text-gray-600">
+            <span className="font-semibold text-gray-700">You said:</span> {transcriptPreview}
+          </p>
         ) : null}
-        <button
-          type="button"
-          disabled={!supported}
-          onClick={() => void pushToTalk()}
-          title={`Talk to ${petName}`}
-          aria-label={recording ? 'Stop recording' : `Talk to ${petName}`}
-          className={cn(
-            'relative flex h-14 w-14 items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-lg transition hover:scale-[1.03] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-40',
-            recording && 'ring-4 ring-cyan-300/80',
-          )}
-        >
-          {recording ? <Square className="h-6 w-6 fill-current" aria-hidden /> : <Mic className="h-6 w-6" aria-hidden />}
-        </button>
+
+        <AnimatePresence>
+          {bubbleText ? (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              className="max-w-sm rounded-2xl border border-white/80 bg-white/90 px-3 py-2 text-center text-sm leading-snug text-gray-800 shadow-md backdrop-blur-md"
+            >
+              {bubbleText}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
+        {bubbleText && ttsSupported && !recording ? (
+          <button
+            type="button"
+            className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
+            onClick={() => {
+              setTtsHint(null);
+              unlockSlimeAudioContext();
+              primeSpeechSynthesisFromGesture();
+              runTts(bubbleText, { force: true });
+            }}
+          >
+            {isSpeaking || buddyAudioPlaying ? 'Replay reply' : 'Play reply'}
+          </button>
+        ) : null}
+
+        {showEvidenceCta && drawerItems.length ? (
+          <button
+            type="button"
+            className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
+            onClick={() => setDrawerOpen(true)}
+          >
+            View evidence
+          </button>
+        ) : null}
+
+        {pendingConfirm ? (
+          <div className="flex max-w-sm flex-col items-center gap-2 rounded-2xl border border-amber-200/80 bg-amber-50/95 px-3 py-2 shadow-md backdrop-blur-md">
+            <p className="text-center text-sm text-amber-950">{pendingConfirm.title}</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
+                onClick={() => void onConfirmPatch()}
+              >
+                Confirm
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
+                onClick={() => {
+                  setPendingConfirm(null);
+                  setVoiceState('idle');
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {pendingCalendar ? (
+          <div className="flex max-w-sm flex-col gap-2 rounded-2xl border border-indigo-200/80 bg-white/95 px-4 py-3 text-left shadow-lg backdrop-blur-md">
+            <p className="text-center text-xs font-semibold text-indigo-950">
+              {petName} can add this to your calendar:
+            </p>
+            <div className="rounded-xl bg-indigo-50/80 px-3 py-2 text-xs text-gray-800">
+              <p className="font-semibold text-indigo-950">{pendingCalendar.title}</p>
+              <p className="mt-1 text-gray-700">{pendingCalendar.display_summary}</p>
+              {pendingCalendar.ambiguity_note ? (
+                <p className="mt-1 text-[11px] text-amber-800">{pendingCalendar.ambiguity_note}</p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
+                onClick={() => void onConfirmCalendar()}
+              >
+                Add to calendar
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
+                onClick={onEditCalendar}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-700"
+                onClick={() => {
+                  setPendingCalendar(null);
+                  setPendingAgentDraftId(null);
+                  setVoiceState('idle');
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      {recording && speechPhaseLabel(speechPhase, recording) ? (
-        <p className="text-center text-xs font-medium text-cyan-900/90">{speechPhaseLabel(speechPhase, recording)}</p>
-      ) : null}
-      {!recording && voiceState !== 'idle' && statusLabel(voiceState) ? (
-        <p className="text-center text-xs font-medium text-violet-950/90">{statusLabel(voiceState)}</p>
-      ) : null}
-
-      {warmupNote ? <p className="max-w-xs text-center text-[11px] text-cyan-900/90">{warmupNote}</p> : null}
-      {ttsHint ? <p className="max-w-xs text-center text-[11px] text-amber-900/90">{ttsHint}</p> : null}
-
-      {error ? <p className="max-w-xs text-center text-xs text-red-700">{error}</p> : null}
-
-      {transcriptPreview ? (
-        <p className="max-w-sm text-center text-[11px] text-gray-600">
-          <span className="font-semibold text-gray-700">You said:</span> {transcriptPreview}
-        </p>
-      ) : null}
-
-      <AnimatePresence>
-        {bubbleText ? (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4 }}
-            className="max-w-sm rounded-2xl border border-white/80 bg-white/90 px-3 py-2 text-center text-sm leading-snug text-gray-800 shadow-md backdrop-blur-md"
+      <div
+        data-slime-avoid
+        className={cn(voiceLane, 'bottom-2 z-[52] flex flex-col items-center gap-2 pointer-events-auto sm:bottom-3')}
+      >
+        <div className="relative">
+          {recording ? (
+            <motion.span
+              className="pointer-events-none absolute inset-0 rounded-full bg-violet-400/25"
+              animate={{ scale: [1, 1.35, 1], opacity: [0.5, 0.15, 0.5] }}
+              transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+            />
+          ) : null}
+          <button
+            type="button"
+            disabled={!supported}
+            onClick={() => void pushToTalk()}
+            title={`Talk to ${petName}`}
+            aria-label={recording ? 'Stop recording' : `Talk to ${petName}`}
+            className={cn(
+              'relative flex h-14 w-14 items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-lg transition hover:scale-[1.03] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-40',
+              recording && 'ring-4 ring-cyan-300/80',
+            )}
           >
-            {bubbleText}
-          </motion.div>
+            {recording ? <Square className="h-6 w-6 fill-current" aria-hidden /> : <Mic className="h-6 w-6" aria-hidden />}
+          </button>
+        </div>
+
+        {recording && speechPhaseLabel(speechPhase, recording) ? (
+          <p className="text-center text-xs font-medium text-cyan-900/90">{speechPhaseLabel(speechPhase, recording)}</p>
         ) : null}
-      </AnimatePresence>
-
-      {bubbleText && ttsSupported && !recording ? (
-        <button
-          type="button"
-          className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
-          onClick={() => {
-            setTtsHint(null);
-            unlockSlimeAudioContext();
-            primeSpeechSynthesisFromGesture();
-            runTts(bubbleText, { force: true });
-          }}
-        >
-          {isSpeaking || buddyAudioPlaying ? 'Replay reply' : 'Play reply'}
-        </button>
-      ) : null}
-
-      {showEvidenceCta && drawerItems.length ? (
-        <button
-          type="button"
-          className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
-          onClick={() => setDrawerOpen(true)}
-        >
-          View evidence
-        </button>
-      ) : null}
-
-      {pendingConfirm ? (
-        <div className="flex max-w-sm flex-col items-center gap-2 rounded-2xl border border-amber-200/80 bg-amber-50/95 px-3 py-2 shadow-md backdrop-blur-md">
-          <p className="text-center text-sm text-amber-950">{pendingConfirm.title}</p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
-              onClick={() => void onConfirmPatch()}
-            >
-              Confirm
-            </button>
-            <button
-              type="button"
-              className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
-              onClick={() => {
-                setPendingConfirm(null);
-                setVoiceState('idle');
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {pendingCalendar ? (
-        <div className="flex max-w-sm flex-col gap-2 rounded-2xl border border-indigo-200/80 bg-white/95 px-4 py-3 text-left shadow-lg backdrop-blur-md">
-          <p className="text-center text-xs font-semibold text-indigo-950">
-            {petName} can add this to your calendar:
-          </p>
-          <div className="rounded-xl bg-indigo-50/80 px-3 py-2 text-xs text-gray-800">
-            <p className="font-semibold text-indigo-950">{pendingCalendar.title}</p>
-            <p className="mt-1 text-gray-700">{pendingCalendar.display_summary}</p>
-            {pendingCalendar.ambiguity_note ? (
-              <p className="mt-1 text-[11px] text-amber-800">{pendingCalendar.ambiguity_note}</p>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap justify-center gap-2">
-            <button
-              type="button"
-              className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
-              onClick={() => void onConfirmCalendar()}
-            >
-              Add to calendar
-            </button>
-            <button
-              type="button"
-              className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
-              onClick={onEditCalendar}
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              className="rounded-full border border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-700"
-              onClick={() => {
-                setPendingCalendar(null);
-                setVoiceState('idle');
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : null}
+        {!recording && voiceState !== 'idle' && statusLabel(voiceState) ? (
+          <p className="text-center text-xs font-medium text-violet-950/90">{statusLabel(voiceState)}</p>
+        ) : null}
+      </div>
 
       <EvidenceDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} items={drawerItems} />
-    </div>
+    </>
   );
 }

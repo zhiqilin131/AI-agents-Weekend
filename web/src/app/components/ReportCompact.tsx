@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router';
 import {
   AlertTriangle,
@@ -24,6 +24,8 @@ import { TradeoffsRadarChart } from './TradeoffsRadarChart';
 import { TypewriterText } from './TypewriterText';
 import { cn } from './ui/utils';
 import { apiUrl } from '../../utils/apiOrigin';
+import { fetchCalendarDraftFromReport } from '../../utils/calendarAgentApi';
+import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from '../../utils/executionStorageKeys';
 import type { TraceUserStateLite } from '../../utils/evidenceDetailFromTrace';
 import { AssumptionsCard } from './report/AssumptionsCard';
 import { FuturePathsCard } from './report/FuturePathsCard';
@@ -114,11 +116,20 @@ interface ReportCompactProps {
   isStreaming?: boolean;
   /** When set, "Create execution calendar" uses this instead of default router navigation (e.g. preserve Shadow Chat context). */
   onExecutionCalendarNavigate?: (decisionId: string) => void;
+  /** Shadow / multi-tab: thread id for Calendar Agent linkage */
+  shadowThreadId?: string | null;
 }
 
 type CoachMessage = { role: 'user' | 'assistant'; content: string };
 
-export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, onExecutionCalendarNavigate }: ReportCompactProps) {
+export function ReportCompact({
+  report,
+  fullTrace,
+  tier3Profile,
+  isStreaming,
+  onExecutionCalendarNavigate,
+  shadowThreadId = null,
+}: ReportCompactProps) {
   const navigate = useNavigate();
   const futures = (fullTrace?.futures as TraceFuture[]) ?? [];
   const evidence = fullTrace?.evidence as TraceEvidence | undefined;
@@ -126,6 +137,12 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
   const chosenOptionId = report.recommendation.chosenOption?.trim() ?? '';
   const optionTitleById = new Map(report.options.map((o) => [o.id, o.name]));
   const decisionId = typeof fullTrace?.decision_id === 'string' ? fullTrace.decision_id : '';
+
+  const prefetchExecutionDraft = useCallback(async () => {
+    if (!decisionId) return;
+    const draft = await fetchCalendarDraftFromReport(decisionId, shadowThreadId ?? null);
+    sessionStorage.setItem(CALENDAR_AGENT_SESSION_DRAFT_KEY, JSON.stringify({ draft }));
+  }, [decisionId, shadowThreadId]);
   const surface = report.reportSurface;
   const [resourceDrops, setResourceDrops] = useState<ResourceDrop[]>([]);
   const [resourceDropsLoading, setResourceDropsLoading] = useState(false);
@@ -353,7 +370,12 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
             isStreaming={isStreaming}
             executionCalendar={
               decisionId
-                ? { decisionId, navigate, onExecutionCalendarNavigate: onExecutionCalendarNavigate }
+                ? {
+                    decisionId,
+                    navigate,
+                    onExecutionCalendarNavigate: onExecutionCalendarNavigate,
+                    preNavigate: prefetchExecutionDraft,
+                  }
                 : undefined
             }
             resourceDrops={resourceDrops}
@@ -377,6 +399,7 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
             onExecutionCalendarNavigate={onExecutionCalendarNavigate}
             navigate={navigate}
             suppressCalendarButton={suppressNextCalendar}
+            preNavigate={decisionId ? prefetchExecutionDraft : undefined}
           />
           <Accordion type="multiple" defaultValue={[]} className="rounded-2xl border border-white/80 bg-white/50 px-2">
             <AccordionItem value="tradeoffs">
@@ -428,7 +451,12 @@ export function ReportCompact({ report, fullTrace, tier3Profile, isStreaming, on
         isStreaming={isStreaming}
         executionCalendar={
           decisionId
-            ? { decisionId, navigate, onExecutionCalendarNavigate: onExecutionCalendarNavigate }
+            ? {
+                decisionId,
+                navigate,
+                onExecutionCalendarNavigate: onExecutionCalendarNavigate,
+                preNavigate: prefetchExecutionDraft,
+              }
             : undefined
         }
         resourceDrops={resourceDrops}

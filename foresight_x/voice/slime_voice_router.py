@@ -15,6 +15,17 @@ from foresight_x.structured_predict import structured_predict
 
 _log = logging.getLogger(__name__)
 
+_ROUTER_SLIME_KEYS = frozenset({"name", "color_theme", "shape"})
+
+
+def _routing_context_json(ctx: SlimeVoiceContext) -> str:
+    """Omit persona/voice text from tool-router context — routing stays objective."""
+    d = ctx.model_dump(mode="json")
+    sp = d.get("slime_profile")
+    if isinstance(sp, dict):
+        d["slime_profile"] = {k: v for k, v in sp.items() if k in _ROUTER_SLIME_KEYS}
+    return json.dumps(d, ensure_ascii=False)[:12000]
+
 
 class SlimeVoiceContext(BaseModel):
     user_id: str
@@ -37,6 +48,7 @@ class _LLMRoute(BaseModel):
         "navigate",
         "search_memory",
         "create_calendar_draft",
+        "schedule_decision_plan",
         "open_decision_report_flow",
         "update_slime_profile",
         "open_shadow_chat",
@@ -54,10 +66,11 @@ Allowed tools:
 1) navigate — arguments: {{"route": "home|profile|shadow_chat|execution_calendar|history|settings"}}
 2) search_memory — arguments: {{"query": "<string>", "scope": "profile|chat_history|decision_reports|all"}}
 3) create_calendar_draft — arguments: {{"title": "<string>", "duration_minutes": <number|null>, "date_hint": "<string|null>", "time_hint": "<string|null>", "description": "<string|null>"}}
-4) open_decision_report_flow — arguments: {{"decision_prompt": "<string>"}}
-5) update_slime_profile — arguments: {{"patch": {{ ... partial slime fields: name, color_theme, personality, shape, accessory, motion, custom_colors }}}}
-6) open_shadow_chat — arguments: {{"prefill_message": "<string or null>"}}
-7) no_op — arguments: {{"reason": "<string>"}} — use for chit-chat, unsafe, or unknown commands. **Always set assistant_hint** to a short, friendly line you would say out loud (1–2 sentences), e.g. greetings get a warm reply.
+4) schedule_decision_plan — arguments: {{"decision_id": "<string|null>"}} — schedule next_actions from a decision report into a draft calendar (decision_id from context if user says "this report").
+5) open_decision_report_flow — arguments: {{"decision_prompt": "<string>"}}
+6) update_slime_profile — arguments: {{"patch": {{ ... partial slime fields: name, color_theme, personality, shape, accessory, motion, custom_colors }}}}
+7) open_shadow_chat — arguments: {{"prefill_message": "<string or null>"}}
+8) no_op — arguments: {{"reason": "<string>"}} — use for chit-chat, unsafe, or unknown commands. **Always set assistant_hint** to a short, friendly line you would say out loud (1–2 sentences), e.g. greetings get a warm reply.
 
 Rules:
 - If the user is asking what they should do, whether to accept an offer, or for help deciding (including Chinese equivalents like "我该怎么办"), use **no_op** with a thoughtful assistant_hint — do **not** use open_decision_report_flow. The conversational pipeline will offer Decision Mode with explicit confirmation.
@@ -65,6 +78,7 @@ Rules:
 - Navigation: use navigate or open_shadow_chat; never invent URLs.
 - Memory: use search_memory with a concrete query; scope "all" when user asks generally about what they said.
 - Calendar: create_calendar_draft for new blocks ("add 30 minutes Saturday morning", "gym tomorrow at 9", "review next Friday"). Include time_hint when user says morning/afternoon/evening or a clock time. The app will ask for confirmation before saving.
+- schedule_decision_plan when user wants to put the **decision report execution plan** on the calendar ("schedule my report plan", "put next steps on the calendar"). Pass decision_id when known from context.
 - Profile appearance/name: update_slime_profile with requires_confirmation=true unless the user was very explicit and the change is minor (still confirm for renames and custom colors).
 - Do not claim to have executed actions; tools + frontend will do that.
 - Keep assistant_hint a short optional line for tone (may be ignored).
@@ -93,7 +107,7 @@ def route_slime_voice_command(
         )
 
     llm = build_openai_llm(settings, temperature=0.1)
-    ctx_json = json.dumps(user_context.model_dump(mode="json"), ensure_ascii=False)[:12000]
+    ctx_json = _routing_context_json(user_context)
     prompt = _ROUTER_PROMPT.format(transcript=transcript.strip()[:4000], context_json=ctx_json)
     t0 = time.perf_counter()
     try:
@@ -114,6 +128,7 @@ def route_slime_voice_command(
         "navigate": "navigate",
         "search_memory": "memory_search",
         "create_calendar_draft": "calendar_create",
+        "schedule_decision_plan": "calendar_plan",
         "open_decision_report_flow": "decision_report",
         "update_slime_profile": "profile_update",
         "open_shadow_chat": "chat",

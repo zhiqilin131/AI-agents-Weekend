@@ -1,5 +1,7 @@
 /** Client-side copy for read-aloud + advisor bubble (no backend dependency). */
 
+import type { SlimePersona } from '../app/model';
+
 const BUBBLE_MAX = 160;
 const BODY_COLLAPSE_AT = 420;
 
@@ -18,6 +20,25 @@ export function bubbleTextFromReasoning(reasoning: string, titleFallback: string
   }
   const t = titleFallback.trim();
   return t || 'Your recommendation is ready — review the details below.';
+}
+
+/** Trims / softens bubble copy from `SlimePersona.replyLength` and optional direct address. */
+export function bubbleTextFromReasoningWithPersona(
+  reasoning: string,
+  titleFallback: string,
+  persona?: SlimePersona | null,
+): string {
+  const base = bubbleTextFromReasoning(reasoning, titleFallback);
+  if (!persona) return base;
+  const max =
+    persona.replyLength === 'short' ? 110 : persona.replyLength === 'detailed' ? 200 : BUBBLE_MAX;
+  let out = base.length > max ? `${base.slice(0, max - 1).trimEnd()}…` : base;
+  const nick = (persona.userNickname || '').trim();
+  if (nick && persona.warmth >= 2 && !out.toLowerCase().includes(nick.toLowerCase())) {
+    const rest = out.length ? `${out.charAt(0).toLowerCase()}${out.slice(1)}` : out;
+    out = `${nick}, ${rest}`.trim();
+  }
+  return out;
 }
 
 export function speechTextFromRecommendation(title: string, bubble: string, firstAction?: string): string {

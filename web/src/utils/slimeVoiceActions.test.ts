@@ -5,6 +5,7 @@ import {
   applySlimeVoiceFrontendAction,
   normalizeVoiceSlimePatch,
 } from './slimeVoiceActions';
+import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from './executionStorageKeys';
 
 function mockSessionStorage() {
   const mem: Record<string, string> = {};
@@ -52,6 +53,18 @@ describe('slimeVoiceActions', () => {
     const navigate = vi.fn();
     applySlimeVoiceFrontendAction(navigate, { type: 'navigate', route: '//evil' });
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('show_calendar_draft stores agent payload and navigates', () => {
+    sessionStorage.clear();
+    const navigate = vi.fn();
+    applySlimeVoiceFrontendAction(navigate, {
+      type: 'show_calendar_draft',
+      route: '/execution/d1',
+      payload: { draft_id: 'cd-1', draft: { draft_id: 'cd-1' } },
+    });
+    expect(sessionStorage.getItem(CALENDAR_AGENT_SESSION_DRAFT_KEY)).toContain('cd-1');
+    expect(navigate).toHaveBeenCalledWith('/execution/d1');
   });
 
   it('normalizes snake_case slime patch', () => {

@@ -6,9 +6,9 @@ import UnifiedChatPage from './pages/UnifiedChatPage';
 import HistoryPage from './pages/HistoryPage';
 import ProfilePage from './pages/ProfilePage';
 import ShadowChatPage from './pages/ShadowChatPage';
-import PersonalizePage from './pages/PersonalizePage';
 import ExecutionPlannerPage from './pages/ExecutionPlannerPage';
 import SlimeCompanionPage from './pages/SlimeCompanionPage';
+import DiaryPage from './pages/DiaryPage';
 import AppErrorPage from './pages/AppErrorPage';
 import { primeSpeechSynthesisFromGesture } from './app/hooks/useSpeechSynthesis';
 import { unlockSlimeAudioContext } from './utils/slimeAudioContext';
@@ -34,7 +34,7 @@ const router = createHashRouter([
   { path: '/reflect', element: <ShadowChatPage />, errorElement: <AppErrorPage /> },
   { path: '/profile', element: <ProfilePage />, errorElement: <AppErrorPage /> },
   { path: '/buddy', element: <SlimeCompanionPage />, errorElement: <AppErrorPage /> },
-  { path: '/personalize', element: <PersonalizePage />, errorElement: <AppErrorPage /> },
+  { path: '/diary', element: <DiaryPage />, errorElement: <AppErrorPage /> },
   { path: '/execution', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },
   { path: '/execution/:decisionId', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },
   { path: '*', element: <AppErrorPage />, errorElement: <AppErrorPage /> },

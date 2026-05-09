@@ -168,6 +168,7 @@ def append_memory_facts(
                 text=text[:500],
                 source=source,
                 created_at=ts,
+                updated_at=ts,
             )
         )
     if len(mf) > max_facts:
@@ -192,7 +193,9 @@ def append_profile_memory_records(
             continue
         rec = ensured
         rid = (rec.id or "").strip() or str(uuid.uuid4())
-        rec = rec.model_copy(update={"id": rid, "created_at": (rec.created_at or "").strip() or ts})
+        ca = (rec.created_at or "").strip() or ts
+        ua = (rec.updated_at or "").strip() or ts
+        rec = rec.model_copy(update={"id": rid, "created_at": ca, "updated_at": ua})
 
         pred_norm = normalize_predicate(rec.predicate)
         if not pred_norm:
