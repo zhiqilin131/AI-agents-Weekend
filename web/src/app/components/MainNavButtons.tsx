@@ -135,21 +135,29 @@ export function MainNavButtons({
                 </button>
               </>
             ) : null}
-            {isSupabaseEnvConfigured() && session ? (
-              <button
-                type="button"
-                onClick={() => void signOut().then(() => navigate(isSupabaseEnvConfigured() ? '/login' : '/'))}
-                className={btnClass}
-                style={btnStyle}
-                title="Sign out"
-              >
-                <NavIconSlot Icon={LogOut} compact={compact} colorClass="text-slate-500" />
-                {compact ? 'Out' : 'Sign out'}
-              </button>
-            ) : null}
           </div>
         </div>
       </div>
+      {/* Sign out: fixed bottom-left so the five main pills stay centered above */}
+      {isSupabaseEnvConfigured() && session ? (
+        <div
+          className={cn(
+            'pointer-events-none fixed z-[60]',
+            compact ? 'bottom-4 left-4' : 'bottom-5 left-4 sm:bottom-6 sm:left-8',
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => void signOut().then(() => navigate(isSupabaseEnvConfigured() ? '/login' : '/'))}
+            className={cn(btnClass, 'pointer-events-auto')}
+            style={btnStyle}
+            title="Sign out"
+          >
+            <NavIconSlot Icon={LogOut} compact={compact} colorClass="text-slate-500" />
+            {compact ? 'Out' : 'Sign out'}
+          </button>
+        </div>
+      ) : null}
       {/* Below PersonaSwitcher (z-70); clears common bottom UI */}
       <div
         className={cn(
