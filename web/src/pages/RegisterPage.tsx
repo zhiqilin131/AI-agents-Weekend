@@ -2,6 +2,13 @@ import { useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router';
 import { useAuth } from '../auth/AuthContext';
 import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
+import { AuthFormCard, AuthShell, BRAND_SUBTITLE } from '../app/components/auth/AuthShell';
+
+const inputClass =
+  'mt-1.5 w-full rounded-xl border border-gray-200/90 bg-white/85 px-3.5 py-2.5 text-sm text-gray-900 shadow-sm outline-none transition-shadow placeholder:text-gray-400 focus:border-violet-300/80 focus:ring-2 focus:ring-violet-400/35';
+
+const primaryBtnClass =
+  'w-full rounded-full bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 py-3 text-sm font-semibold text-white shadow-[0_12px_32px_rgba(99,102,241,0.35)] transition-all hover:shadow-[0_14px_40px_rgba(99,102,241,0.42)] hover:brightness-[1.03] active:scale-[0.99] disabled:opacity-50 disabled:hover:brightness-100';
 
 export default function RegisterPage() {
   const { supabase, session, loading } = useAuth();
@@ -17,31 +24,29 @@ export default function RegisterPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-600">
-        Loading…
-      </div>
+      <AuthShell>
+        <AuthFormCard title="Create account" subtitle={null}>
+          <p className="text-center text-sm text-gray-500">Loading…</p>
+        </AuthFormCard>
+      </AuthShell>
     );
   }
 
   if (!isSupabaseEnvConfigured()) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-slate-50 to-violet-50/50 px-4">
-        <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-8 shadow-lg">
-          <h1 className="text-center text-xl font-semibold text-slate-900">Create account</h1>
-          <p className="mt-3 text-center text-sm text-slate-600 leading-relaxed">
-            Add <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">VITE_SUPABASE_URL</code> and{' '}
-            <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">VITE_SUPABASE_ANON_KEY</code> to your deployment,
-            then redeploy or restart the dev server.
+      <AuthShell>
+        <AuthFormCard title="Create account" subtitle={null}>
+          <p className="text-center text-sm leading-relaxed text-gray-600">
+            Add{' '}
+            <code className="rounded-md bg-violet-50 px-1.5 py-0.5 text-xs text-violet-900">VITE_SUPABASE_URL</code> and{' '}
+            <code className="rounded-md bg-violet-50 px-1.5 py-0.5 text-xs text-violet-900">VITE_SUPABASE_ANON_KEY</code>{' '}
+            (publishable key) to your deployment, then redeploy or restart the dev server.
           </p>
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="mt-6 w-full rounded-full border border-slate-200 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-          >
+          <button type="button" onClick={() => navigate('/')} className={`${primaryBtnClass} mt-6`}>
             Back to home
           </button>
-        </div>
-      </div>
+        </AuthFormCard>
+      </AuthShell>
     );
   }
 
@@ -70,12 +75,21 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-slate-50 to-violet-50/50 px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-slate-200/80 bg-white p-8 shadow-lg">
-        <h1 className="text-center text-xl font-semibold text-slate-900">Create account</h1>
-        <p className="mt-1 text-center text-sm text-slate-500">Email and password (Supabase Auth)</p>
-        <form onSubmit={(e) => void onSubmit(e)} className="mt-6 flex flex-col gap-4">
-          <label className="block text-sm font-medium text-slate-700">
+    <AuthShell>
+      <AuthFormCard
+        title="Create account"
+        subtitle={BRAND_SUBTITLE}
+        footer={
+          <p className="text-center text-sm text-gray-600">
+            Already have an account?{' '}
+            <Link to="/login" className="font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900">
+              Sign in
+            </Link>
+          </p>
+        }
+      >
+        <form onSubmit={(e) => void onSubmit(e)} className="flex flex-col gap-5">
+          <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 md:text-[11px]">
             Email
             <input
               type="email"
@@ -83,10 +97,10 @@ export default function RegisterPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-violet-400/50"
+              className={inputClass}
             />
           </label>
-          <label className="block text-sm font-medium text-slate-700">
+          <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 md:text-[11px]">
             Password
             <input
               type="password"
@@ -95,25 +109,18 @@ export default function RegisterPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={8}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-violet-400/50"
+              className={inputClass}
             />
           </label>
-          {error ? <p className="text-sm text-rose-600">{error}</p> : null}
-          <button
-            type="submit"
-            disabled={busy}
-            className="rounded-full bg-violet-600 py-2.5 text-sm font-semibold text-white shadow hover:bg-violet-700 disabled:opacity-50"
-          >
+          <p className="text-[11px] leading-snug text-gray-500">Use at least 8 characters.</p>
+          {error ? (
+            <p className="rounded-xl border border-rose-200/80 bg-rose-50/90 px-3 py-2 text-sm text-rose-800">{error}</p>
+          ) : null}
+          <button type="submit" disabled={busy} className={primaryBtnClass}>
             {busy ? '…' : 'Sign up'}
           </button>
         </form>
-        <p className="mt-4 text-center text-sm text-slate-600">
-          Already have an account?{' '}
-          <Link to="/login" className="font-medium text-violet-600 hover:underline">
-            Sign in
-          </Link>
-        </p>
-      </div>
-    </div>
+      </AuthFormCard>
+    </AuthShell>
   );
 }

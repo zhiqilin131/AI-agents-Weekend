@@ -55,4 +55,14 @@ describe('HomeRoamingSlime', () => {
     const slice = html.slice(Math.max(0, outerIdx - 80), outerIdx + 120);
     expect(slice).toMatch(/pointer-events-none/);
   });
+
+  it('supports auth variant for sign-in layout', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <HomeRoamingSlime variant="auth" />
+      </MemoryRouter>,
+    );
+    expect(html).toContain('data-testid="home-roaming-slime"');
+    expect(html).toContain('data-testid="slime-advisor"');
+  });
 });

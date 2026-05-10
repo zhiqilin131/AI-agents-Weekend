@@ -10,23 +10,43 @@ const X_MAX = 88;
 const Y_MIN = 25;
 const Y_MAX = 82;
 /** Rough box around landing title + Start Chatting — wander targets avoid this. */
-const AVOID_X0 = 28;
-const AVOID_X1 = 72;
-const AVOID_Y0 = 30;
-const AVOID_Y1 = 68;
+const HOME_AVOID = { x0: 28, x1: 72, y0: 30, y1: 68 };
+/** Centered sign-in / sign-up card — keep slime in margins. */
+const AUTH_AVOID = { x0: 26, x1: 74, y0: 22, y1: 78 };
 
-function pickWanderTarget(mobile: boolean): { x: number; y: number } {
-  for (let i = 0; i < 36; i += 1) {
+export type HomeRoamingSlimeVariant = 'home' | 'auth';
+
+function pickWanderTarget(mobile: boolean, variant: HomeRoamingSlimeVariant): { x: number; y: number } {
+  const A = variant === 'auth' ? AUTH_AVOID : HOME_AVOID;
+  for (let i = 0; i < 48; i += 1) {
     let x = X_MIN + Math.random() * (X_MAX - X_MIN);
     let y = Y_MIN + Math.random() * (Y_MAX - Y_MIN);
     if (mobile) {
-      x = 52 + Math.random() * 34;
-      y = 62 + Math.random() * (Y_MAX - 62);
+      if (variant === 'auth') {
+        // Corners & edges — clear the centered form
+        const corner = Math.random();
+        if (corner < 0.25) {
+          x = 6 + Math.random() * 22;
+          y = 10 + Math.random() * 35;
+        } else if (corner < 0.5) {
+          x = 72 + Math.random() * 20;
+          y = 10 + Math.random() * 35;
+        } else if (corner < 0.75) {
+          x = 6 + Math.random() * 22;
+          y = 58 + Math.random() * 30;
+        } else {
+          x = 72 + Math.random() * 20;
+          y = 58 + Math.random() * 30;
+        }
+      } else {
+        x = 52 + Math.random() * 34;
+        y = 62 + Math.random() * (Y_MAX - 62);
+      }
     }
-    if (x >= AVOID_X0 && x <= AVOID_X1 && y >= AVOID_Y0 && y <= AVOID_Y1) continue;
+    if (x >= A.x0 && x <= A.x1 && y >= A.y0 && y <= A.y1) continue;
     return { x, y };
   }
-  return mobile ? { x: 78, y: 72 } : { x: 82, y: 74 };
+  return variant === 'auth' ? (mobile ? { x: 12, y: 16 } : { x: 14, y: 18 }) : mobile ? { x: 78, y: 72 } : { x: 82, y: 74 };
 }
 
 function usePrefersReducedMotion(): boolean {
@@ -57,17 +77,17 @@ function useIsMobileLayout(): boolean {
 }
 
 /**
- * Lightweight roaming Slime Buddy for the homepage landing only.
+ * Lightweight roaming Slime Buddy for the homepage landing and auth gate.
  * Overlay: pointer-events none except the slime control.
  */
-export function HomeRoamingSlime() {
+export function HomeRoamingSlime({ variant = 'home' }: { variant?: HomeRoamingSlimeVariant }) {
   const navigate = useNavigate();
   const { slimeProfile } = useSlimeProfile();
   const profile = slimeProfile ?? DEFAULT_SLIME_PROFILE;
   const reducedMotion = usePrefersReducedMotion();
   const mobile = useIsMobileLayout();
 
-  const [pos, setPos] = useState(() => pickWanderTarget(mobile));
+  const [pos, setPos] = useState(() => pickWanderTarget(mobile, variant));
   const wanderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [excited, setExcited] = useState(false);
   const [cursor, setCursor] = useState({ x: 0, y: 0 });
@@ -75,8 +95,18 @@ export function HomeRoamingSlime() {
   const navLockRef = useRef(false);
 
   useEffect(() => {
-    setPos(reducedMotion ? (mobile ? { x: 78, y: 76 } : { x: 76, y: 70 }) : pickWanderTarget(mobile));
-  }, [mobile, reducedMotion]);
+    setPos(
+      reducedMotion
+        ? variant === 'auth'
+          ? mobile
+            ? { x: 12, y: 18 }
+            : { x: 16, y: 22 }
+          : mobile
+            ? { x: 78, y: 76 }
+            : { x: 76, y: 70 }
+        : pickWanderTarget(mobile, variant),
+    );
+  }, [mobile, reducedMotion, variant]);
 
   useEffect(() => {
     if (reducedMotion) {
@@ -88,7 +118,7 @@ export function HomeRoamingSlime() {
       if (cancelled) return;
       const delay = 4200 + Math.random() * 5200;
       wanderTimeoutRef.current = window.setTimeout(() => {
-        setPos(pickWanderTarget(mobile));
+        setPos(pickWanderTarget(mobile, variant));
         schedule();
       }, delay);
     };
@@ -97,7 +127,7 @@ export function HomeRoamingSlime() {
       cancelled = true;
       if (wanderTimeoutRef.current) window.clearTimeout(wanderTimeoutRef.current);
     };
-  }, [reducedMotion, mobile]);
+  }, [reducedMotion, mobile, variant]);
 
   const onNavigateBuddy = useCallback(() => {
     if (navLockRef.current) return;
