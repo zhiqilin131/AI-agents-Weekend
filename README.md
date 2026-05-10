@@ -79,7 +79,8 @@ Optional for local dev: leave `VITE_SUPABASE_URL` unset and the app behaves as b
 
 - `VITE_SUPABASE_URL` — project URL
 - `VITE_SUPABASE_ANON_KEY` — anon (public) key
-- `VITE_REQUIRE_AUTH` — set to `false` only for local/testing when you have Supabase env but want to skip the login gate; production should omit this or use `true`
+
+If both are set, the SPA requires sign-in before Chat, Profile, etc. Omit either variable for local persona-only mode without a login screen.
 
 **Backend:** `SUPABASE_URL` must match (for JWKS verification). Set `REQUIRE_AUTH=true` in production so `/api/*` requires `Authorization: Bearer <access_token>` (except `/api/health`). Deploy backend first with `REQUIRE_AUTH` off, ship frontend with Supabase keys, then turn `REQUIRE_AUTH` on to avoid a window of 401s.
 

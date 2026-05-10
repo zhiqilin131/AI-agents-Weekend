@@ -5,7 +5,7 @@ import { SlimeAdvisor } from './report/SlimeAdvisor';
 import { PersonaSwitcher } from './PersonaSwitcher';
 import { cn } from './ui/utils';
 import { useAuth } from '../../auth/AuthContext';
-import { isSupabaseEnvConfigured, supabaseGateEnabled } from '../../auth/RequireAuthLayout';
+import { isSupabaseEnvConfigured } from '../../auth/RequireAuthLayout';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../../hooks/useSlimeProfile';
 
 type NavIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
@@ -138,7 +138,7 @@ export function MainNavButtons({
             {isSupabaseEnvConfigured() && session ? (
               <button
                 type="button"
-                onClick={() => void signOut().then(() => navigate(supabaseGateEnabled() ? '/login' : '/'))}
+                onClick={() => void signOut().then(() => navigate(isSupabaseEnvConfigured() ? '/login' : '/'))}
                 className={btnClass}
                 style={btnStyle}
                 title="Sign out"

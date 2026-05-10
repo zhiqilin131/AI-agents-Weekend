@@ -8,19 +8,14 @@ export function isSupabaseEnvConfigured(): boolean {
   return Boolean(url && anon);
 }
 
-/** When Supabase URL is set, require login unless ``VITE_REQUIRE_AUTH=false``. */
-export function supabaseGateEnabled(): boolean {
-  const url = import.meta.env.VITE_SUPABASE_URL?.trim();
-  if (!url) return false;
-  const v = import.meta.env.VITE_REQUIRE_AUTH?.trim().toLowerCase();
-  if (v === 'false' || v === '0') return false;
-  return true;
-}
-
+/**
+ * When Supabase URL + anon key are set, all app routes (except /login and /register) require a session.
+ * Leave both unset for local file-backed / persona-only mode without auth.
+ */
 export function RequireAuthLayout() {
   const { session, loading } = useAuth();
 
-  if (!supabaseGateEnabled()) {
+  if (!isSupabaseEnvConfigured()) {
     return <Outlet />;
   }
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router';
 import { useAuth } from '../auth/AuthContext';
-import { isSupabaseEnvConfigured, supabaseGateEnabled } from '../auth/RequireAuthLayout';
+import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
 
 export default function RegisterPage() {
   const { supabase, session, loading } = useAuth();
@@ -74,11 +74,6 @@ export default function RegisterPage() {
       <div className="w-full max-w-sm rounded-2xl border border-slate-200/80 bg-white p-8 shadow-lg">
         <h1 className="text-center text-xl font-semibold text-slate-900">Create account</h1>
         <p className="mt-1 text-center text-sm text-slate-500">Email and password (Supabase Auth)</p>
-        {!supabaseGateEnabled() ? (
-          <p className="mt-2 text-center text-xs text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-1.5">
-            You can create an account for API access; the app does not force login until <code className="text-[10px]">REQUIRE_AUTH</code> is on.
-          </p>
-        ) : null}
         <form onSubmit={(e) => void onSubmit(e)} className="mt-6 flex flex-col gap-4">
           <label className="block text-sm font-medium text-slate-700">
             Email

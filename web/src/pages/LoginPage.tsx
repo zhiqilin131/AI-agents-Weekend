@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router';
 import { useAuth } from '../auth/AuthContext';
-import { isSupabaseEnvConfigured, supabaseGateEnabled } from '../auth/RequireAuthLayout';
+import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
 
 export default function LoginPage() {
   const { supabase, session, loading } = useAuth();
@@ -71,12 +71,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-slate-50 to-violet-50/50 px-4">
       <div className="w-full max-w-sm rounded-2xl border border-slate-200/80 bg-white p-8 shadow-lg">
         <h1 className="text-center text-xl font-semibold text-slate-900">Sign in</h1>
-        <p className="mt-1 text-center text-sm text-slate-500">Use your Foresight-X account</p>
-        {!supabaseGateEnabled() ? (
-          <p className="mt-2 text-center text-xs text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-1.5">
-            Optional sign-in: app stays open without login until the API sets <code className="text-[10px]">REQUIRE_AUTH</code>.
-          </p>
-        ) : null}
+        <p className="mt-1 text-center text-sm text-slate-500">Sign in to use Foresight-X</p>
         <form onSubmit={(e) => void onSubmit(e)} className="mt-6 flex flex-col gap-4">
           <label className="block text-sm font-medium text-slate-700">
             Email

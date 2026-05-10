@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
 import { apiFetch } from '../utils/apiFetch';
 import { cn } from '../app/components/ui/utils';
+import { useAuth } from '../auth/AuthContext';
+import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
 
 function linesToList(text: string): string[] {
   return text
@@ -63,6 +65,7 @@ const MEMORY_CAT_LABEL: Record<string, string> = {
 
 export default function ProfilePage() {
   const navigate = useNavigate();
+  const { session, signOut } = useAuth();
   const [userPriorities, setUserPriorities] = useState('');
   const [clarificationRows, setClarificationRows] = useState<ProfileLineRow[]>([]);
   const [systemRows, setSystemRows] = useState<ProfileLineRow[]>([]);
@@ -267,6 +270,22 @@ export default function ProfilePage() {
               <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">data/profile/</code>.
             </p>
           </div>
+          {isSupabaseEnvConfigured() && session ? (
+            <div className="mt-3 flex shrink-0 flex-col items-stretch gap-2 sm:items-end md:mt-0">
+              {session.user?.email ? (
+                <p className="text-right text-[11px] text-gray-500 md:text-xs">
+                  <span className="text-gray-600">Signed in as</span> {session.user.email}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void signOut().then(() => navigate('/login', { replace: true }))}
+                className="rounded-full border border-gray-300 bg-white/90 px-4 py-2 text-xs font-semibold text-gray-800 shadow-sm transition hover:border-violet-300 hover:bg-violet-50 md:text-sm"
+              >
+                退出登录 · Sign out
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {error && <div className="mb-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-800">{error}</div>}
