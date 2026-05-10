@@ -213,10 +213,40 @@ class SlimePersonaTone(str, Enum):
 SlimeReplyLength = Literal["short", "balanced", "detailed"]
 
 
+class SlimeSelfModel(BaseModel):
+    """Canonical Slime Buddy self model — identity boundary separate from user memory."""
+
+    name: str = Field(description="Stored slime display name from profile (may be unsafe to speak verbatim).")
+    species: Literal["slime"] = "slime"
+    role: Literal["personal_companion_agent"] = "personal_companion_agent"
+    relationship_to_user: str = Field(default="helper_pet_companion", max_length=64)
+    user_reference_name: str | None = Field(default=None, max_length=48)
+    personality_preset: str = "calm_advisor"
+    tone: str = "warm"
+    warmth: int = Field(default=2, ge=0, le=3)
+    humor: int = Field(default=1, ge=0, le=3)
+    directness: int = Field(default=1, ge=0, le=3)
+    reply_length: str = "balanced"
+    abilities: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    boundaries: list[str] = Field(default_factory=list)
+    profile_saved: bool = True
+    name_safe_for_ui: bool = True
+    spoken_name: str = Field(
+        default="Mochi",
+        description="Name safe to echo to the user (fallback when stored name is unsafe).",
+    )
+
+
 class SlimePersona(BaseModel):
     """Speaking style for Slime Buddy — preferences only; never treated as system authority."""
 
     user_nickname: str | None = Field(default=None, max_length=24)
+    companion_relationship: str = Field(
+        default="helper_pet_companion",
+        max_length=48,
+        description="How the user frames the slime (helper / pet / companion / coach / assistant).",
+    )
     role_identity: str = Field(
         default="A personal decision companion that helps the user think clearly, remember context, and turn decisions into action.",
         max_length=500,
@@ -238,6 +268,23 @@ class SlimePersona(BaseModel):
             return None
         s = str(v).strip()
         return s[:24] or None
+
+    @field_validator("companion_relationship", mode="before")
+    @classmethod
+    def _rel(cls, v: Any) -> str:
+        s = str(v or "").strip().lower().replace(" ", "_")
+        allowed = {
+            "helper",
+            "pet",
+            "companion",
+            "coach",
+            "tiny_robot_slime_assistant",
+            "helper_pet_companion",
+            "assistant",
+        }
+        if s in allowed:
+            return s
+        return "helper_pet_companion"
 
     @field_validator("role_identity", mode="before")
     @classmethod
@@ -303,6 +350,44 @@ class SlimeProfile(BaseModel):
     def _trim_name(cls, v: Any) -> str:
         s = str(v or "").strip()
         return s[:24] or "Mochi"
+
+
+class SlimeProfilePatch(BaseModel):
+    """Partial update payload for Slime appearance / voice / persona (API + conversational patch)."""
+
+    name: str | None = Field(default=None, max_length=24)
+    color_theme: SlimeColorTheme | None = None
+    custom_colors: SlimeCustomColors | None = None
+    personality: SlimePersonality | None = None
+    shape: SlimeShape | None = None
+    accessory: SlimeAccessory | None = None
+    motion: SlimeMotion | None = None
+    voice: SlimeVoicePreferences | None = None
+    persona: dict[str, Any] | None = None
+
+    @classmethod
+    def from_api_payload(cls, body: dict[str, Any]) -> SlimeProfilePatch:
+        transformed = dict(body or {})
+        for src, dst in [("colorTheme", "color_theme"), ("customColors", "custom_colors")]:
+            if src in transformed and dst not in transformed:
+                transformed[dst] = transformed.pop(src)
+        voice = transformed.get("voice")
+        if isinstance(voice, dict):
+            v2 = dict(voice)
+            if "preferredVoiceName" in v2 and "preferred_voice_name" not in v2:
+                v2["preferred_voice_name"] = v2.pop("preferredVoiceName")
+            transformed["voice"] = v2
+        return cls.model_validate(transformed)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_patch_name(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s:
+            raise ValueError("name cannot be empty")
+        return s[:24]
 
 
 class TimePressure(str, Enum):

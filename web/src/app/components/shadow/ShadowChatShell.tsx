@@ -7,6 +7,7 @@ import type { ClarifyQuestion } from '../ClarifyDialog';
 import { ClarificationCard, type ClarificationGateMeta } from './ClarificationCard';
 import { apiUrl } from '../../../utils/apiOrigin';
 import { parseSseBlocks } from '../../../utils/parseSse';
+import { refetchSlimeProfileGlobal } from '../../../hooks/useSlimeProfile';
 import { useDecisionReportStream } from '../../../hooks/useDecisionReportStream';
 import { AgentPresence3DPanel } from './AgentPresence3DPanel';
 import { ChatMessageList } from './ChatMessageList';
@@ -327,6 +328,10 @@ export function ShadowChatShell({
           lastDecisionSuggestionRef.current = (ev.suggestion || null) as ShadowSuggestion | null;
         } else if (type === 'done') {
           done = true;
+          const fe = ev.frontend_action as { type?: string } | undefined;
+          if (fe?.type === 'slime_profile_refresh') {
+            void refetchSlimeProfileGlobal();
+          }
           if (ev.stream_error) {
             setAgentStatus('error');
           } else {

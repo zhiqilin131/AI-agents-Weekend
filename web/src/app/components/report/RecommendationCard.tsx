@@ -62,7 +62,13 @@ export function RecommendationCard({
 
   const longBody = isLongReasoning(reasoning);
   const [showFullReasoning, setShowFullReasoning] = useState(false);
+  /** After first typewriter pass for this reasoning/stream phase, toggles show instantly (no re-animation). */
+  const [reasoningTypewriterDone, setReasoningTypewriterDone] = useState(false);
   const preview = useMemo(() => conciseReasoningPreview(reasoning), [reasoning]);
+
+  useEffect(() => {
+    setReasoningTypewriterDone(false);
+  }, [reasoning, isStreaming]);
   /** After a streaming phase, fire one auto read-aloud when the card settles (same gesture chain as “generate report” if primed). */
   const autoSpokenAfterIdleRef = useRef(false);
 
@@ -193,13 +199,22 @@ export function RecommendationCard({
         (isStreaming ? (
           <p className="whitespace-pre-wrap text-sm font-normal leading-relaxed text-gray-700">{reasoning}</p>
         ) : showCollapsedReasoning ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{preview}</p>
+          <TypewriterText
+            text={preview}
+            as="p"
+            className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700"
+            enabled={Boolean(preview) && !reasoningTypewriterDone}
+            onComplete={() => setReasoningTypewriterDone(true)}
+          />
+        ) : longBody ? (
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{reasoning}</p>
         ) : (
           <TypewriterText
             text={reasoning}
             as="p"
             className="text-sm leading-relaxed text-gray-700 whitespace-pre-wrap"
-            enabled={Boolean(reasoning)}
+            enabled={Boolean(reasoning) && !reasoningTypewriterDone}
+            onComplete={() => setReasoningTypewriterDone(true)}
           />
         ))}
 
@@ -207,7 +222,12 @@ export function RecommendationCard({
         <button
           type="button"
           className="mt-3 text-xs font-semibold text-indigo-700 underline-offset-2 hover:underline"
-          onClick={() => setShowFullReasoning((v) => !v)}
+          onClick={() => {
+            setShowFullReasoning((prev) => {
+              if (!prev) setReasoningTypewriterDone(true);
+              return !prev;
+            });
+          }}
         >
           {showFullReasoning ? 'Show less' : 'Show full reasoning'}
         </button>

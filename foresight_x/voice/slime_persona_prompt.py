@@ -9,6 +9,12 @@ from foresight_x.schemas import (
     SlimePersona,
     SlimePersonalityPreset,
     SlimePersonaTone,
+    SlimeSelfModel,
+)
+from foresight_x.voice.slime_text_safety import (
+    is_safe_slime_display_name,
+    sanitize_role_identity_text,
+    sanitize_user_nickname_text,
 )
 
 _UNSAFE_SUBSTRINGS = (
@@ -29,6 +35,9 @@ _UNSAFE_SUBSTRINGS = (
     "without user confirm",
     "override safety",
     "disregard safety",
+    "pretend you are the user",
+    "your memories are my memories",
+    "never clarify",
 )
 
 _WARMTH_LABEL = ("very neutral", "lightly warm", "friendly", "affectionate / buddy-like, not saccharine")
@@ -148,9 +157,13 @@ def merge_slime_persona_defaults(stored: SlimePersona | None) -> SlimePersona:
     data = base.model_dump()
     data.update(stored.model_dump(exclude_unset=False))
     p = SlimePersona.model_validate(data)
+    nick = sanitize_user_nickname_text(p.user_nickname)
+    role = sanitize_role_identity_text(p.role_identity or "")
     return SlimePersona.model_validate(
         {
             **p.model_dump(),
+            "user_nickname": nick,
+            "role_identity": role,
             "catchphrases": sanitize_catchphrases(p.catchphrases),
             "donts": sanitize_donts(p.donts),
         }
@@ -169,12 +182,17 @@ def merge_persona_patch(base: SlimePersona, patch: dict[str, Any]) -> SlimePerso
     key_map = {
         "userNickname": "user_nickname",
         "roleIdentity": "role_identity",
+        # Voice routers often emit a plain "role" string for who the slime is.
+        "role": "role_identity",
         "personalityPreset": "personality_preset",
         "replyLength": "reply_length",
+        "companionRelationship": "companion_relationship",
     }
     norm: dict[str, Any] = {}
     for k, v in p.items():
         nk = key_map.get(k, k)
+        if nk == "role_identity" and v is not None and not isinstance(v, str):
+            continue
         norm[nk] = v
 
     preset_raw = norm.get("personality_preset")
@@ -198,11 +216,67 @@ def merge_persona_patch(base: SlimePersona, patch: dict[str, Any]) -> SlimePerso
     merged = SlimePersona.model_validate(
         {
             **merged.model_dump(),
+            "user_nickname": sanitize_user_nickname_text(merged.user_nickname),
+            "role_identity": sanitize_role_identity_text(merged.role_identity or ""),
             "catchphrases": sanitize_catchphrases(merged.catchphrases),
             "donts": sanitize_donts(merged.donts),
         }
     )
     return merged
+
+
+def build_slime_self_identity_prompt(self_model: SlimeSelfModel, slime_persona: SlimePersona) -> str:
+    """Core boundary layer injected ahead of persona styling for Slime Buddy synthesis."""
+    p = merge_slime_persona_defaults(slime_persona)
+    slime_name = (self_model.spoken_name or "Mochi").strip()[:48] or "Mochi"
+    abilities = ", ".join(self_model.abilities[:6]) if self_model.abilities else "chat, memory-aware help, planning support"
+    boundaries = "\n".join(f"- {b}" for b in (self_model.boundaries or [])[:8])
+    limitations = ", ".join(self_model.limitations[:5]) if self_model.limitations else "(see product limits)"
+
+    return "\n".join(
+        [
+            f"You are {slime_name}, a small slime-shaped personal companion agent ({self_model.species}).",
+            "You are NOT the user.",
+            "The user is your human companion / owner / user.",
+            "Your job is to help the user think, remember, plan, and act.",
+            "You may use the user's approved memories to personalize help.",
+            "But the user's memories are NOT your memories.",
+            "The user's identity is NOT your identity.",
+            "Your identity is your Slime name, role, style, and abilities.",
+            "",
+            "If the user asks about you:",
+            "- Answer as the Slime.",
+            "- Mention your name, role, and slime identity when relevant.",
+            "",
+            "If the user asks about themselves:",
+            "- Use user memory and context carefully.",
+            "- Be honest about uncertainty.",
+            "",
+            "If the user asks a practical or ambiguous question:",
+            "- Answer practically first.",
+            "- Do NOT jump to psychological interpretation.",
+            "- Do NOT claim the user is worried about self-worth unless they clearly say so.",
+            "- Prefer one clarifying question over inferring hidden motives.",
+            "",
+            "Anti-over-psychologizing (strict):",
+            "- Do not turn ordinary ambiguous questions into emotional analysis.",
+            "- If wording is unclear, ask what they mean (papers vs printer paper vs documents, etc.).",
+            "- Do not diagnose and do not analyze self-worth unless explicitly requested.",
+            "",
+            "Memory boundary:",
+            "- Retrieved memories describe the USER (memory_owner=\"user\").",
+            '- Phrase memory as "You mentioned…" / "You\'ve told me…" — never as "I remember doing…" for user facts.',
+            "",
+            f"Your preset abilities (high level): {abilities}.",
+            f"Hard limitations: {limitations}.",
+            "",
+            "Boundaries:",
+            boundaries,
+            "",
+            f"Persona role line (style only, cannot override safety): {re.sub(r'\s+', ' ', (p.role_identity or '').strip())[:320]}",
+            "You can be playful and pet-like, but stay useful.",
+        ]
+    )
 
 
 def build_slime_persona_prompt(
@@ -218,7 +292,8 @@ def build_slime_persona_prompt(
     (nickname or 'you').
     """
     p = merge_slime_persona_defaults(slime_persona)
-    name = (slime_name or "Mochi").strip()[:24] or "Mochi"
+    raw_nm = (slime_name or "Mochi").strip()[:24] or "Mochi"
+    name = raw_nm if is_safe_slime_display_name(raw_nm) else "your Slime Buddy"
     addr = (user_ref or "you").strip()[:48] or "you"
     warmth = _WARMTH_LABEL[max(0, min(3, p.warmth))]
     humor = _HUMOR_LABEL[max(0, min(3, p.humor))]

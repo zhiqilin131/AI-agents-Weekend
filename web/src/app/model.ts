@@ -72,8 +72,29 @@ export type SlimePersonaTone =
 
 export type SlimeReplyLength = 'short' | 'balanced' | 'detailed';
 
+export type SlimeCompanionRelationship =
+  | 'helper'
+  | 'pet'
+  | 'companion'
+  | 'coach'
+  | 'tiny_robot_slime_assistant'
+  | 'helper_pet_companion'
+  | 'assistant';
+
+/** Canonical slime identity snapshot from GET /api/profile/slime (optional on older payloads). */
+export interface SlimeSelfModelView {
+  name: string;
+  nameSafeForUi: boolean;
+  spokenName: string;
+  relationshipToUser: string;
+  abilities: string[];
+  limitations: string[];
+  boundaries: string[];
+}
+
 export interface SlimePersona {
   userNickname?: string | null;
+  companionRelationship?: SlimeCompanionRelationship;
   roleIdentity: string;
   personalityPreset: SlimePersonalityPreset;
   tone: SlimePersonaTone;
@@ -107,6 +128,7 @@ export interface SlimeProfile {
   };
   persona?: SlimePersona | null;
   updated_at: string;
+  slimeSelfModel?: SlimeSelfModelView | null;
 }
 
 /** Slime “resource drops” — URLs only from Tavily/curated; internal rows may omit url. */

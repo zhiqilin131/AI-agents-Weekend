@@ -79,11 +79,16 @@ from foresight_x.schemas import (
     SlimeVoicePreferences,
     UserProfile,
 )
+from foresight_x.chat.slime_intent import classify_slime_intent, merge_with_decision_intent
+from foresight_x.voice.slime_identity import get_effective_slime_persona
 from foresight_x.voice.slime_persona_prompt import (
     build_slime_persona_prompt,
+    build_slime_self_identity_prompt,
     merge_persona_patch,
     merge_slime_persona_defaults,
 )
+from foresight_x.voice.slime_profile_nl import try_apply_slime_profile_from_chat_message
+from foresight_x.voice.slime_self_model import get_effective_slime_self_model
 from foresight_x.ui.cli import _build_context
 from foresight_x.memory_graph import TemporalGraphMemory
 from foresight_x.memory.profile_store import empty_profile as load_tier3_empty_profile
@@ -368,42 +373,6 @@ class RunRequest(BaseModel):
     save_clarification_to_profile: bool = Field(default=False)
     #: When true, skip query-enhancement rewrite and use user's raw input verbatim.
     preserve_raw_input: bool = Field(default=False)
-
-
-class SlimeProfilePatch(BaseModel):
-    name: str | None = Field(default=None, max_length=24)
-    color_theme: SlimeColorTheme | None = None
-    custom_colors: SlimeCustomColors | None = None
-    personality: SlimePersonality | None = None
-    shape: SlimeShape | None = None
-    accessory: SlimeAccessory | None = None
-    motion: SlimeMotion | None = None
-    voice: SlimeVoicePreferences | None = None
-    persona: dict[str, Any] | None = None
-
-    @classmethod
-    def from_api_payload(cls, body: dict[str, Any]) -> "SlimeProfilePatch":
-        transformed = dict(body or {})
-        for src, dst in [("colorTheme", "color_theme"), ("customColors", "custom_colors")]:
-            if src in transformed and dst not in transformed:
-                transformed[dst] = transformed.pop(src)
-        voice = transformed.get("voice")
-        if isinstance(voice, dict):
-            v2 = dict(voice)
-            if "preferredVoiceName" in v2 and "preferred_voice_name" not in v2:
-                v2["preferred_voice_name"] = v2.pop("preferredVoiceName")
-            transformed["voice"] = v2
-        return cls.model_validate(transformed)
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def _trim_name(cls, v: Any) -> str | None:
-        if v is None:
-            return None
-        s = str(v).strip()
-        if not s:
-            raise ValueError("name cannot be empty")
-        return s[:24]
 
 
 class ExternalEventRequest(BaseModel):
@@ -809,43 +778,35 @@ def put_profile(body: UserProfile) -> dict:
 
 @app.get("/api/profile/slime")
 def get_slime_profile() -> JSONResponse:
+    from foresight_x.voice.slime_self_model import get_effective_slime_self_model
+
     settings = _settings_for_active_user()
     profile = load_user_profile(settings)
     body = _resolved_slime_profile(profile).model_dump(mode="json")
+    uid = settings.foresight_user_id
+    body["slime_self_model"] = get_effective_slime_self_model(uid, settings=settings).model_dump(mode="json")
     return JSONResponse(content=body, headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 @app.patch("/api/profile/slime")
 def patch_slime_profile(body: dict[str, Any]) -> JSONResponse:
+    from foresight_x.profile.slime_merge import merge_and_save_slime_profile
+
     settings = _settings_for_active_user()
-    existing = load_user_profile(settings)
-    raw_body = dict(body or {})
-    try:
-        patch = SlimeProfilePatch.from_api_payload(body)
-    except ValidationError as e:
-        raise HTTPException(status_code=400, detail=f"invalid_slime_profile_patch: {e.errors()}") from e
-    stored = existing.slime_profile or _default_slime_profile()
-    updates = patch.model_dump(exclude_unset=True)
-    updates.pop("persona", None)
-    if "persona" in raw_body:
-        if raw_body.get("persona") is None:
-            updates["persona"] = None
-        elif isinstance(raw_body.get("persona"), dict):
-            cur = merge_slime_persona_defaults(stored.persona)
-            try:
-                new_persona = merge_persona_patch(cur, raw_body["persona"])
-            except ValidationError as e:
-                raise HTTPException(status_code=400, detail=f"invalid_slime_persona: {e.errors()}") from e
-            new_persona = new_persona.model_copy(update={"updated_at": _utc_now()})
-            updates["persona"] = new_persona
-    if "custom_colors" in updates and "color_theme" not in updates:
-        updates["color_theme"] = SlimeColorTheme.CUSTOM
-    merged_stored = SlimeProfile.model_validate(stored.model_copy(update=updates).model_dump(mode="json"))
-    merged_stored = merged_stored.model_copy(update={"updated_at": _utc_now()})
-    save_user_profile(existing.model_copy(update={"slime_profile": merged_stored}), settings=settings)
-    out = _resolved_slime_profile(existing.model_copy(update={"slime_profile": merged_stored}))
+    ok, err = merge_and_save_slime_profile(settings, dict(body or {}))
+    if not ok:
+        if err == "invalid_persona_patch":
+            raise HTTPException(status_code=400, detail="invalid_slime_persona: invalid_persona_patch") from None
+        raise HTTPException(status_code=400, detail=f"invalid_slime_profile_patch: {err}") from None
+    profile = load_user_profile(settings)
+    out = _resolved_slime_profile(profile)
+    body_out = out.model_dump(mode="json")
+    uid = settings.foresight_user_id
+    from foresight_x.voice.slime_self_model import get_effective_slime_self_model
+
+    body_out["slime_self_model"] = get_effective_slime_self_model(uid, settings=settings).model_dump(mode="json")
     return JSONResponse(
-        content=out.model_dump(mode="json"),
+        content=body_out,
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
 
@@ -1432,6 +1393,37 @@ def _slice_shadow_messages(thread: dict) -> list[dict]:
     return out
 
 
+def _maybe_slime_buddy_turn_params(
+    settings: Any,
+    thread: dict[str, Any],
+    *,
+    intent_probe: str,
+    chat_intent_label: str,
+) -> dict[str, Any]:
+    """Use Slime Buddy synthesis when this chat thread was created from Slime Voice."""
+    if str(thread.get("source") or "") != "slime_voice":
+        return {}
+    eff = get_effective_slime_persona(settings)
+    slime_lane = classify_slime_intent(intent_probe)
+    slime_lane = merge_with_decision_intent(slime_lane, chat_intent_label == "decision_candidate")
+    self_model = get_effective_slime_self_model(settings.foresight_user_id, settings=settings)
+    identity_pack = build_slime_self_identity_prompt(self_model, eff.persona)
+    style_pack = build_slime_persona_prompt(
+        eff.persona,
+        "shadow_chat",
+        slime_name=eff.name,
+        user_ref=eff.user_nickname_for_address,
+        slime_profile_saved=eff.profile_saved,
+    )
+    addendum = f"{identity_pack}\n\n--- Persona style ---\n{style_pack}"
+    hint = slime_lane.intent if slime_lane.intent != "general_chat" else None
+    return {
+        "slime_voice_style_addendum": addendum,
+        "synthesis_frame": "slime_buddy",
+        "slime_intent_hint": hint,
+    }
+
+
 def _finalize_shadow_thread_turn(thread: dict, *, settings: Any) -> None:
     """Persist rolling summary after messages appended."""
     maybe_update_thread_summary(thread, settings=settings)
@@ -1539,6 +1531,38 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
             _log.exception("persist_clarification_followup failed (non-stream) thread_id=%s", thread_id)
     intent_probe = effective_msg.strip() if effective_msg.strip() != msg.strip() else msg
     intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
+    if str(thread.get("source") or "") == "slime_voice" and body.user_action != "generate_decision_report":
+        applied_nl, nl_reply = try_apply_slime_profile_from_chat_message(msg, settings=settings)
+        if applied_nl and nl_reply:
+            meta_extra = {"interaction_source": "slime_voice", "modality": "text"}
+            append_message(
+                thread,
+                role="user",
+                content=effective_msg,
+                mode=mode,
+                intent="slime_profile_chat_patch",
+                metadata_extra=meta_extra,
+            )
+            append_message(
+                thread,
+                role="assistant",
+                content=nl_reply,
+                mode=mode,
+                intent="slime_profile_chat_patch",
+                memory_used=False,
+                profile_updated=True,
+            )
+            _finalize_shadow_thread_turn(thread, settings=settings)
+            refreshed = load_thread(thread_id, user_id=uid)
+            return {
+                "thread": refreshed,
+                "suggestion": None,
+                "decision_trace": None,
+                "profile_updates": [],
+                "thread_context_kept": False,
+                "frontend_action": {"type": "slime_profile_refresh", "route": "", "payload": {}},
+            }
+
     append_message(thread, role="user", content=effective_msg, mode=mode, intent=intent.intent)
 
     suggestion: dict | None = None
@@ -1581,6 +1605,12 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
             d0 = str(ar_ctx.get("decision_id") or "").strip()
             if d0:
                 rev_id = d0
+        buddy_kw = _maybe_slime_buddy_turn_params(
+            settings,
+            thread,
+            intent_probe=intent_probe,
+            chat_intent_label=intent.intent,
+        )
         out = run_shadow_turn(
             msgs,
             settings=settings,
@@ -1588,6 +1618,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
             report_revision_decision_id=rev_id,
             working_summary=str(thread.get("working_summary") or ""),
             temporary_context_prompt=format_temporary_context_prompt(thread),
+            **buddy_kw,
         )
         append_temporary_context_items(thread, out.thread_only_items)
         thread_context_kept = bool(out.thread_only_items)
@@ -1654,6 +1685,60 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
             )
             intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
             retrieval_mode = "chat_deep" if intent.intent == "decision_candidate" else "chat_fast"
+
+            if str(thread.get("source") or "") == "slime_voice" and body.user_action != "generate_decision_report":
+                applied_nl, nl_reply = try_apply_slime_profile_from_chat_message(message, settings=settings)
+                if applied_nl and nl_reply:
+                    meta_extra = {"interaction_source": "slime_voice", "modality": "text"}
+                    append_message(
+                        thread,
+                        role="user",
+                        content=effective_message,
+                        mode=mode,
+                        intent="slime_profile_chat_patch",
+                        metadata_extra=meta_extra,
+                    )
+                    append_message(
+                        thread,
+                        role="assistant",
+                        content=nl_reply,
+                        mode=mode,
+                        intent="slime_profile_chat_patch",
+                        memory_used=False,
+                        profile_updated=True,
+                    )
+                    _finalize_shadow_thread_turn(thread, settings=settings)
+                    yield _sse_chunk({"type": "status", "status": "responding", "label": "Updating Slime…"})
+                    for chunk in _chunk_text(nl_reply):
+                        yield _sse_chunk({"type": "delta", "content": chunk})
+                    t_done = datetime.now(timezone.utc)
+                    metrics = {
+                        "first_ui_feedback_ms": 0,
+                        "memory_retrieve_ms": 0,
+                        "memory_cache_hit": True,
+                        "intent_detect_ms": 1,
+                        "response_first_token_ms": int((t_done - t0).total_seconds() * 1000),
+                        "response_total_ms": int((t_done - t0).total_seconds() * 1000),
+                        "profile_update_ms": 1,
+                        "clarification_fast_gate_ms": 0.0,
+                        "clarification_llm_ms": None,
+                        "clarification_used_llm": False,
+                        "clarification_shown": False,
+                        "clarification_suppressed_reason": "slime_profile_nl_patch",
+                        "client_turn_seq": body.client_turn_seq,
+                    }
+                    yield _sse_chunk(
+                        {
+                            "type": "done",
+                            "thread_id": thread["thread_id"],
+                            "message": thread.get("messages", [])[-1],
+                            "suggestion": None,
+                            "metrics": metrics,
+                            "frontend_action": {"type": "slime_profile_refresh", "route": "", "payload": {}},
+                        }
+                    )
+                    return
+
             user_row = append_message(thread, role="user", content=effective_message, mode=mode, intent=intent.intent)
             user_msg_id = str(user_row.get("id") or "")
 
@@ -1794,6 +1879,12 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
                 d0 = str(ar_ctx.get("decision_id") or "").strip()
                 if d0:
                     rev_id = d0
+            buddy_kw = _maybe_slime_buddy_turn_params(
+                settings,
+                thread,
+                intent_probe=intent_probe,
+                chat_intent_label=intent.intent,
+            )
             out = run_shadow_turn(
                 msgs,
                 settings=settings,
@@ -1802,6 +1893,7 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
                 report_revision_decision_id=rev_id,
                 working_summary=str(thread.get("working_summary") or ""),
                 temporary_context_prompt=format_temporary_context_prompt(thread),
+                **buddy_kw,
             )
             append_temporary_context_items(thread, out.thread_only_items)
             t_after_reply = datetime.now(timezone.utc)
@@ -2668,17 +2760,14 @@ def _run_slime_voice_pipeline(
     recent_ui_s: str | None,
     settings,
 ) -> dict[str, Any]:
-    from foresight_x.chat.conversation_service import ensure_slime_voice_thread, process_conversation_turn
+    from foresight_x.chat.conversation_service import (
+        ensure_slime_voice_thread,
+        maybe_slime_voice_preflight_reply,
+        process_conversation_turn,
+    )
     from foresight_x.chat.thread_store import append_message
     from foresight_x.shadow.thread_summary import maybe_update_thread_summary
     from foresight_x.voice.asr import transcribe_audio
-    from foresight_x.voice.slime_identity import (
-        format_slime_identity_reply,
-        format_user_nickname_reply,
-        get_effective_slime_persona,
-        is_slime_identity_question,
-        is_user_saved_nickname_question,
-    )
     from foresight_x.voice.slime_voice_router import SlimeVoiceContext, route_slime_voice_command
     from foresight_x.voice.slime_tools import execute_slime_tool
 
@@ -2726,20 +2815,13 @@ def _run_slime_voice_pipeline(
     thread = ensure_slime_voice_thread(uid, thread_id)
     resolved_tid = str(thread.get("thread_id") or "")
 
-    early_eff = None
     early_intent = ""
     early_tool = ""
     early_text: str | None = None
-    if is_user_saved_nickname_question(transcript):
-        early_eff = get_effective_slime_persona(settings)
-        early_intent = "slime_user_nickname"
-        early_tool = "slime_user_nickname"
-        early_text = format_user_nickname_reply(early_eff)
-    elif is_slime_identity_question(transcript):
-        early_eff = get_effective_slime_persona(settings)
-        early_intent = "slime_identity"
-        early_tool = "slime_identity"
-        early_text = format_slime_identity_reply(early_eff)
+    preflight = maybe_slime_voice_preflight_reply(transcript, settings=settings)
+    if preflight is not None:
+        early_intent, early_text = preflight
+        early_tool = early_intent
 
     if early_text is not None:
         assistant_text = early_text
@@ -2796,13 +2878,16 @@ def _run_slime_voice_pipeline(
             "timing": timing_identity,
             "voice_ui": voice_ui_id,
         }
-        if os.getenv("SLIME_VOICE_DEBUG", "").strip().lower() in ("1", "true", "yes") and early_eff is not None:
-            un = early_eff.persona.user_nickname
+        if os.getenv("SLIME_VOICE_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+            from foresight_x.voice.slime_identity import get_effective_slime_persona
+
+            dbg_eff = get_effective_slime_persona(settings)
+            un = dbg_eff.persona.user_nickname
             body_id["slime_persona_used"] = {
-                "name": early_eff.name,
+                "name": dbg_eff.name,
                 "userNickname": un,
-                "tone": early_eff.persona.tone.value,
-                "replyLength": early_eff.persona.reply_length,
+                "tone": dbg_eff.persona.tone.value,
+                "replyLength": dbg_eff.persona.reply_length,
                 "source": "profile_store",
             }
         return body_id

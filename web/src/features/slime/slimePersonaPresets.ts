@@ -2,6 +2,7 @@ import type { SlimePersona, SlimePersonalityPreset } from '../../app/model';
 
 export const DEFAULT_SLIME_PERSONA: SlimePersona = {
   userNickname: null,
+  companionRelationship: 'helper_pet_companion',
   roleIdentity:
     'A personal decision companion that helps the user think clearly, remember context, and turn decisions into action.',
   personalityPreset: 'calm_advisor',

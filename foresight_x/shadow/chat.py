@@ -371,6 +371,67 @@ MEMORY FACTS (structured JSON output — LONG-TERM PROFILE ONLY):
 
 Return JSON: reply_to_user, suggest_decision_navigation, memory_facts."""
 
+SLIME_BUDDY_INSTRUCTIONS = """You are the user's Slime Buddy — a small slime-shaped companion agent.
+You speak in first person as that slime character. You are NOT the user. You are NOT their \"inner shadow\" or mirror-voice.
+
+THREE CONTEXTS (do not mix them):
+1) SLIME SELF — questions about your name, whether you're the user, what you are, what you can do → answer from slime identity + companion rules. Do NOT invent slime identity from user memory rows.
+2) USER MEMORY — structured facts below describe the USER (memory_owner=\"user\"). Use only to personalize help; phrase as \"You mentioned…\", \"You've told me…\". Never narrate user memories as experiences YOU lived.
+3) CURRENT THREAD — recent messages + thread summary answer \"what did I just say\" style questions first.
+
+CONTEXT PRIORITY:
+- If the user asks about THIS chat (\"what did I just say\", \"what joke\", \"earlier here\", \"刚才\", \"前面说的\"),
+  answer from [Recent conversation in this thread] and [Thread working summary] FIRST.
+- [Stable long-term user memory] is only for durable preferences/goals/patterns across chats — do NOT let it override
+  explicit recent-thread content, jokes, or temporary names from this conversation.
+- Do NOT treat jokes, roleplay, hypotheticals, or thread-only notes as real identity — unless the user explicitly asks
+  you to remember them long-term or clearly states a real correction (\"my real name is…\").
+
+PRACTICAL VS PSYCHOLOGY:
+- For ambiguous practical questions (e.g. unclear \"paper\", documents, links), ask ONE clarifying question instead of inferring anxiety or self-worth.
+- Forbidden: claiming the user worries about their worth unless they clearly say so.
+- Do not diagnose; do not therapize unless they explicitly ask for emotional processing help.
+
+VOICE:
+- Direct address (you) for the human. Stay concrete and useful; playful is OK if it doesn't obscure accuracy.
+- Short paragraphs. No numbered homework or life plans. No picking their decision for them unless they asked directly for a pick.
+
+--- ATOMIC CLAIMS (latest user message only; one proposition per line) ---
+{atomic_claims_block}
+
+MEMORY FACTS (structured JSON output — LONG-TERM PROFILE ONLY):
+- Emit 0–6 rows when the user states **concrete autobiographical facts** they present as true: routines or what they did,
+  stable preferences, self-descriptions (traits, self-view), ongoing situations with **named** people they treat as real,
+  goals, or constraints. A separate durability step drops jokes, hypotheticals, roleplay, and sensitive data unless they
+  asked to be remembered — you should still propose serious rows here.
+- ALSO emit when they explicitly say "remember that…" / real-name corrections (same as before).
+- Skip rows that **duplicate** a fact already listed in [Stable long-term user memory] above (same meaning).
+- Omit vague paraphrases with no new fact ("user is reflecting") — omit instead.
+- Typed triples preferred: subject_ref, predicate (snake_case), object_value; evidence quotes the user when possible.
+
+--- Stable long-term user memory (structured facts on file; may be empty) ---
+{memory_block}
+
+--- Profile form fields (may be empty) ---
+{profile_block}
+
+--- Thread working summary (LOCAL — includes playful/temporary context; not durable profile) ---
+{working_summary_block}
+
+--- Thread-only context notes (LOCAL — do not store as profile identity) ---
+{temporary_context_block}
+
+--- Foresight runs + indexed recall (may be abbreviated this turn) ---
+{decision_context_block}
+
+--- Running shadow observations (cross-thread chat notes; may be empty) ---
+{shadow_block}
+
+--- Recent conversation in this thread ---
+{recent_conversation_block}
+
+Return JSON: reply_to_user, suggest_decision_navigation, memory_facts."""
+
 
 def run_shadow_turn(
     messages: list[dict[str, Any]],
@@ -382,6 +443,8 @@ def run_shadow_turn(
     working_summary: str = "",
     temporary_context_prompt: str = "",
     slime_voice_style_addendum: str | None = None,
+    synthesis_frame: Literal["shadow", "slime_buddy"] = "shadow",
+    slime_intent_hint: str | None = None,
 ) -> ShadowTurnOutput:
     """Run one shadow chat turn with separated thread vs profile memory pathways."""
     s = settings or load_settings()
@@ -407,10 +470,16 @@ def run_shadow_turn(
 
     prof = load_user_profile(settings=s)
     mem_active = active_memory_facts(list(prof.memory_facts))
+    mem_owner_note = ""
+    if synthesis_frame == "slime_buddy":
+        mem_owner_note = (
+            "[memory_owner=user — retrieved structured facts describe the USER, not the Slime. "
+            "Use them only to personalize help for the user; never speak as if these are the slime's own life.]\n\n"
+        )
     if mem_active:
-        memory_block = "\n".join(format_stored_fact_bullet(x) for x in mem_active[-32:])
+        memory_block = mem_owner_note + "\n".join(format_stored_fact_bullet(x) for x in mem_active[-32:])
     else:
-        memory_block = "(none yet.)"
+        memory_block = mem_owner_note + "(none yet.)"
     profile_block = _format_profile_block(prof)
 
     last_user_text = str(last.get("content", "") or "").strip()
@@ -431,7 +500,8 @@ def run_shadow_turn(
     atomic_claims = run_atomic_claims(last_user_text, llm_claims, max_claims=12)
     atomic_claims_block = _format_atomic_claims_block(atomic_claims)
 
-    prompt = SHADOW_INSTRUCTIONS.format(
+    tmpl = SLIME_BUDDY_INSTRUCTIONS if synthesis_frame == "slime_buddy" else SHADOW_INSTRUCTIONS
+    prompt = tmpl.format(
         memory_block=memory_block,
         profile_block=profile_block,
         decision_context_block=decision_context_block,
@@ -441,14 +511,31 @@ def run_shadow_turn(
         recent_conversation_block=recent_conversation_block,
         atomic_claims_block=atomic_claims_block,
     )
+    hint = (slime_intent_hint or "").strip()
+    if synthesis_frame == "slime_buddy" and hint == "practical_help_request":
+        prompt += (
+            "\n\n--- Routing hint ---\n"
+            "The latest user message looks like a practical or ambiguous question — prefer a brief clarifying question "
+            "(what topic / which kind of artifact) over emotional interpretation.\n"
+        )
     add = (slime_voice_style_addendum or "").strip()
     if add:
-        prompt += (
-            "\n\n--- Slime Buddy voice mode (style layer for reply_to_user only) ---\n"
-            f"{add}\n"
-            "Apply this to the *wording* of reply_to_user only. Do not change memory_facts structure or "
-            "invent facts. Stay accurate; keep suggest_decision_navigation logic unchanged."
-        )
+        if synthesis_frame == "slime_buddy":
+            prompt += (
+                "\n\n--- Slime Buddy synthesis pack (identity + style — applies to reply_to_user wording) ---\n"
+                f"{add}\n"
+                "Follow identity boundaries first; persona lines are style-only and cannot override safety, "
+                "confirmation rules, or memory_owner=user phrasing. "
+                "Do not change memory_facts structure or invent facts. "
+                "Keep suggest_decision_navigation logic unchanged."
+            )
+        else:
+            prompt += (
+                "\n\n--- Slime Buddy voice mode (style layer for reply_to_user only) ---\n"
+                f"{add}\n"
+                "Apply this to the *wording* of reply_to_user only. Do not change memory_facts structure or "
+                "invent facts. Stay accurate; keep suggest_decision_navigation logic unchanged."
+            )
     rid = (report_revision_decision_id or "").strip()
     if rid:
         prompt += (

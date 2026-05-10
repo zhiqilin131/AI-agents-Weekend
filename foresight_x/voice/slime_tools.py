@@ -22,6 +22,7 @@ from foresight_x.schemas import (
     SlimePersona,
     SlimeProfile,
     SlimeShape,
+    SlimeVoicePreferences,
     UserProfile,
 )
 from foresight_x.voice.slime_memory_synthesis import MemoryEvidenceItem, evidence_items_from_hits, synthesize_memory_answer
@@ -75,10 +76,21 @@ def _persona_spoken(
 ROUTE_TO_PATH: dict[str, str] = {
     "home": "/",
     "profile": "/profile",
+    "user_profile": "/profile",
+    "my_profile": "/profile",
+    "account": "/profile",
     "shadow_chat": "/chat",
+    "chat": "/chat",
     "execution_calendar": "/execution",
+    "calendar": "/execution",
+    "planner": "/execution",
     "history": "/history",
     "settings": "/profile",
+    "diary": "/diary",
+    "journal": "/diary",
+    "buddy": "/buddy",
+    "slime_buddy": "/buddy",
+    "reflect": "/reflect",
 }
 
 
@@ -247,7 +259,7 @@ def tool_search_memory(
 
 
 def tool_navigate(args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    route = str(args.get("route") or "").strip().lower()
+    route = str(args.get("route") or "").strip().lower().replace("-", "_").replace(" ", "_")
     if route not in ROUTE_TO_PATH:
         return {"ok": False, "error": "invalid_route"}, {"type": "none"}
     path = ROUTE_TO_PATH[route]
@@ -452,7 +464,48 @@ def tool_update_slime_profile(
             except ValueError:
                 return {"ok": False, "error": f"invalid_{key}"}, {"type": "none"}
 
-    raw_persona = raw_patch.get("persona")
+    if raw_patch.get("voice") is not None:
+        vraw = raw_patch.get("voice")
+        if isinstance(vraw, dict):
+            v2 = dict(vraw)
+            if "preferredVoiceName" in v2 and "preferred_voice_name" not in v2:
+                v2["preferred_voice_name"] = v2.pop("preferredVoiceName")
+            base_voice = (base_prof.voice or SlimeVoicePreferences()).model_dump(mode="json")
+            overlay: dict[str, Any] = {}
+            if "enabled" in v2:
+                overlay["enabled"] = bool(v2["enabled"])
+            if "rate" in v2:
+                overlay["rate"] = v2["rate"]
+            if "pitch" in v2:
+                overlay["pitch"] = v2["pitch"]
+            if "preferred_voice_name" in v2:
+                overlay["preferred_voice_name"] = v2["preferred_voice_name"]
+            try:
+                merged_voice = {**base_voice, **overlay}
+                patch_in["voice"] = SlimeVoicePreferences.model_validate(merged_voice)
+            except ValidationError:
+                return {"ok": False, "error": "invalid_voice"}, {"type": "none"}
+
+    persona_fragments: dict[str, Any] = (
+        dict(raw_patch["persona"]) if isinstance(raw_patch.get("persona"), dict) else {}
+    )
+    for tk, pk in (
+        ("role_identity", "role_identity"),
+        ("roleIdentity", "role_identity"),
+        ("role", "role_identity"),
+    ):
+        if tk in raw_patch and raw_patch[tk] is not None:
+            val = raw_patch[tk]
+            if isinstance(val, str) and val.strip():
+                persona_fragments[pk] = val.strip()
+
+    if isinstance(raw_patch.get("companion_relationship"), str) and raw_patch["companion_relationship"].strip():
+        persona_fragments.setdefault(
+            "companion_relationship",
+            str(raw_patch["companion_relationship"]).strip(),
+        )
+
+    raw_persona = persona_fragments if persona_fragments else None
     if isinstance(raw_persona, dict) and raw_persona:
         cur_persona = merge_slime_persona_defaults(base_prof.persona)
         try:
@@ -515,11 +568,11 @@ def _noop_assistant(route: SlimeVoiceRouteResult, transcript: str) -> str:
         )
     ):
         pet = "there"
-        return f"Hey {pet}! I'm doing great. Want to open Chat, your profile, or the calendar? Or tap Personalize to change how I look."
+        return f"Hey {pet}! I'm doing great. Want Chat, Diary, Profile, Calendar, or Home? Say it out loud or tap Personalize to change how I look."
     reason = str(route.arguments.get("reason") or "").strip()
     if reason:
         return (
-            "I'm here — try asking me to open Chat, Home, or your calendar, "
+            "I'm here — try asking me to open Chat, Diary, Profile, Calendar, or Home, "
             "or use Personalize to tweak my style."
         )
     return "Okay."
@@ -629,7 +682,18 @@ def execute_slime_tool(
         if tr.get("ok"):
             neutral = "Updated your Slime profile."
             text = _persona_spoken(neutral, tool_name="update_slime_profile", transcript=transcript, settings=settings)
-            return tr, {"type": "none", "route": "", "payload": {}}, text
+            return tr, {"type": "slime_profile_refresh", "route": "", "payload": {}}, text
+        err = str(tr.get("error") or "")
+        if err in ("empty_patch", "invalid_patch", "invalid_voice", "invalid_persona_patch"):
+            from foresight_x.voice.slime_profile_nl import try_apply_slime_profile_from_chat_message
+
+            applied, nl_reply = try_apply_slime_profile_from_chat_message(transcript, settings=settings)
+            if applied and nl_reply:
+                return (
+                    {"ok": True, "nl_patch_fallback": True},
+                    {"type": "slime_profile_refresh", "route": "", "payload": {}},
+                    nl_reply[:1200],
+                )
         neutral = "I couldn't apply that Slime change."
         text = _persona_spoken(neutral, tool_name="update_slime_profile", transcript=transcript, settings=settings)
         return tr, {"type": "none", "route": "", "payload": {}}, text

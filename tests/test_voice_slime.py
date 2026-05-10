@@ -176,6 +176,19 @@ def test_navigate_tool_validates_route() -> None:
     assert fe_bad["type"] == "none"
 
 
+def test_navigate_diary_journal_profile_aliases() -> None:
+    d, fe_d = tool_navigate({"route": "diary"})
+    assert d["ok"] and fe_d["route"] == "/diary"
+    j, fe_j = tool_navigate({"route": "journal"})
+    assert j["ok"] and fe_j["route"] == "/diary"
+    up, fe_up = tool_navigate({"route": "user_profile"})
+    assert up["ok"] and fe_up["route"] == "/profile"
+    chat, fe_c = tool_navigate({"route": "chat"})
+    assert chat["ok"] and fe_c["route"] == "/chat"
+    norm, fe_n = tool_navigate({"route": "shadow-chat"})
+    assert norm["ok"] and fe_n["route"] == "/chat"
+
+
 def test_memory_search_no_invention(tmp_path: Path) -> None:
     settings = Settings(
         foresight_user_id="u1",
@@ -217,6 +230,117 @@ def test_profile_update_requires_confirmation() -> None:
     )
     _tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="rename")
     assert fe.get("type") == "confirm"
+
+
+def test_profile_update_voice_only_merges_partial(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_voice_patch",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_patch.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_voice_patch",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {
+                    "name": "Mochi",
+                    "color_theme": "violet",
+                    "personality": "calm",
+                    "voice": {"enabled": True, "rate": 1.0, "pitch": 1.15, "preferred_voice_name": "Alex"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_voice_patch")
+    route = SlimeVoiceRouteResult(
+        intent="profile_update",
+        tool_name="update_slime_profile",
+        arguments={"patch": {"voice": {"rate": 0.82}}},
+        requires_confirmation=False,
+    )
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="speak slower")
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
+    from foresight_x.profile.store import load_user_profile
+
+    loaded = load_user_profile(settings)
+    assert loaded.slime_profile is not None
+    assert loaded.slime_profile.voice is not None
+    assert abs(loaded.slime_profile.voice.rate - 0.82) < 0.001
+    assert abs(loaded.slime_profile.voice.pitch - 1.15) < 0.001
+    assert loaded.slime_profile.voice.preferred_voice_name == "Alex"
+
+
+def test_profile_update_top_level_role_sets_role_identity(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_role_top",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_role_top.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_role_top",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_role_top")
+    route = SlimeVoiceRouteResult(
+        intent="profile_update",
+        tool_name="update_slime_profile",
+        arguments={"patch": {"role": "A cheerful study buddy who keeps explanations short."}},
+        requires_confirmation=False,
+    )
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="change your role")
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
+    from foresight_x.profile.store import load_user_profile
+
+    loaded = load_user_profile(settings)
+    assert loaded.slime_profile is not None
+    assert "study buddy" in (loaded.slime_profile.persona.role_identity or "").lower()
+
+
+def test_profile_update_minor_shape_returns_slime_profile_refresh(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_shape",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_shape.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_shape",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_shape")
+    route = SlimeVoiceRouteResult(
+        intent="profile_update",
+        tool_name="update_slime_profile",
+        arguments={"patch": {"shape": "orb"}},
+        requires_confirmation=False,
+    )
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="be round")
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
 
 
 def test_profile_update_user_nickname_uses_persona_patch_requires_confirmation(tmp_path: Path) -> None:

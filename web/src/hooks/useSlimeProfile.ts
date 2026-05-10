@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { SlimePersona, SlimeProfile } from '../app/model';
+import type { SlimePersona, SlimeProfile, SlimeSelfModelView } from '../app/model';
 import { DEFAULT_SLIME_PERSONA } from '../features/slime/slimePersonaPresets';
 import { apiUrl } from '../utils/apiOrigin';
 
@@ -19,6 +19,7 @@ export const DEFAULT_SLIME_PROFILE: SlimeProfile = {
   motion: 'normal',
   persona: { ...DEFAULT_SLIME_PERSONA },
   updated_at: '',
+  slimeSelfModel: null,
 };
 
 function clamp0to3(n: unknown, fallback: 0 | 1 | 2 | 3): 0 | 1 | 2 | 3 {
@@ -46,8 +47,14 @@ function toCamelPersona(raw: unknown): SlimePersona {
           .slice(0, 5)
       : [];
   const nick = r.userNickname ?? r.user_nickname;
+  const relRaw = r.companionRelationship ?? r.companion_relationship;
+  const rel =
+    relRaw === null || relRaw === undefined
+      ? DEFAULT_SLIME_PERSONA.companionRelationship
+      : (String(relRaw).trim() as SlimePersona['companionRelationship']);
   return {
     userNickname: nick === null || nick === undefined ? null : String(nick).trim().slice(0, 24) || null,
+    companionRelationship: rel ?? DEFAULT_SLIME_PERSONA.companionRelationship,
     roleIdentity: String(r.roleIdentity ?? r.role_identity ?? DEFAULT_SLIME_PERSONA.roleIdentity).slice(0, 500),
     personalityPreset: (r.personalityPreset ??
       r.personality_preset ??
@@ -77,6 +84,24 @@ function normalizeCustomColors(raw: unknown): SlimeProfile['customColors'] | und
   return { primary, secondary, glow };
 }
 
+/** Normalize GET /api/profile/slime ``slime_self_model`` for UI. */
+export function normalizeSlimeSelfModel(raw: unknown): SlimeSelfModelView | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const abilities = Array.isArray(o.abilities) ? o.abilities.map((x) => String(x)).filter(Boolean) : [];
+  const limitations = Array.isArray(o.limitations) ? o.limitations.map((x) => String(x)).filter(Boolean) : [];
+  const boundaries = Array.isArray(o.boundaries) ? o.boundaries.map((x) => String(x)).filter(Boolean) : [];
+  return {
+    name: String(o.name ?? ''),
+    nameSafeForUi: Boolean(o.name_safe_for_ui ?? o.nameSafeForUi),
+    spokenName: String(o.spoken_name ?? o.spokenName ?? o.name ?? ''),
+    relationshipToUser: String(o.relationship_to_user ?? o.relationshipToUser ?? 'helper_pet_companion'),
+    abilities,
+    limitations,
+    boundaries,
+  };
+}
+
 function toCamelProfile(raw: any): SlimeProfile {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_SLIME_PROFILE };
   const ccRaw = raw.customColors ?? raw.custom_colors;
@@ -103,6 +128,7 @@ function toCamelProfile(raw: any): SlimeProfile {
     voice,
     persona: toCamelPersona(raw.persona),
     updated_at: String(raw.updated_at ?? raw.updatedAt ?? ''),
+    slimeSelfModel: normalizeSlimeSelfModel(raw.slime_self_model ?? raw.slimeSelfModel),
   };
 }
 

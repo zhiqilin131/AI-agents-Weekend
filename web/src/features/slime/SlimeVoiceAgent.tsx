@@ -18,6 +18,7 @@ import {
   normalizeVoiceSlimePatch,
   type SlimeVoiceFrontendAction,
 } from '../../utils/slimeVoiceActions';
+import { refetchSlimeProfileGlobal } from '../../hooks/useSlimeProfile';
 import { cn } from '../../app/components/ui/utils';
 
 export type VoiceAgentState =
@@ -541,6 +542,10 @@ export function SlimeVoiceAgent({
         const convTurn = Boolean(
           data.tool_result && typeof data.tool_result === 'object' && data.tool_result.conversation_turn,
         );
+
+        if (fe?.type === 'slime_profile_refresh') {
+          void refetchSlimeProfileGlobal();
+        }
 
         if (fe?.type === 'calendar_draft_confirm' && fe.payload && typeof fe.payload === 'object') {
           const pl = fe.payload as { resolved?: ResolvedCalendar; draft_id?: string };

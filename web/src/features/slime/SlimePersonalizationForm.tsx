@@ -5,7 +5,7 @@ import { Input } from '../../app/components/ui/input';
 import { Label } from '../../app/components/ui/label';
 import { Textarea } from '../../app/components/ui/textarea';
 import { cn } from '../../app/components/ui/utils';
-import type { SlimeProfile } from '../../app/model';
+import type { SlimeCompanionRelationship, SlimeProfile } from '../../app/model';
 import { apiUrl } from '../../utils/apiOrigin';
 import {
   ACCESSORY_OPTIONS,
@@ -22,6 +22,16 @@ import {
   SLIME_TONE_OPTIONS,
   patchForPersonalityPreset,
 } from './slimePersonaPresets';
+
+const RELATIONSHIP_OPTIONS: Array<{ id: SlimeCompanionRelationship; label: string }> = [
+  { id: 'helper_pet_companion', label: 'Helper + pet + companion (default)' },
+  { id: 'helper', label: 'Helper' },
+  { id: 'pet', label: 'Pet' },
+  { id: 'companion', label: 'Companion' },
+  { id: 'coach', label: 'Coach' },
+  { id: 'tiny_robot_slime_assistant', label: 'Tiny robot / slime assistant' },
+  { id: 'assistant', label: 'Assistant' },
+];
 
 export function SlimePersonalizationForm({
   slimeDraft,
@@ -116,6 +126,51 @@ export function SlimePersonalizationForm({
           className="mt-1 h-9 rounded-lg border-violet-200/55 bg-white/90 text-sm"
           placeholder="Mochi"
         />
+        {slimeDraft.slimeSelfModel && slimeDraft.slimeSelfModel.nameSafeForUi === false ? (
+          <p className="mt-1.5 text-[11px] leading-snug text-amber-800">
+            Your saved slime name isn&apos;t safe to display out loud — pick a friendlier name above, or save to reset to
+            Mochi.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="rounded-xl border border-violet-200/60 bg-white/75 px-3 py-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-800">Who is your Slime?</p>
+        <p className="mt-2 text-xs leading-relaxed text-gray-700">
+          I am a Slime Buddy: a small companion agent that helps you remember, decide, plan, and act. I am not you. I use
+          your memory to help you, but your memory remains yours.
+        </p>
+        <dl className="mt-3 space-y-2 text-[11px] text-gray-800">
+          <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-2">
+            <dt className="shrink-0 font-medium text-violet-900">Slime name</dt>
+            <dd className="min-w-0">{slimeDraft.slimeSelfModel?.spokenName || slimeDraft.name || '—'}</dd>
+          </div>
+          <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-2">
+            <dt className="shrink-0 font-medium text-violet-900">Slime role</dt>
+            <dd className="min-w-0">Personal companion agent</dd>
+          </div>
+          <div>
+            <dt className="font-medium text-violet-900">Relationship to you</dt>
+            <dd className="mt-1">
+              <select
+                id={`${idPrefix}-relationship`}
+                className={cn(fieldSelectClass, 'mt-0.5 max-w-full')}
+                value={persona.companionRelationship ?? 'helper_pet_companion'}
+                onChange={(e) =>
+                  setPersona({
+                    companionRelationship: e.target.value as SlimeCompanionRelationship,
+                  })
+                }
+              >
+                {RELATIONSHIP_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </dd>
+          </div>
+        </dl>
       </div>
 
       <div>

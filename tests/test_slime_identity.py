@@ -121,7 +121,7 @@ def test_conversation_turn_identity_contains_saved_name(monkeypatch, tmp_path: P
             )
     rs.assert_not_called()
     assert "Zephyr" in out["assistant_text"]
-    assert out["intent"] == "slime_identity"
+    assert out["intent"] == "slime_self_question"
 
 
 def test_voice_pipeline_identity_skips_router(monkeypatch, tmp_path: Path) -> None:
@@ -164,7 +164,7 @@ def test_voice_pipeline_identity_skips_router(monkeypatch, tmp_path: Path) -> No
             )
     route.assert_not_called()
     assert "Nova" in body["assistant_text"]
-    assert body["tool_call"]["name"] == "slime_identity"
+    assert body["tool_call"]["name"] == "slime_self_question"
 
 
 def test_what_do_you_call_me_voice_pipeline(monkeypatch, tmp_path: Path) -> None:

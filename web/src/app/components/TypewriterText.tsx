@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type TypewriterTextProps = {
   text: string;
@@ -9,6 +9,8 @@ type TypewriterTextProps = {
   as?: 'p' | 'span' | 'div';
   charStep?: number;
   intervalMs?: number;
+  /** Fires once when the typewriter reaches the end (or immediately if animation is skipped). */
+  onComplete?: () => void;
 };
 
 export function TypewriterText({
@@ -18,8 +20,11 @@ export function TypewriterText({
   as: Tag = 'span',
   charStep = 2,
   intervalMs = 12,
+  onComplete,
 }: TypewriterTextProps) {
   const [display, setDisplay] = useState(enabled ? '' : text);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   useEffect(() => {
     if (!enabled) {
@@ -28,6 +33,7 @@ export function TypewriterText({
     }
     if (!text) {
       setDisplay('');
+      onCompleteRef.current?.();
       return;
     }
     setDisplay('');
@@ -37,6 +43,7 @@ export function TypewriterText({
       if (i >= text.length) {
         setDisplay(text);
         window.clearInterval(id);
+        onCompleteRef.current?.();
       } else {
         setDisplay(text.slice(0, i));
       }
