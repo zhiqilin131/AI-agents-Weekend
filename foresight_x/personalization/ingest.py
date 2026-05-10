@@ -14,6 +14,7 @@ from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.profile.memory_structured import render_triple_line
 from foresight_x.profile.merge import append_profile_memory_records
 from foresight_x.profile.store import load_user_profile, save_user_profile
+from foresight_x.profile.memory_classification import refine_memory_category
 from foresight_x.schemas import MemoryFactCategory, ProfileMemoryFact, UserProfile, rebuild_priority_lines_from_flat
 from foresight_x.structured_predict import structured_predict
 
@@ -188,7 +189,7 @@ def _merge_profiles(base: UserProfile, ext: PersonalizationExtract, *, stamp: st
     )
     recs: list[ProfileMemoryFact] = []
     for d in ext.memory_facts_add:
-        cat = _coerce_memory_category(d.category)
+        cat0 = _coerce_memory_category(d.category)
         subj = (d.subject_ref or "user").strip() or "user"
         pred = (d.predicate or "").strip()
         obj = (d.object_value or "").strip()
@@ -196,6 +197,13 @@ def _merge_profiles(base: UserProfile, ext: PersonalizationExtract, *, stamp: st
         ev = (d.evidence or "").strip()
         if pred and obj:
             line = txt or render_triple_line(subj, pred, obj)
+            cat = refine_memory_category(
+                cat0,
+                text=line[:500],
+                evidence=ev[:280],
+                predicate=pred[:200],
+                subject_ref=subj,
+            )
             recs.append(
                 ProfileMemoryFact(
                     id="",
@@ -210,6 +218,13 @@ def _merge_profiles(base: UserProfile, ext: PersonalizationExtract, *, stamp: st
                 )
             )
         elif txt:
+            cat = refine_memory_category(
+                cat0,
+                text=txt[:500],
+                evidence=ev[:280],
+                predicate=pred[:200],
+                subject_ref=subj,
+            )
             recs.append(
                 ProfileMemoryFact(
                     id="",

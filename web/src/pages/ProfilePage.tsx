@@ -56,10 +56,11 @@ const CHANNEL_LABEL: Record<string, string> = {
 
 const MEMORY_CAT_LABEL: Record<string, string> = {
   identity: 'Identity',
-  views: 'Views & opinions',
+  views: 'Views, opinions & interests',
   behavior: 'Behavior & habits',
   goals: 'Goals',
   constraints: 'Constraints',
+  clarification: 'Decision clarifications',
   other: 'Other',
 };
 
@@ -81,7 +82,6 @@ export default function ProfilePage() {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     priorities: true,
     memory: false,
-    clarifications: false,
     legacy: false,
     context: false,
   });
@@ -192,18 +192,42 @@ export default function ProfilePage() {
     }
   };
 
+  const deleteStructuredRow = async (f: MemoryFactRow) => {
+    if (!f.id) return;
+    const fromClarification =
+      f.source === 'clarification' || Boolean(f.qualifiers && (f.qualifiers as { from_priority_line?: boolean }).from_priority_line);
+    if (fromClarification) await deletePriorityLine(f.id);
+    else await deleteMemoryFact(f.id);
+  };
+
   const userMemoryFacts = useMemo(() => memoryFacts.filter((f) => !isSlimeCompanionMemoryFact(f)), [memoryFacts]);
   const slimeMemoryFacts = useMemo(() => memoryFacts.filter((f) => isSlimeCompanionMemoryFact(f)), [memoryFacts]);
 
+  /** Priority lines from decision-run clarification — shown inside Structured memory, not a separate section. */
+  const clarificationAsMemoryFacts = useMemo((): MemoryFactRow[] => {
+    return clarificationRows.map((row) => ({
+      id: row.id,
+      category: 'clarification',
+      text: row.text,
+      source: 'clarification',
+      qualifiers: { from_priority_line: true as const },
+    }));
+  }, [clarificationRows]);
+
+  const mergedUserProfileFacts = useMemo(
+    () => [...userMemoryFacts, ...clarificationAsMemoryFacts],
+    [userMemoryFacts, clarificationAsMemoryFacts],
+  );
+
   const factsByCat = useMemo(
     () =>
-      userMemoryFacts.reduce<Record<string, MemoryFactRow[]>>((acc, f) => {
+      mergedUserProfileFacts.reduce<Record<string, MemoryFactRow[]>>((acc, f) => {
         const k = f.category || 'other';
         if (!acc[k]) acc[k] = [];
         acc[k].push(f);
         return acc;
       }, {}),
-    [userMemoryFacts],
+    [mergedUserProfileFacts],
   );
 
   const slimeFactsByCat = useMemo(
@@ -218,7 +242,7 @@ export default function ProfilePage() {
   );
 
   const memoryCatOrder = useMemo(() => {
-    const preferred = ['identity', 'views', 'behavior', 'goals', 'constraints', 'other'];
+    const preferred = ['identity', 'views', 'behavior', 'goals', 'constraints', 'clarification', 'other'];
     const existing = Object.keys(factsByCat);
     const inOrder = preferred.filter((k) => existing.includes(k));
     const rest = existing.filter((k) => !preferred.includes(k)).sort();
@@ -313,7 +337,7 @@ export default function ProfilePage() {
             {openSections.priorities ? (
               <>
             <p className="mb-1.5 text-[11px] leading-snug text-gray-500">
-              Your lines only — clarifications and system rows live in their own sections.
+              Your lines only — decision clarifications and structured facts appear under Structured memory; legacy system lines stay below.
             </p>
             <textarea
               value={userPriorities}
@@ -331,7 +355,7 @@ export default function ProfilePage() {
             >
               <div className="mb-1.5 flex items-center justify-between gap-2">
                 <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
-                  Structured memory (Shadow &amp; imports)
+                  Structured memory (Shadow, clarifications &amp; imports)
                 </label>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <button type="button" onClick={() => toggleSection('memory')} className="rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
@@ -349,20 +373,22 @@ export default function ProfilePage() {
               {openSections.memory ? (
                 <>
               <p className="mb-2 text-[11px] leading-snug text-gray-500">
-                User-profile facts (about you). Buddy-only notes are grouped separately when you clearly addressed your
-                Slime. Delete only in Edit mode.
+                User-profile facts (about you), including decision-run clarification answers under{' '}
+                <span className="font-medium text-gray-700">Decision clarifications</span>. Buddy-only notes are grouped
+                separately when you clearly addressed your Slime. Delete only in Edit mode.
               </p>
-              {memoryFacts.length === 0 ? (
+              {mergedUserProfileFacts.length === 0 && slimeMemoryFacts.length === 0 ? (
                 <div className="rounded-lg border border-violet-100 bg-violet-50/40 px-2.5 py-1.5 text-xs text-gray-500">
-                  No structured facts yet — they appear when chat stores details you stated.
+                  No structured facts yet — they appear when chat or decision runs store details you stated.
                 </div>
               ) : (
                 <>
-                  {userMemoryFacts.length === 0 ? (
+                  {userMemoryFacts.length === 0 && clarificationRows.length === 0 ? (
                     <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50/60 px-2.5 py-1.5 text-xs text-gray-600">
                       No user-profile structured facts yet (Buddy-only rows may appear below).
                     </div>
-                  ) : (
+                  ) : null}
+                  {mergedUserProfileFacts.length > 0 ? (
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-[200px_1fr]">
                       <div className="rounded-lg border border-gray-200 bg-white/80 p-1.5">
                         {memoryCatOrder.map((cat) => (
@@ -389,18 +415,31 @@ export default function ProfilePage() {
                               {MEMORY_CAT_LABEL[cat] || cat}
                             </p>
                             <div className="space-y-1.5">
-                              {(factsByCat[cat] || []).map((f) => (
+                              {(factsByCat[cat] || []).map((f) => {
+                                const isClarification =
+                                  f.source === 'clarification' ||
+                                  Boolean(
+                                    f.qualifiers && (f.qualifiers as { from_priority_line?: boolean }).from_priority_line,
+                                  );
+                                return (
                                 <div
-                                  key={f.id || f.text}
+                                  key={f.id || `${cat}-${f.text}`}
                                   className="rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-800"
                                 >
                                   <div className="flex items-start justify-between gap-2">
-                                    <span className="min-w-0 leading-snug">{f.text}</span>
+                                    <div className="flex min-w-0 flex-1 flex-wrap items-start gap-2">
+                                      {isClarification ? (
+                                        <span className="shrink-0 rounded-full bg-amber-200/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-950">
+                                          {CHANNEL_LABEL.clarification}
+                                        </span>
+                                      ) : null}
+                                      <span className="min-w-0 leading-snug">{f.text}</span>
+                                    </div>
                                     {memoryEditMode ? (
                                       <button
                                         type="button"
                                         disabled={deletingId === f.id}
-                                        onClick={() => f.id && void deleteMemoryFact(f.id)}
+                                        onClick={() => void deleteStructuredRow(f)}
                                         className="shrink-0 text-xs text-red-700 hover:underline disabled:opacity-40"
                                       >
                                         {deletingId === f.id ? '…' : 'Delete'}
@@ -416,13 +455,14 @@ export default function ProfilePage() {
                                     <p className="mt-1 text-[10px] italic text-violet-700/90">Evidence: {f.evidence}</p>
                                   ) : null}
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         ))}
                       </div>
                     </div>
-                  )}
+                  ) : null}
                   {slimeMemoryFacts.length > 0 ? (
                     <div className="mt-4 rounded-xl border border-cyan-100/90 bg-gradient-to-br from-cyan-50/90 to-white px-3 py-2.5">
                       <p className="text-xs font-semibold text-cyan-950">Slime companion memory</p>
@@ -478,46 +518,6 @@ export default function ProfilePage() {
                 </>
               ) : null}
             </section>
-
-            {clarificationRows.length > 0 && (
-              <section id="profile-clarifications" className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-              <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
-                Clarification answers
-              </label>
-              <button type="button" onClick={() => toggleSection('clarifications')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
-                {openSections.clarifications ? 'Collapse' : 'Expand'}
-              </button>
-              </div>
-              {openSections.clarifications ? (
-                <>
-              <p className="mb-1.5 text-[11px] leading-snug text-gray-500">
-                From decision-run prompts — not the same as your priority list.
-              </p>
-              <div className="min-h-[48px] w-full space-y-1.5 rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-2 text-sm text-gray-800">
-                {clarificationRows.map((row, idx) => (
-                  <div key={row.id || `clar-${idx}`} className="flex flex-wrap items-start gap-2 justify-between">
-                    <div className="flex flex-wrap items-start gap-2 min-w-0">
-                      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-950">
-                        {CHANNEL_LABEL[row.channel || 'clarification'] || 'Clarification'}
-                      </span>
-                      <span className="min-w-0 flex-1 leading-snug">{row.text}</span>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={deletingId === row.id}
-                      onClick={() => row.id && void deletePriorityLine(row.id)}
-                      className="shrink-0 text-xs text-red-700 hover:underline disabled:opacity-40"
-                    >
-                      {deletingId === row.id ? '…' : 'Remove'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-              </>
-              ) : null}
-              </section>
-          )}
 
           <section id="profile-legacy" className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
             <div className="mb-1.5 flex items-center justify-between gap-2">

@@ -24,6 +24,7 @@ from foresight_x.profile.memory_structured import (
     render_triple_line,
     user_scope_memory_facts,
 )
+from foresight_x.profile.memory_classification import refine_memory_category
 from foresight_x.profile.merge import append_profile_memory_records
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import MemoryFactCategory, ProfileMemoryFact
@@ -356,6 +357,11 @@ MEMORY FACTS (structured JSON output — LONG-TERM PROFILE ONLY):
 - Skip rows that **duplicate** a fact already listed in [Stable long-term user memory] above (same meaning).
 - Omit vague paraphrases with no new fact ("user is reflecting") — omit instead.
 - Typed triples preferred: subject_ref, predicate (snake_case), object_value; evidence quotes the user when possible.
+- Category guide: **behavior** = routines, habits, typical actions, food/drink preferences, sleep/exercise patterns;
+  **views** = opinions/beliefs and sports or team affinity (fandom); **identity** = who they are (names, roles, stable
+  relationships they assert); **goals** = aims; **constraints** = limits/rules; use **other** only when none of these fit.
+- Examples: "I like FC Barcelona" → **views**; "I have two roommates" / roommate names → **identity**;
+  "I like to eat burgers" → **behavior**.
 
 --- Stable long-term user memory (structured facts on file; may be empty) ---
 {memory_block}
@@ -420,6 +426,10 @@ MEMORY FACTS (structured JSON output — LONG-TERM PROFILE ONLY):
 - Skip rows that **duplicate** [Stable long-term user memory] above.
 - Typed triples preferred: subject_ref (**user** vs **slime_companion**), predicate (snake_case), object_value;
   evidence quotes the user's words when possible.
+- Category guide: **behavior** = routines, habits, typical actions, food/drink preferences, sleep/exercise patterns;
+  **views** = opinions/beliefs, team or fandom affinity; **identity** = who they are and stable ties to named people;
+  **goals** / **constraints** as usual; **other** only if none fit.
+- Examples: "I like FC Barcelona" → **views**; roommate / co-founder facts → **identity**; food prefs → **behavior**.
 
 --- Stable long-term user memory (structured facts on file; may be empty) ---
 {memory_block}
@@ -568,7 +578,7 @@ def run_shadow_turn(
 
     draft_records: list[ProfileMemoryFact] = []
     for d in memory_drafts:
-        cat = _coerce_category(d.category)
+        cat0 = _coerce_category(d.category)
         subj = (d.subject_ref or "user").strip() or "user"
         pred = (d.predicate or "").strip()[:200]
         obj = (d.object_value or "").strip()[:500]
@@ -578,6 +588,13 @@ def run_shadow_turn(
                 continue
             if len(txt) > 280:
                 txt = txt[:277] + "…"
+            cat = refine_memory_category(
+                cat0,
+                text=txt,
+                evidence=(d.evidence or "").strip(),
+                predicate=pred,
+                subject_ref=subj,
+            )
             draft_records.append(
                 ProfileMemoryFact(
                     id="",
@@ -594,6 +611,13 @@ def run_shadow_turn(
             txt = txt[:277] + "…"
         if not txt:
             txt = render_triple_line(subj, pred, obj)[:500]
+        cat = refine_memory_category(
+            cat0,
+            text=txt,
+            evidence=(d.evidence or "").strip(),
+            predicate=pred,
+            subject_ref=subj,
+        )
         draft_records.append(
             ProfileMemoryFact(
                 id="",
