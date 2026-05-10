@@ -49,7 +49,17 @@ def test_ortools_scheduler_fallback_still_no_overlap():
             assert not (s.start < e.end and s.end > e.start)
 
 
-def test_unschedulable_task_returns_warning():
+def test_unschedulable_task_returns_warning(monkeypatch):
+    """Greedy scheduler anchors from utcnow(); freeze time so fixed ISO dates stay on the planning horizon."""
+    class _FixedDateTime:
+        @staticmethod
+        def utcnow():
+            return datetime(2026, 5, 8, 8, 0, 0)
+
+        fromisoformat = staticmethod(datetime.fromisoformat)
+
+    monkeypatch.setattr(scheduler_mod, "datetime", _FixedDateTime)
+
     events = [
         CalendarEvent(
             id="busy",
