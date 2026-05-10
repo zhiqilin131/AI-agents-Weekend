@@ -197,8 +197,26 @@ export function useSlimeCreditsOptional() {
 export function SlimeCreditsChipNav({ compact }: { compact?: boolean }) {
   const ctx = useSlimeCreditsOptional();
   const navigate = useNavigate();
-  if (!ctx?.credits) return null;
+  if (!ctx) return null;
   const { credits, loading } = ctx;
+  if (!credits) {
+    return (
+      <button
+        type="button"
+        onClick={() => navigate('/profile')}
+        disabled={loading}
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-full border border-amber-200/90 bg-amber-50/90 px-2.5 py-1 text-xs font-semibold text-amber-950 shadow-sm backdrop-blur-sm transition hover:border-amber-300',
+          compact && 'px-2 py-0.5 text-[11px]',
+        )}
+        title="Open Profile — if balance stays empty, set VITE_API_ORIGIN on Vercel to your Railway API URL"
+        aria-label="Slime Credits status unavailable — open Profile"
+      >
+        <SlimeCreditIcon className="h-3.5 w-3.5" />
+        <span>{loading ? '…' : '—'}</span>
+      </button>
+    );
+  }
   if (credits.is_unlimited) {
     return (
       <button

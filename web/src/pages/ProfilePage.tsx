@@ -71,7 +71,7 @@ const MEMORY_CAT_LABEL: Record<string, string> = {
 export default function ProfilePage() {
   const navigate = useNavigate();
   const { session, signOut } = useAuth();
-  const { credits: slimeCredits, refresh: refreshSlimeCredits } = useSlimeCredits();
+  const { credits: slimeCredits, loading: slimeCreditsLoading, refresh: refreshSlimeCredits } = useSlimeCredits();
   const [userPriorities, setUserPriorities] = useState('');
   const [clarificationRows, setClarificationRows] = useState<ProfileLineRow[]>([]);
   const [systemRows, setSystemRows] = useState<ProfileLineRow[]>([]);
@@ -428,10 +428,28 @@ export default function ProfilePage() {
                     <>
                       <div className="flex flex-wrap items-baseline gap-2">
                         <span className="text-2xl font-bold tracking-tight text-emerald-900" style={{ fontWeight: 800 }}>
-                          {slimeCredits?.balance ?? '…'}
+                          {slimeCreditsLoading
+                            ? '…'
+                            : slimeCredits
+                              ? String(slimeCredits.display_balance ?? slimeCredits.balance ?? 0)
+                              : '—'}
                         </span>
                         <span className="text-xs font-medium text-gray-500">credits available</span>
                       </div>
+                      {!slimeCreditsLoading && !slimeCredits ? (
+                        <p className="mt-1 text-[11px] leading-relaxed text-amber-900">
+                          Could not load credits from the API. On Vercel, set{' '}
+                          <span className="font-mono text-[10px]">VITE_API_ORIGIN</span> to your Railway API base URL
+                          (no trailing slash), redeploy the frontend, and ensure you are signed in.{' '}
+                          <button
+                            type="button"
+                            className="font-semibold text-violet-700 underline"
+                            onClick={() => void refreshSlimeCredits()}
+                          >
+                            Retry
+                          </button>
+                        </p>
+                      ) : null}
                       <p className="mt-1 text-[11px] leading-relaxed text-gray-600">
                         Powers Buddy&apos;s AI actions. Example costs: Chat 1 · Report 5 · Diary 2 · Memory 3.
                       </p>

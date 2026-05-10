@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Self
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -182,6 +182,29 @@ class Settings(BaseSettings):
     credit_cost_resource_search: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_RESOURCE_SEARCH"))
     credit_cost_tts: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_TTS"))
     credit_cost_asr: int = Field(default=0, ge=0, validation_alias=AliasChoices("CREDIT_COST_ASR"))
+
+    @field_validator("slime_test_code", "slime_voucher_code", mode="before")
+    @classmethod
+    def _strip_outer_quotes_codes(cls, v: object) -> str:
+        """Railway/.env sometimes stores values wrapped in ASCII quotes; strip so hashes match user input."""
+        if v is None:
+            return ""
+        s = str(v).strip()
+        if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+            return s[1:-1].strip()
+        return s
+
+    @field_validator("admin_emails", mode="before")
+    @classmethod
+    def _normalize_admin_emails(cls, v: object) -> str:
+        if v is None:
+            return ""
+        s = str(v).strip()
+        if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+            s = s[1:-1].strip()
+        for ch in ("\u201c", "\u201d", "\u2018", "\u2019"):
+            s = s.replace(ch, "")
+        return s.strip()
 
     @model_validator(mode="after")
     def _supabase_implies_jwt_tenancy(self) -> Self:
