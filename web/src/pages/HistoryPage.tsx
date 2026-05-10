@@ -57,7 +57,9 @@ export default function HistoryPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-8 py-16">
       <div className="max-w-3xl mx-auto">
-        <PageBackButton />
+        <div className="-ml-2 sm:-ml-5 md:-ml-8 lg:-ml-10">
+          <PageBackButton />
+        </div>
         <h1 className="text-3xl text-gray-900 mb-8" style={{ fontWeight: 700 }}>
           Decision history
         </h1>
