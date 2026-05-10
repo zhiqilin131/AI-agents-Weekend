@@ -92,3 +92,20 @@ def ensure_memory_fact_text(fact: ProfileMemoryFact) -> ProfileMemoryFact | None
 
 def active_memory_facts(facts: list[ProfileMemoryFact]) -> list[ProfileMemoryFact]:
     return [f for f in facts if f.status == "active"]
+
+
+def is_slime_owned_memory_fact(fact: ProfileMemoryFact) -> bool:
+    """Facts stored about the Slime companion — excluded from user retrieval / modeling by default."""
+    q = fact.qualifiers or {}
+    owner = str(q.get("memory_owner") or q.get("memoryOwner") or "").strip().lower()
+    if owner in ("slime_companion", "slime", "buddy"):
+        return True
+    sr = (fact.subject_ref or "").strip().lower()
+    if sr in ("slime", "slime_companion", "buddy", "companion", "slime_buddy", "companion_agent"):
+        return True
+    return False
+
+
+def user_scope_memory_facts(facts: list[ProfileMemoryFact]) -> list[ProfileMemoryFact]:
+    """Profile rows about the human user only (Slime companion bucket removed)."""
+    return [f for f in facts if not is_slime_owned_memory_fact(f)]

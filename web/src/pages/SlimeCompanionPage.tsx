@@ -349,10 +349,18 @@ export default function SlimeCompanionPage() {
       <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
         <SheetContent
           side="right"
+          hideClose
           className="w-full overflow-y-auto border-l border-white/45 bg-white/70 shadow-[0_0_40px_rgba(99,102,241,0.12)] backdrop-blur-2xl sm:max-w-md"
         >
-          <SheetHeader className="border-b border-white/50 pb-3">
-            <SheetTitle className="text-violet-950">Slime studio</SheetTitle>
+          <SheetHeader className="flex flex-row items-center justify-between gap-3 border-b border-white/50 pb-3 pt-1">
+            <SheetTitle className="text-left text-violet-950">Slime studio</SheetTitle>
+            <button
+              type="button"
+              onClick={() => setPanelOpen(false)}
+              className="shrink-0 rounded-full border border-violet-200/80 bg-white/90 px-3 py-1.5 text-xs font-semibold text-violet-950 shadow-sm hover:bg-violet-50"
+            >
+              Close
+            </button>
           </SheetHeader>
           <div className="px-4 pb-8 pt-2">
             <SlimePersonalizationForm

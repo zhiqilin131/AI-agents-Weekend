@@ -17,11 +17,18 @@ from foresight_x.config import Settings, load_settings
 from foresight_x.extraction.atomic_claims import run_atomic_claims
 from foresight_x.memory_graph import TemporalGraphMemory
 from foresight_x.orchestration.llm_factory import build_openai_llm
-from foresight_x.profile.memory_structured import active_memory_facts, format_stored_fact_bullet, render_triple_line
+from foresight_x.profile.memory_structured import (
+    active_memory_facts,
+    format_stored_fact_bullet,
+    is_slime_owned_memory_fact,
+    render_triple_line,
+    user_scope_memory_facts,
+)
 from foresight_x.profile.merge import append_profile_memory_records
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import MemoryFactCategory, ProfileMemoryFact
 from foresight_x.shadow.decision_context import build_shadow_decision_context_block
+from foresight_x.shadow.memory_subject_gate import partition_slime_buddy_memory_candidates
 from foresight_x.shadow.memory_durability import (
     MemoryDurabilityResult,
     classify_memory_durability,
@@ -343,6 +350,8 @@ MEMORY FACTS (structured JSON output — LONG-TERM PROFILE ONLY):
   stable preferences, self-descriptions (traits, self-view), ongoing situations with **named** people they treat as real,
   goals, or constraints. A separate durability step drops jokes, hypotheticals, roleplay, and sensitive data unless they
   asked to be remembered — you should still propose serious rows here.
+- **Never** treat your own assistant reply as user biography; only facts grounded in the **user's** words belong here.
+- Use subject_ref **user** only in this mode (no companion-character memory channel).
 - ALSO emit when they explicitly say "remember that…" / real-name corrections (same as before).
 - Skip rows that **duplicate** a fact already listed in [Stable long-term user memory] above (same meaning).
 - Omit vague paraphrases with no new fact ("user is reflecting") — omit instead.
@@ -400,14 +409,17 @@ VOICE:
 {atomic_claims_block}
 
 MEMORY FACTS (structured JSON output — LONG-TERM PROFILE ONLY):
-- Emit 0–6 rows when the user states **concrete autobiographical facts** they present as true: routines or what they did,
-  stable preferences, self-descriptions (traits, self-view), ongoing situations with **named** people they treat as real,
-  goals, or constraints. A separate durability step drops jokes, hypotheticals, roleplay, and sensitive data unless they
-  asked to be remembered — you should still propose serious rows here.
-- ALSO emit when they explicitly say "remember that…" / real-name corrections (same as before).
-- Skip rows that **duplicate** a fact already listed in [Stable long-term user memory] above (same meaning).
-- Omit vague paraphrases with no new fact ("user is reflecting") — omit instead.
-- Typed triples preferred: subject_ref, predicate (snake_case), object_value; evidence quotes the user when possible.
+- Emit 0–6 rows when the **human user** states **concrete autobiographical facts** about **themselves** (I/my/me —
+  including education, job, named people in their life, goals). A durability step drops jokes, hypotheticals, roleplay —
+  still propose serious candidates.
+- **Never** store your own Slime reply, self-introduction, or YOUR character name/catchphrases as user memory — those are
+  assistant output, not user biography.
+- ONLY when the user clearly talks **to/about the Slime** ("your name…", "Slime Buddy…", addressing you by name),
+  you may add rows with subject_ref **slime_companion** for durable companion lore THEY asked to remember about YOU.
+- ALSO emit user rows when they explicitly say "remember that…" / real-name corrections about **themselves**.
+- Skip rows that **duplicate** [Stable long-term user memory] above.
+- Typed triples preferred: subject_ref (**user** vs **slime_companion**), predicate (snake_case), object_value;
+  evidence quotes the user's words when possible.
 
 --- Stable long-term user memory (structured facts on file; may be empty) ---
 {memory_block}
@@ -469,7 +481,7 @@ def run_shadow_turn(
     ]
 
     prof = load_user_profile(settings=s)
-    mem_active = active_memory_facts(list(prof.memory_facts))
+    mem_active = user_scope_memory_facts(active_memory_facts(list(prof.memory_facts)))
     mem_owner_note = ""
     if synthesis_frame == "slime_buddy":
         mem_owner_note = (
@@ -551,7 +563,7 @@ def run_shadow_turn(
     memory_used: list[str] = []
 
     memory_drafts: list[ShadowMemoryFactDraft] = list(turn.memory_facts)
-    if not memory_drafts and atomic_claims:
+    if not memory_drafts and atomic_claims and synthesis_frame != "slime_buddy":
         memory_drafts = _coerce_atomic_claims_to_memory_drafts(atomic_claims)
 
     draft_records: list[ProfileMemoryFact] = []
@@ -594,6 +606,17 @@ def run_shadow_turn(
                 object_value=obj,
                 evidence=(d.evidence or "").strip()[:220],
             )
+        )
+
+    if synthesis_frame == "slime_buddy":
+        slime_nm = str(prof.slime_profile.name).strip() if prof.slime_profile else "Mochi"
+        if not slime_nm:
+            slime_nm = "Mochi"
+        draft_records = partition_slime_buddy_memory_candidates(
+            draft_records,
+            last_user_text=last_user_text,
+            slime_display_name=slime_nm,
+            assistant_reply=reply,
         )
 
     profile_records: list[ProfileMemoryFact] = []
@@ -657,9 +680,11 @@ def run_shadow_turn(
     recorded_profile: list[str] | None = [r.text for r in profile_records] if profile_records else None
 
     if profile_records:
-        combined = " · ".join(r.text for r in profile_records)
-        active_texts = [x.text for x in prof.memory_facts if x.status == "active"]
-        memory_fact_texts_for_grounding = active_texts + (recorded_profile or [])
+        user_obs_records = [r for r in profile_records if not is_slime_owned_memory_fact(r)]
+        combined_shadow = " · ".join(r.text for r in user_obs_records)
+        scoped_active = user_scope_memory_facts([x for x in prof.memory_facts if x.status == "active"])
+        active_texts = [x.text for x in scoped_active]
+        memory_fact_texts_for_grounding = active_texts + [r.text for r in user_obs_records]
         reply, used = _ground_reply_with_memory_preferences(
             reply,
             user_text=last_user_text,
@@ -667,11 +692,14 @@ def run_shadow_turn(
         )
         if used:
             memory_used.extend(used)
-        state = merge_observation(state, combined)
+        if combined_shadow.strip():
+            state = merge_observation(state, combined_shadow)
+        else:
+            state = state.model_copy(update={"turn_count": state.turn_count + 1})
         _schedule_shadow_memory_persist(
             s,
             profile_records,
-            combined,
+            combined_shadow,
             last_user_text,
             reply,
         )
@@ -679,10 +707,11 @@ def run_shadow_turn(
         state = state.model_copy(update={"turn_count": state.turn_count + 1})
         save_shadow_self(state, settings=s)
 
+        scoped_active = user_scope_memory_facts([x for x in prof.memory_facts if x.status == "active"])
         reply, used = _ground_reply_with_memory_preferences(
             reply,
             user_text=last_user_text,
-            memory_fact_texts=[x.text for x in prof.memory_facts if x.status == "active"],
+            memory_fact_texts=[x.text for x in scoped_active],
         )
         if used:
             memory_used.extend(used)

@@ -119,11 +119,14 @@ def prepare_decision_text(
         if clar:
             bits.append("Saved clarification choices: " + "; ".join(clar[:12]))
         if profile.memory_facts:
-            from foresight_x.profile.memory_structured import active_memory_facts, format_memory_fact_prompt_line
+            from foresight_x.profile.memory_structured import (
+                active_memory_facts,
+                format_memory_fact_prompt_line,
+                user_scope_memory_facts,
+            )
 
-            fact_lines = [
-                format_memory_fact_prompt_line(f) for f in active_memory_facts(list(profile.memory_facts))[:20]
-            ]
+            scoped = user_scope_memory_facts(active_memory_facts(list(profile.memory_facts)))
+            fact_lines = [format_memory_fact_prompt_line(f) for f in scoped[:20]]
             bits.append("Structured memory facts: " + " | ".join(fact_lines))
         if profile.inferred_priorities:
             bits.append(

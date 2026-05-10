@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from foresight_x.calendar_agent.schemas import CalendarPreferences
+from foresight_x.profile.memory_structured import active_memory_facts, user_scope_memory_facts
 from foresight_x.schemas import UserProfile
 
 
@@ -40,7 +41,8 @@ def get_calendar_preferences(user_id: str, profile: UserProfile | None) -> Calen
     if profile and profile.about_me:
         chunks.append(profile.about_me)
     if profile and profile.memory_facts:
-        for f in profile.memory_facts[:40]:
+        scoped = user_scope_memory_facts(active_memory_facts(list(profile.memory_facts)))
+        for f in scoped[:40]:
             t = getattr(f, "text", None) or str(f)
             if t:
                 chunks.append(t)

@@ -26,6 +26,7 @@ from foresight_x.diary.schemas import (
 from foresight_x.harness.trace_index import list_traces
 from foresight_x.profile.memory_timestamp_backfill import backfill_memory_fact_timestamps
 from foresight_x.profile.store import load_user_profile, profile_path, save_user_profile
+from foresight_x.profile.memory_structured import user_scope_memory_facts
 from foresight_x.schemas import ProfileMemoryFact
 
 _log = logging.getLogger(__name__)
@@ -261,7 +262,8 @@ def _collect_calendar(
 
 
 def _active_memory_facts(profile_facts: list[ProfileMemoryFact]) -> list[ProfileMemoryFact]:
-    return [f for f in profile_facts if (f.status or "active") != "deprecated"]
+    active = [f for f in profile_facts if (f.status or "active") != "deprecated"]
+    return user_scope_memory_facts(active)
 
 
 def _memory_facts_for_target_day(

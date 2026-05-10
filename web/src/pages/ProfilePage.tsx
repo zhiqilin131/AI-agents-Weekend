@@ -34,7 +34,15 @@ type MemoryFactRow = {
   object_value?: string;
   evidence?: string;
   status?: string;
+  qualifiers?: Record<string, unknown>;
 };
+
+function isSlimeCompanionMemoryFact(f: MemoryFactRow): boolean {
+  const q = f.qualifiers?.memory_owner ?? f.qualifiers?.memoryOwner;
+  if (typeof q === 'string' && ['slime_companion', 'slime', 'buddy'].includes(q.toLowerCase())) return true;
+  const sr = (f.subject_ref || '').trim().toLowerCase();
+  return ['slime_companion', 'buddy', 'companion', 'slime_buddy', 'companion_agent'].includes(sr);
+}
 
 const CHANNEL_LABEL: Record<string, string> = {
   profile: 'Profile',
@@ -181,15 +189,29 @@ export default function ProfilePage() {
     }
   };
 
+  const userMemoryFacts = useMemo(() => memoryFacts.filter((f) => !isSlimeCompanionMemoryFact(f)), [memoryFacts]);
+  const slimeMemoryFacts = useMemo(() => memoryFacts.filter((f) => isSlimeCompanionMemoryFact(f)), [memoryFacts]);
+
   const factsByCat = useMemo(
     () =>
-      memoryFacts.reduce<Record<string, MemoryFactRow[]>>((acc, f) => {
+      userMemoryFacts.reduce<Record<string, MemoryFactRow[]>>((acc, f) => {
         const k = f.category || 'other';
         if (!acc[k]) acc[k] = [];
         acc[k].push(f);
         return acc;
       }, {}),
-    [memoryFacts],
+    [userMemoryFacts],
+  );
+
+  const slimeFactsByCat = useMemo(
+    () =>
+      slimeMemoryFacts.reduce<Record<string, MemoryFactRow[]>>((acc, f) => {
+        const k = f.category || 'other';
+        if (!acc[k]) acc[k] = [];
+        acc[k].push(f);
+        return acc;
+      }, {}),
+    [slimeMemoryFacts],
   );
 
   const memoryCatOrder = useMemo(() => {
@@ -199,6 +221,14 @@ export default function ProfilePage() {
     const rest = existing.filter((k) => !preferred.includes(k)).sort();
     return [...inOrder, ...rest];
   }, [factsByCat]);
+
+  const slimeMemoryCatOrder = useMemo(() => {
+    const preferred = ['identity', 'views', 'behavior', 'goals', 'constraints', 'other'];
+    const existing = Object.keys(slimeFactsByCat);
+    const inOrder = preferred.filter((k) => existing.includes(k));
+    const rest = existing.filter((k) => !preferred.includes(k)).sort();
+    return [...inOrder, ...rest];
+  }, [slimeFactsByCat]);
 
   useEffect(() => {
     if (!memoryCatOrder.length) {
@@ -307,64 +337,131 @@ export default function ProfilePage() {
               {openSections.memory ? (
                 <>
               <p className="mb-2 text-[11px] leading-snug text-gray-500">
-                Categorized facts. Delete only in Edit mode.
+                User-profile facts (about you). Buddy-only notes are grouped separately when you clearly addressed your
+                Slime. Delete only in Edit mode.
               </p>
               {memoryFacts.length === 0 ? (
                 <div className="rounded-lg border border-violet-100 bg-violet-50/40 px-2.5 py-1.5 text-xs text-gray-500">
-                  No structured facts yet — they appear when Shadow stores details you stated.
+                  No structured facts yet — they appear when chat stores details you stated.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-[200px_1fr]">
-                  <div className="rounded-lg border border-gray-200 bg-white/80 p-1.5">
-                    {memoryCatOrder.map((cat) => (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => setSelectedMemoryCat(cat)}
-                        className={`mb-0.5 w-full rounded-md px-2 py-1.5 text-left text-xs md:text-sm ${
-                          selectedMemoryCat === cat ? 'bg-indigo-50 text-indigo-900' : 'text-gray-700 hover:bg-gray-50'
-                        }`}
-                      >
-                        {MEMORY_CAT_LABEL[cat] || cat}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="space-y-2">
-                    {memoryCatOrder.filter((c) => c === selectedMemoryCat).map((cat) => (
-                      <div key={cat}>
-                        <p className="mb-1 text-[10px] uppercase tracking-wide text-indigo-700" style={{ fontWeight: 700 }}>
-                          {MEMORY_CAT_LABEL[cat] || cat}
-                        </p>
-                        <div className="space-y-1.5">
-                          {(factsByCat[cat] || []).map((f) => (
-                            <div key={f.id || f.text} className="rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-800">
-                              <div className="flex items-start justify-between gap-2">
-                                <span className="min-w-0 leading-snug">{f.text}</span>
-                                {memoryEditMode ? (
-                                  <button
-                                    type="button"
-                                    disabled={deletingId === f.id}
-                                    onClick={() => f.id && void deleteMemoryFact(f.id)}
-                                    className="shrink-0 text-xs text-red-700 hover:underline disabled:opacity-40"
-                                  >
-                                    {deletingId === f.id ? '…' : 'Delete'}
-                                  </button>
-                                ) : null}
-                              </div>
-                              {f.predicate && f.object_value ? (
-                                <p className="mt-1 text-[10px] font-mono leading-tight text-gray-500">
-                                  {(f.subject_ref || 'user').trim()} · {f.predicate} · {f.object_value}
-                                </p>
-                              ) : null}
-                              {f.evidence ? <p className="mt-1 text-[10px] italic text-violet-700/90">Evidence: {f.evidence}</p> : null}
-                            </div>
-                          ))}
-                        </div>
+                <>
+                  {userMemoryFacts.length === 0 ? (
+                    <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50/60 px-2.5 py-1.5 text-xs text-gray-600">
+                      No user-profile structured facts yet (Buddy-only rows may appear below).
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[200px_1fr]">
+                      <div className="rounded-lg border border-gray-200 bg-white/80 p-1.5">
+                        {memoryCatOrder.map((cat) => (
+                          <button
+                            key={cat}
+                            type="button"
+                            onClick={() => setSelectedMemoryCat(cat)}
+                            className={`mb-0.5 w-full rounded-md px-2 py-1.5 text-left text-xs md:text-sm ${
+                              selectedMemoryCat === cat ? 'bg-indigo-50 text-indigo-900' : 'text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            {MEMORY_CAT_LABEL[cat] || cat}
+                          </button>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </div>
+
+                      <div className="space-y-2">
+                        {memoryCatOrder.filter((c) => c === selectedMemoryCat).map((cat) => (
+                          <div key={cat}>
+                            <p
+                              className="mb-1 text-[10px] uppercase tracking-wide text-indigo-700"
+                              style={{ fontWeight: 700 }}
+                            >
+                              {MEMORY_CAT_LABEL[cat] || cat}
+                            </p>
+                            <div className="space-y-1.5">
+                              {(factsByCat[cat] || []).map((f) => (
+                                <div
+                                  key={f.id || f.text}
+                                  className="rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-800"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <span className="min-w-0 leading-snug">{f.text}</span>
+                                    {memoryEditMode ? (
+                                      <button
+                                        type="button"
+                                        disabled={deletingId === f.id}
+                                        onClick={() => f.id && void deleteMemoryFact(f.id)}
+                                        className="shrink-0 text-xs text-red-700 hover:underline disabled:opacity-40"
+                                      >
+                                        {deletingId === f.id ? '…' : 'Delete'}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                  {f.predicate && f.object_value ? (
+                                    <p className="mt-1 text-[10px] font-mono leading-tight text-gray-500">
+                                      {(f.subject_ref || 'user').trim()} · {f.predicate} · {f.object_value}
+                                    </p>
+                                  ) : null}
+                                  {f.evidence ? (
+                                    <p className="mt-1 text-[10px] italic text-violet-700/90">Evidence: {f.evidence}</p>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {slimeMemoryFacts.length > 0 ? (
+                    <div className="mt-4 rounded-xl border border-cyan-100/90 bg-gradient-to-br from-cyan-50/90 to-white px-3 py-2.5">
+                      <p className="text-xs font-semibold text-cyan-950">Slime companion memory</p>
+                      <p className="mt-1 text-[11px] leading-snug text-cyan-900/85">
+                        Facts about your Buddy — saved only when you explicitly addressed the Slime (name, “your name…”, “Slime Buddy…”, etc.).
+                      </p>
+                      <div className="mt-2 space-y-3">
+                        {slimeMemoryCatOrder.map((cat) => (
+                          <div key={cat}>
+                            <p
+                              className="mb-1 text-[10px] uppercase tracking-wide text-cyan-800"
+                              style={{ fontWeight: 700 }}
+                            >
+                              {MEMORY_CAT_LABEL[cat] || cat}
+                            </p>
+                            <div className="space-y-1.5">
+                              {(slimeFactsByCat[cat] || []).map((f) => (
+                                <div
+                                  key={f.id || f.text}
+                                  className="rounded-lg border border-cyan-100 bg-white px-2.5 py-2 text-sm text-gray-800"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <span className="min-w-0 leading-snug">{f.text}</span>
+                                    {memoryEditMode ? (
+                                      <button
+                                        type="button"
+                                        disabled={deletingId === f.id}
+                                        onClick={() => f.id && void deleteMemoryFact(f.id)}
+                                        className="shrink-0 text-xs text-red-700 hover:underline disabled:opacity-40"
+                                      >
+                                        {deletingId === f.id ? '…' : 'Delete'}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                  {f.predicate && f.object_value ? (
+                                    <p className="mt-1 text-[10px] font-mono leading-tight text-gray-500">
+                                      {(f.subject_ref || 'slime_companion').trim()} · {f.predicate} · {f.object_value}
+                                    </p>
+                                  ) : null}
+                                  {f.evidence ? (
+                                    <p className="mt-1 text-[10px] italic text-cyan-800/90">Evidence: {f.evidence}</p>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </>
               )}
                 </>
               ) : null}

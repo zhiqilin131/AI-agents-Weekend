@@ -9,7 +9,11 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from foresight_x.profile.memory_structured import active_memory_facts, format_memory_fact_prompt_line
+from foresight_x.profile.memory_structured import (
+    active_memory_facts,
+    format_memory_fact_prompt_line,
+    user_scope_memory_facts,
+)
 from foresight_x.config import Settings
 from foresight_x.profile.merge import append_clarification_to_profile, append_profile_memory_records
 from foresight_x.profile.store import load_user_profile, save_user_profile
@@ -104,7 +108,7 @@ def filter_memory_for_clarify(
     """Select a small set of memory lines relevant to the message + domain (not full dump)."""
     um = _token_set(user_message)
     dom_keys = set(DOMAIN_KEYWORDS.get(domain, ()))
-    facts = active_memory_facts(list(profile.memory_facts))
+    facts = user_scope_memory_facts(active_memory_facts(list(profile.memory_facts)))
     scored: list[tuple[float, str]] = []
     for f in facts:
         line = format_memory_fact_prompt_line(f)
@@ -354,7 +358,10 @@ def _pick_candidates_ranked(
 ) -> list[tuple[float, PersonalizedCandidate]]:
     profile_blob = " ".join(
         profile.clarification_priority_texts()
-        + [format_memory_fact_prompt_line(f) for f in active_memory_facts(list(profile.memory_facts))[:24]]
+        + [
+            format_memory_fact_prompt_line(f)
+            for f in user_scope_memory_facts(active_memory_facts(list(profile.memory_facts)))[:24]
+        ]
         + profile.profile_channel_priority_texts()
     )
     domain = (llm_out.domain or "other").lower()
@@ -511,7 +518,10 @@ def run_personalized_clarify_gate(
 
     profile_blob = " ".join(
         prof.clarification_priority_texts()
-        + [format_memory_fact_prompt_line(f) for f in active_memory_facts(list(prof.memory_facts))[:24]]
+        + [
+            format_memory_fact_prompt_line(f)
+            for f in user_scope_memory_facts(active_memory_facts(list(prof.memory_facts)))[:24]
+        ]
         + prof.profile_channel_priority_texts()
     )
     best_score = final_candidate_score(

@@ -13,6 +13,7 @@ from foresight_x.profile.memory_structured import (
     normalize_token,
     single_slot_predicate,
     triple_key,
+    user_scope_memory_facts,
 )
 from foresight_x.schemas import (
     MemoryFactCategory,
@@ -96,7 +97,7 @@ def merge_profile_into_user_state(user_state: UserState, profile: UserProfile) -
     profile_only = profile.profile_channel_priority_texts()
     clar = profile.clarification_priority_texts()
     inferred = list(profile.inferred_priorities)
-    facts = active_memory_facts(list(profile.memory_facts))
+    facts = user_scope_memory_facts(active_memory_facts(list(profile.memory_facts)))
     fact_strings = [format_memory_fact_prompt_line(x) for x in facts]
     combined = list(dict.fromkeys([*profile_only, *clar, *inferred, *fact_strings]))
     merged_goals = list(dict.fromkeys([*profile_only, *clar, *inferred, *fact_strings, *user_state.goals]))
