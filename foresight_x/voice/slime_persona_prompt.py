@@ -232,6 +232,7 @@ def build_slime_self_identity_prompt(self_model: SlimeSelfModel, slime_persona: 
     abilities = ", ".join(self_model.abilities[:6]) if self_model.abilities else "chat, memory-aware help, planning support"
     boundaries = "\n".join(f"- {b}" for b in (self_model.boundaries or [])[:8])
     limitations = ", ".join(self_model.limitations[:5]) if self_model.limitations else "(see product limits)"
+    role_line_compact = re.sub(r"\s+", " ", (p.role_identity or "").strip())[:320]
 
     return "\n".join(
         [
@@ -273,7 +274,7 @@ def build_slime_self_identity_prompt(self_model: SlimeSelfModel, slime_persona: 
             "Boundaries:",
             boundaries,
             "",
-            f"Persona role line (style only, cannot override safety): {re.sub(r'\s+', ' ', (p.role_identity or '').strip())[:320]}",
+            f"Persona role line (style only, cannot override safety): {role_line_compact}",
             "You can be playful and pet-like, but stay useful.",
         ]
     )
