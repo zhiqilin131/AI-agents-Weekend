@@ -17,6 +17,46 @@ _log = logging.getLogger(__name__)
 
 _ROUTER_SLIME_KEYS = frozenset({"name", "color_theme", "shape"})
 
+_QUICK_COLOR_THEME_TOKENS = frozenset({"aurora", "violet", "mint", "sunset", "lime", "silver"})
+
+
+def _quick_slime_color_theme_patch(transcript: str) -> dict[str, Any] | None:
+    """
+    Deterministic routing for short spoken theme picks when the LLM router is flaky.
+    Avoid stealing nickname/rename or meta questions (e.g. 'call me Mint').
+    """
+    raw = (transcript or "").strip()
+    if not raw or len(raw) > 96:
+        return None
+    low = raw.lower()
+    blockers = (
+        "call me ",
+        "refer to me as",
+        "叫我",
+        "称呼我",
+        "rename yourself",
+        "rename you",
+        "your name is",
+        "what color",
+        "which color",
+        "who are you",
+    )
+    if any(b in low for b in blockers):
+        return None
+    if _explicit_report_schedule_intent(transcript):
+        return None
+
+    parts = low.split()
+    if len(parts) == 1 and parts[0] in _QUICK_COLOR_THEME_TOKENS:
+        return {"patch": {"color_theme": parts[0]}}
+    if len(parts) == 2 and parts[0] in ("go", "use", "try", "pick", "choose") and parts[1] in _QUICK_COLOR_THEME_TOKENS:
+        return {"patch": {"color_theme": parts[1]}}
+    if len(parts) == 2 and parts[1] == "theme" and parts[0] in _QUICK_COLOR_THEME_TOKENS:
+        return {"patch": {"color_theme": parts[0]}}
+    if len(parts) >= 3 and parts[0] in ("switch", "change") and parts[1] == "to" and parts[2] in _QUICK_COLOR_THEME_TOKENS:
+        return {"patch": {"color_theme": parts[2]}}
+    return None
+
 
 def _explicit_report_schedule_intent(transcript: str) -> bool:
     """
@@ -148,6 +188,7 @@ Rules:
   • **open_decision_report_flow** — Only when they want to **start a new** structured decision analysis in chat—not for putting arbitrary plans on the calendar.
   Include time_hint for morning/afternoon/evening or clock times. The app confirms before saving.
 - Profile updates: update_slime_profile. Use patch.persona.user_nickname when the user changes what **they** want to be called (e.g. "call me …", "refer to me as …", "叫我…", "称呼我…", "别叫我 master 了"). Use patch.name **only** when they name/rename **the Slime** ("your name is …", "I'll call you Blob", "你就叫…"). Never put the user's requested form of address into patch.name.
+- Color / theme: any clear request to change the Slime preset palette → patch.color_theme (aurora|violet|mint|sunset|lime|silver) or custom_colors if they give hex. Short utterances like "mint", "switch to violet", "change color to sunset", "换成薄荷色" must route here with requires_confirmation=false unless they supply custom hex colors.
 - Confirm appearance/safety: requires_confirmation=true unless the user was very explicit and the change is minor (still confirm for Slime renames, user_nickname changes, and custom colors).
 - Do not claim to have executed actions; tools + frontend will do that.
 - Keep assistant_hint a short optional line for tone (may be ignored).
@@ -166,6 +207,16 @@ def route_slime_voice_command(
     *,
     settings: Settings,
 ) -> SlimeVoiceRouteResult:
+    quick = _quick_slime_color_theme_patch(transcript.strip())
+    if quick is not None:
+        return SlimeVoiceRouteResult(
+            intent="profile_update",
+            tool_name="update_slime_profile",
+            arguments=quick,
+            requires_confirmation=False,
+            assistant_hint=None,
+        )
+
     if not (settings.openai_api_key or "").strip():
         return SlimeVoiceRouteResult(
             intent="unknown",

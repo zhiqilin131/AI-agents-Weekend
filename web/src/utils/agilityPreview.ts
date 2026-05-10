@@ -16,6 +16,7 @@ export function buildLocalAgilityPreview(args: {
   riskLabels?: string[];
   nextActions?: Array<{ text: string; deadline?: string }>;
 }): AgilityPreview {
+  void args.optionName;
   const steps = (args.nextActions || [])
     .slice(0, 3)
     .map((a, i) => ({
@@ -24,9 +25,7 @@ export function buildLocalAgilityPreview(args: {
       deadline_hint: a.deadline,
     }));
   return {
-    summary:
-      `If you choose "${args.optionName}", the next few days are mainly about creating momentum while protecting focused time. ` +
-      `The key risk is fragmentation across too many small commitments.`,
+    summary: '',
     likely_consequences: [
       'Early progress depends on turning intent into calendar-protected blocks quickly.',
       'Execution quality will improve if task switching is reduced during the first week.',
@@ -41,10 +40,7 @@ export function buildLocalAgilityPreview(args: {
     ],
     risk_windows: args.riskLabels && args.riskLabels.length > 0
       ? args.riskLabels.slice(0, 3).map((r) => `Watch for ${r} under time pressure.`)
-      : [
-          'First two days: context-switch overload risk.',
-          'Mid-week: plan drift if no review checkpoint is scheduled.',
-        ],
+      : ['Mid-week: plan drift if no review checkpoint is scheduled.'],
     first_steps: steps.length > 0 ? steps : [
       { title: 'Define first executable task and schedule it', duration_minutes: 60 },
       { title: 'Prepare required material/checklist', duration_minutes: 45 },

@@ -45,6 +45,48 @@ _PROFILE_MARKERS_EN = (
     "称呼我",
 )
 
+# Slime Studio color/theme/shape-style tweaks — must run NL patch when router falls through to chat.
+_PROFILE_APPEARANCE_EN = (
+    "change color",
+    "switch color",
+    "color to ",
+    "theme to ",
+    "switch theme",
+    "switch your theme",
+    "your color to",
+    "your theme to",
+    "new theme",
+    "new color",
+    "different color",
+    "different theme",
+    "pick a theme",
+    "pick the theme",
+    "pick a color",
+    "pick the color",
+    "choose a theme",
+    "choose the theme",
+    "choose a color",
+    "choose the color",
+    "slime theme",
+    "color theme",
+)
+
+_PROFILE_APPEARANCE_ZH = (
+    "换颜色",
+    "换个颜色",
+    "改颜色",
+    "换主题",
+    "换个主题",
+    "主题换成",
+    "颜色换成",
+    "配色",
+    "主题色",
+    "换成薄荷",
+    "换成紫色",
+    "薄荷色",
+    "紫色主题",
+)
+
 _THREAD_MARKERS_EN = (
     r"\bwhat did i just (say|ask)\b",
     r"\brepeat what i\b",
@@ -108,6 +150,10 @@ def classify_slime_intent(message: str, *, recent_snippet: str = "") -> SlimeInt
         return SlimeIntentResult(intent="calendar_command", confidence=0.78)
     if any(m in low for m in _PROFILE_MARKERS_EN):
         return SlimeIntentResult(intent="profile_update", confidence=0.72)
+    if any(m in low for m in _PROFILE_APPEARANCE_EN):
+        return SlimeIntentResult(intent="profile_update", confidence=0.74)
+    if any(m in raw for m in _PROFILE_APPEARANCE_ZH):
+        return SlimeIntentResult(intent="profile_update", confidence=0.74)
 
     for pat in _THREAD_MARKERS_EN:
         if re.search(pat, low):
