@@ -13,12 +13,20 @@ import type { SlimeDecisionSuggestion } from '../features/slime/SlimeVoiceAgent'
 import { SlimeVoiceAgent } from '../features/slime/SlimeVoiceAgent';
 import { MemoryEvidenceParticles } from '../app/components/profile/MemoryEvidenceParticles';
 import type { MemoryEvidenceItem } from '../app/components/profile/memoryEvidenceTypes';
+import { useAuth } from '../auth/AuthContext';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../hooks/useSlimeProfile';
 import { useDecisionReportStream } from '../hooks/useDecisionReportStream';
 import { apiFetch } from '../utils/apiFetch';
 import { primeSpeechSynthesisFromGesture } from '../app/hooks/useSpeechSynthesis';
 
-const BUDDY_THREAD_STORAGE_KEY = 'slimeBuddyShadowThreadId';
+/** Legacy single-key storage; per-user keys are ``${prefix}:${supabaseUserId}``. */
+const BUDDY_THREAD_STORAGE_PREFIX = 'slimeBuddyShadowThreadId';
+
+function buddyThreadStorageKey(userId: string | null | undefined): string | null {
+  const u = userId?.trim();
+  if (!u) return null;
+  return `${BUDDY_THREAD_STORAGE_PREFIX}:${u}`;
+}
 
 type BuddyCornerToast = {
   message: string;
@@ -28,6 +36,8 @@ type BuddyCornerToast = {
 export default function SlimeCompanionPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { session } = useAuth();
+  const authUserId = session?.user?.id ?? null;
   const { slimeProfile, updateSlimeProfile, resetSlimeProfile, refreshSlimeProfile } = useSlimeProfile();
   const [slimeDraft, setSlimeDraft] = useState(DEFAULT_SLIME_PROFILE);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -37,25 +47,38 @@ export default function SlimeCompanionPage() {
   const [advisorState, setAdvisorState] = useState<SlimeAdvisorState>('idle');
   const [memoryParticleItems, setMemoryParticleItems] = useState<MemoryEvidenceItem[]>([]);
   const [memoryParticlesActive, setMemoryParticlesActive] = useState(false);
-  const [buddyThreadId, setBuddyThreadId] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(BUDDY_THREAD_STORAGE_KEY);
-    } catch {
-      return null;
-    }
-  });
+  const [buddyThreadId, setBuddyThreadId] = useState<string | null>(null);
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const reportStream = useDecisionReportStream();
 
-  const persistThreadId = useCallback((id: string) => {
-    setBuddyThreadId(id);
-    try {
-      localStorage.setItem(BUDDY_THREAD_STORAGE_KEY, id);
-    } catch {
-      /* ignore */
+  const persistThreadId = useCallback(
+    (id: string) => {
+      setBuddyThreadId(id);
+      const k = buddyThreadStorageKey(authUserId);
+      if (!k) return;
+      try {
+        localStorage.setItem(k, id);
+        localStorage.removeItem(BUDDY_THREAD_STORAGE_PREFIX);
+      } catch {
+        /* ignore */
+      }
+    },
+    [authUserId],
+  );
+
+  useEffect(() => {
+    const k = buddyThreadStorageKey(authUserId);
+    if (!k) {
+      setBuddyThreadId(null);
+      return;
     }
-  }, []);
+    try {
+      setBuddyThreadId(localStorage.getItem(k));
+    } catch {
+      setBuddyThreadId(null);
+    }
+  }, [authUserId]);
 
   const flashBuddyCornerToast = useCallback((message: string, tone: BuddyCornerToast['tone']) => {
     if (buddyCornerToastTimerRef.current != null) {

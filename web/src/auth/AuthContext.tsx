@@ -1,6 +1,6 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { setAuthAccessToken } from './authTokenBridge';
+import { registerAuthSessionBridge, setAuthAccessToken, setAuthUserId } from './authTokenBridge';
 
 export type AuthContextValue = {
   supabase: SupabaseClient | null;
@@ -27,6 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!supabase) {
       setSession(null);
       setAuthAccessToken(null);
+      setAuthUserId(null);
       setLoading(false);
       return;
     }
@@ -36,12 +37,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (cancelled) return;
       setSession(s);
       setAuthAccessToken(s?.access_token ?? null);
+      setAuthUserId(s?.user?.id ?? null);
       setLoading(false);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
       setAuthAccessToken(s?.access_token ?? null);
+      setAuthUserId(s?.user?.id ?? null);
     });
 
     return () => {
@@ -50,9 +53,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [supabase]);
 
+  useEffect(() => {
+    if (!supabase) {
+      registerAuthSessionBridge(null);
+      return;
+    }
+    registerAuthSessionBridge({
+      resolveAccessToken: async () => {
+        const { data } = await supabase.auth.getSession();
+        return data.session?.access_token ?? null;
+      },
+      refreshSession: async () => {
+        await supabase.auth.refreshSession();
+      },
+    });
+    return () => registerAuthSessionBridge(null);
+  }, [supabase]);
+
   const signOut = async () => {
     if (supabase) await supabase.auth.signOut();
     setAuthAccessToken(null);
+    setAuthUserId(null);
     setSession(null);
   };
 

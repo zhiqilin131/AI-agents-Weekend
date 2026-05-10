@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { SlimePersona, SlimeProfile, SlimeSelfModelView } from '../app/model';
 import { DEFAULT_SLIME_PERSONA } from '../features/slime/slimePersonaPresets';
+import { useAuth } from '../auth/AuthContext';
+import { getAuthUserId } from '../auth/authTokenBridge';
 import { apiFetch } from '../utils/apiFetch';
+
+/** Single-tenant / no-JWT mode: one cache bucket for the whole origin. */
+const SLIME_PROFILE_CACHE_LOCAL = '__local__';
+
+function slimeProfileCacheKey(): string {
+  return getAuthUserId() ?? SLIME_PROFILE_CACHE_LOCAL;
+}
 
 /** PATCH body: use `null` to clear optional fields on the server. */
 export type SlimeProfileApiPatch = Partial<Omit<SlimeProfile, 'customColors' | 'voice' | 'persona'>> & {
@@ -70,8 +79,8 @@ function toCamelPersona(raw: unknown): SlimePersona {
   };
 }
 
-let cached: SlimeProfile | null = null;
-let inflight: Promise<SlimeProfile> | null = null;
+const profileCache = new Map<string, SlimeProfile>();
+const profileInflight = new Map<string, Promise<SlimeProfile>>();
 const listeners = new Set<(profile: SlimeProfile) => void>();
 
 function normalizeCustomColors(raw: unknown): SlimeProfile['customColors'] | undefined {
@@ -137,34 +146,46 @@ function notify(profile: SlimeProfile) {
 }
 
 async function fetchSlimeProfile(): Promise<SlimeProfile> {
-  if (cached) return cached;
-  if (inflight) return inflight;
-  inflight = apiFetch('/api/profile/slime', { cache: 'no-store' })
+  const key = slimeProfileCacheKey();
+  const hit = profileCache.get(key);
+  if (hit) return hit;
+  let pending = profileInflight.get(key);
+  if (pending) return pending;
+
+  pending = apiFetch('/api/profile/slime', { cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load slime profile'))))
     .then((data) => {
-      cached = toCamelProfile(data);
-      notify(cached);
-      return cached;
+      const prof = toCamelProfile(data);
+      if (slimeProfileCacheKey() !== key) {
+        profileInflight.delete(key);
+        return fetchSlimeProfile();
+      }
+      profileCache.set(key, prof);
+      notify(prof);
+      return prof;
     })
     .catch(() => {
-      const fallback = cached ?? { ...DEFAULT_SLIME_PROFILE };
+      const fallback = profileCache.get(key) ?? { ...DEFAULT_SLIME_PROFILE };
       return fallback;
     })
     .finally(() => {
-      inflight = null;
+      profileInflight.delete(key);
     });
-  return inflight;
+
+  profileInflight.set(key, pending);
+  return pending;
 }
 
 /** After persona create/delete (no full reload): drop cache and refetch for all listeners. */
 export async function refetchSlimeProfileGlobal(): Promise<SlimeProfile> {
-  cached = null;
-  inflight = null;
+  const key = slimeProfileCacheKey();
+  profileCache.delete(key);
+  profileInflight.delete(key);
   try {
     const r = await apiFetch('/api/profile/slime', { cache: 'no-store' });
     if (!r.ok) throw new Error('Failed to load slime profile');
     const p = toCamelProfile(await r.json());
-    cached = p;
+    profileCache.set(slimeProfileCacheKey(), p);
     notify(p);
     return p;
   } catch {
@@ -175,8 +196,13 @@ export async function refetchSlimeProfileGlobal(): Promise<SlimeProfile> {
 }
 
 export function useSlimeProfile() {
-  const [slimeProfile, setSlimeProfile] = useState<SlimeProfile>(cached ?? DEFAULT_SLIME_PROFILE);
-  const [isLoading, setIsLoading] = useState<boolean>(cached == null);
+  const { session } = useAuth();
+  const userPart = session?.user?.id ?? SLIME_PROFILE_CACHE_LOCAL;
+
+  const [slimeProfile, setSlimeProfile] = useState<SlimeProfile>(
+    () => profileCache.get(userPart) ?? DEFAULT_SLIME_PROFILE,
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(() => !profileCache.has(userPart));
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -187,8 +213,14 @@ export function useSlimeProfile() {
   }, []);
 
   useEffect(() => {
+    const hit = profileCache.get(userPart);
+    if (hit) setSlimeProfile(hit);
+    else setSlimeProfile({ ...DEFAULT_SLIME_PROFILE });
+  }, [userPart]);
+
+  useEffect(() => {
     let cancelled = false;
-    setIsLoading(cached == null);
+    setIsLoading(!profileCache.has(userPart));
     void fetchSlimeProfile()
       .then((p) => {
         if (cancelled) return;
@@ -204,7 +236,7 @@ export function useSlimeProfile() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userPart]);
 
   const updateSlimeProfile = useCallback(async (patch: SlimeProfileApiPatch): Promise<SlimeProfile> => {
     setError(null);
@@ -218,7 +250,7 @@ export function useSlimeProfile() {
       throw new Error(msg || 'Failed to update slime profile');
     }
     const next = toCamelProfile(await res.json());
-    cached = next;
+    profileCache.set(slimeProfileCacheKey(), next);
     notify(next);
     return next;
   }, []);
@@ -240,19 +272,20 @@ export function useSlimeProfile() {
   );
 
   const refreshSlimeProfile = useCallback(async () => {
-    const prev = cached;
-    cached = null;
-    inflight = null;
+    const key = slimeProfileCacheKey();
+    const prev = profileCache.get(key);
+    profileCache.delete(key);
+    profileInflight.delete(key);
     try {
       const r = await apiFetch('/api/profile/slime', { cache: 'no-store' });
       if (!r.ok) throw new Error('Failed to load slime profile');
       const p = toCamelProfile(await r.json());
-      cached = p;
+      profileCache.set(slimeProfileCacheKey(), p);
       notify(p);
       return p;
     } catch {
-      cached = prev;
       if (prev) {
+        profileCache.set(key, prev);
         notify(prev);
         return prev;
       }
