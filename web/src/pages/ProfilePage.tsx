@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
 import { apiFetch } from '../utils/apiFetch';
+import { SlimeCreditIcon } from '../app/components/credits/SlimeCreditIcon';
+import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
+import { Button } from '../app/components/ui/button';
+import { Input } from '../app/components/ui/input';
 import { cn } from '../app/components/ui/utils';
 import { useAuth } from '../auth/AuthContext';
 import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
@@ -67,6 +71,7 @@ const MEMORY_CAT_LABEL: Record<string, string> = {
 export default function ProfilePage() {
   const navigate = useNavigate();
   const { session, signOut } = useAuth();
+  const { credits: slimeCredits, refresh: refreshSlimeCredits } = useSlimeCredits();
   const [userPriorities, setUserPriorities] = useState('');
   const [clarificationRows, setClarificationRows] = useState<ProfileLineRow[]>([]);
   const [systemRows, setSystemRows] = useState<ProfileLineRow[]>([]);
@@ -81,11 +86,81 @@ export default function ProfilePage() {
   const [memoryEditMode, setMemoryEditMode] = useState(false);
   const [selectedMemoryCat, setSelectedMemoryCat] = useState<string>('');
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    credits: true,
     priorities: true,
     memory: false,
     legacy: false,
     context: false,
   });
+
+  const [redeemCodeInput, setRedeemCodeInput] = useState('');
+  const [creditRedeemMsg, setCreditRedeemMsg] = useState<string | null>(null);
+  const [creditRedeemErr, setCreditRedeemErr] = useState<string | null>(null);
+  const [creditTxBusy, setCreditTxBusy] = useState(false);
+  const [recentCreditTx, setRecentCreditTx] = useState<
+    Array<{ type?: string; amount?: number; reason?: string; feature?: string; created_at?: string }>
+  >([]);
+
+  const loadCreditTx = useCallback(async () => {
+    setCreditTxBusy(true);
+    try {
+      const res = await apiFetch('/api/usage/transactions?limit=8');
+      if (!res.ok) return;
+      const data = (await res.json()) as { transactions?: typeof recentCreditTx };
+      setRecentCreditTx(Array.isArray(data.transactions) ? data.transactions : []);
+    } finally {
+      setCreditTxBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCreditTx();
+  }, [loadCreditTx, slimeCredits?.balance, slimeCredits?.display_balance]);
+
+  const redeemProfileCode = async () => {
+    setCreditRedeemErr(null);
+    setCreditRedeemMsg(null);
+    const code = redeemCodeInput.trim();
+    if (!code) {
+      setCreditRedeemErr('Enter a code first.');
+      return;
+    }
+    try {
+      const resV = await apiFetch('/api/usage/redeem-voucher', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const jV = (await resV.json()) as { ok?: boolean; message?: string; error?: string };
+      if (jV.ok) {
+        setCreditRedeemMsg(typeof jV.message === 'string' ? jV.message : 'Redeemed.');
+        setRedeemCodeInput('');
+        await refreshSlimeCredits();
+        await loadCreditTx();
+        return;
+      }
+      if (jV.error === 'already_redeemed') {
+        setCreditRedeemErr(typeof jV.message === 'string' ? jV.message : 'You already used this code.');
+        return;
+      }
+      const resT = await apiFetch('/api/usage/redeem-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const jT = (await resT.json()) as { ok?: boolean; message?: string };
+      if (!jT.ok) {
+        setCreditRedeemErr(typeof jT.message === 'string' ? jT.message : 'That code is not valid.');
+        return;
+      }
+      setCreditRedeemMsg(typeof jT.message === 'string' ? jT.message : 'Redeemed.');
+      setRedeemCodeInput('');
+      await refreshSlimeCredits();
+      await loadCreditTx();
+    } catch {
+      setCreditRedeemErr('Network error — try again.');
+    }
+  };
 
   const load = useCallback(async () => {
     setError(null);
@@ -300,6 +375,14 @@ export default function ProfilePage() {
         {message && (
           <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-sm text-emerald-900">{message}</div>
         )}
+        {creditRedeemMsg ? (
+          <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-sm text-emerald-900">
+            {creditRedeemMsg}
+          </div>
+        ) : null}
+        {creditRedeemErr ? (
+          <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-sm text-rose-800">{creditRedeemErr}</div>
+        ) : null}
 
         <div className="space-y-2">
           <div className="flex items-center justify-end">
@@ -313,6 +396,98 @@ export default function ProfilePage() {
           </div>
 
           <main className="space-y-2">
+            <section
+              id="profile-slime-credits"
+              className="rounded-xl border border-emerald-100/90 bg-gradient-to-br from-white/90 via-emerald-50/40 to-violet-50/50 p-3 shadow-[0_8px_24px_rgba(16,185,129,0.08)] backdrop-blur-md md:rounded-2xl md:p-3.5"
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <SlimeCreditIcon className="h-7 w-7" />
+                  <label className="text-sm text-gray-900" style={{ fontWeight: 700 }}>
+                    Slime Credits
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleSection('credits')}
+                  className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs"
+                >
+                  {openSections.credits ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+              {openSections.credits ? (
+                <>
+                  {slimeCredits?.is_unlimited ? (
+                    <div className="space-y-1 text-sm text-gray-700">
+                      <p className="font-semibold text-violet-900">Unlimited Admin Access</p>
+                      <p className="text-xs leading-relaxed text-gray-600">
+                        You are not limited by Slime Credits. Buddy can run AI actions without counting credits.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-baseline gap-2">
+                        <span className="text-2xl font-bold tracking-tight text-emerald-900" style={{ fontWeight: 800 }}>
+                          {slimeCredits?.balance ?? '…'}
+                        </span>
+                        <span className="text-xs font-medium text-gray-500">credits available</span>
+                      </div>
+                      <p className="mt-1 text-[11px] leading-relaxed text-gray-600">
+                        Powers Buddy&apos;s AI actions. Example costs: Chat 1 · Report 5 · Diary 2 · Memory 3.
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Input
+                          value={redeemCodeInput}
+                          onChange={(e) => setRedeemCodeInput(e.target.value)}
+                          placeholder="Voucher or testing code"
+                          className="h-9 min-w-[200px] flex-1 bg-white/90 text-sm"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void redeemProfileCode();
+                          }}
+                        />
+                        <Button type="button" size="sm" className="shrink-0" onClick={() => void redeemProfileCode()}>
+                          Redeem
+                        </Button>
+                      </div>
+                      <div className="mt-4 border-t border-emerald-100/80 pt-3">
+                        <div className="mb-1 flex items-center justify-between">
+                          <p className="text-[11px] font-semibold text-gray-700">Recent usage</p>
+                          <button
+                            type="button"
+                            className="text-[10px] text-violet-700 underline disabled:opacity-40"
+                            disabled={creditTxBusy}
+                            onClick={() => void loadCreditTx()}
+                          >
+                            Refresh
+                          </button>
+                        </div>
+                        {recentCreditTx.length === 0 ? (
+                          <p className="text-[11px] text-gray-500">No transactions yet.</p>
+                        ) : (
+                          <ul className="space-y-1 text-[11px] text-gray-700">
+                            {recentCreditTx.slice(0, 5).map((tx) => {
+                              const amt = typeof tx.amount === 'number' ? tx.amount : 0;
+                              const sign = amt > 0 ? '+' : '';
+                              const label = (tx.reason || tx.feature || tx.type || 'Activity').slice(0, 48);
+                              return (
+                                <li key={`${tx.created_at}-${label}-${amt}`} className="flex justify-between gap-2 border-b border-gray-100/80 pb-1 last:border-0">
+                                  <span className="min-w-0 truncate">{label}</span>
+                                  <span className={cn('shrink-0 font-semibold', amt < 0 ? 'text-rose-700' : 'text-emerald-700')}>
+                                    {sign}
+                                    {amt}
+                                  </span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : null}
+            </section>
+
             <section
               id="profile-priorities"
               className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl md:p-3.5"

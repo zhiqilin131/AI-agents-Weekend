@@ -17,6 +17,7 @@ import { apiFetch } from '../utils/apiFetch';
 import { MainNavButtons } from '../app/components/MainNavButtons';
 import {
   AgilityPreview as AgilityPreviewSidebar,
+  agilityPreviewSidebarHasContent,
   type AgilityPreviewData,
 } from '../app/components/AgilityPreview';
 import { buildLocalAgilityPreview, mapPreviewStepsToTasks, type AgilityPreview } from '../utils/agilityPreview';
@@ -1172,7 +1173,7 @@ export default function ExecutionPlannerPage() {
           </div>
 
           <aside className="min-w-0 space-y-4 xl:sticky xl:top-6 xl:self-start">
-            {preview ? (
+            {preview && agilityPreviewSidebarHasContent(preview as unknown as AgilityPreviewData) ? (
               <div className={shellCard}>
                 <AgilityPreviewSidebar preview={preview as unknown as AgilityPreviewData} variant="sidebar" />
               </div>

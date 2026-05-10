@@ -19,6 +19,8 @@ data/evaluation_logs/*.jsonl
 data/graph/*.json
 data/profiles/*.json
 data/chat_threads/
+# Slime Credits balances / ledger (per-deploy or per-user runtime)
+data/usage/
 # stray local chroma artifact
 8ab6236a-46d7-40d6-9b65-1d340327115e/
 web/node_modules/

@@ -120,6 +120,18 @@ from foresight_x.auth import (
     supabase_user_ctx_reset,
     supabase_user_ctx_set,
 )
+from foresight_x.usage.credits import (
+    check_credits,
+    consume_credits,
+    credit_cost_for_feature,
+    credits_api_payload,
+    get_credit_balance,
+    list_transactions_json,
+    redeem_test_code,
+    redeem_voucher_code,
+    refund_for_transaction,
+)
+from foresight_x.usage.schemas import CreditFeature, CreditTransaction
 from foresight_x.db.supabase_client import get_supabase_for_user
 from foresight_x.decision_algorithms import (
     build_agility_preview,
@@ -161,6 +173,73 @@ _log = logging.getLogger(__name__)
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _credit_header_request_id(request: Request) -> str | None:
+    return (request.headers.get("x-credit-request-id") or "").strip() or None
+
+
+def _credit_actor_email() -> str | None:
+    ctx = get_supabase_user_for_request()
+    if not isinstance(ctx, dict):
+        return None
+    em = str(ctx.get("email") or "").strip()
+    return em or None
+
+
+def _insufficient_credits_response(check) -> JSONResponse:
+    bal = check.balance
+    return JSONResponse(
+        status_code=402,
+        content={
+            "error": "insufficient_credits",
+            "message": f"You need {check.required} Slime Credits for this action.",
+            "balance": bal,
+            "required": check.required,
+        },
+    )
+
+
+def _credit_gate(
+    settings,
+    feature: CreditFeature,
+    *,
+    request_id: str | None,
+    metadata: dict | None = None,
+) -> tuple[CreditTransaction | None, JSONResponse | None]:
+    """Returns (charge_tx_or_none_if_unlimited_or_disabled, error_402_or_none)."""
+    uid = settings.foresight_user_id
+    email = _credit_actor_email()
+    cost = credit_cost_for_feature(feature, settings=settings)
+    chk = check_credits(uid, feature, cost, user_email=email, settings=settings)
+    if not chk.allowed:
+        return None, _insufficient_credits_response(chk)
+    try:
+        tx = consume_credits(
+            uid,
+            feature,
+            cost,
+            request_id,
+            metadata=metadata,
+            user_email=email,
+            settings=settings,
+        )
+        return tx, None
+    except RuntimeError:
+        try:
+            bal = get_credit_balance(uid, settings=settings)
+        except Exception:
+            bal = chk.balance if chk.balance is not None else 0
+        from foresight_x.usage.schemas import CreditCheckResult
+
+        return None, _insufficient_credits_response(
+            CreditCheckResult(
+                allowed=False,
+                balance=bal,
+                required=cost,
+                reason="insufficient_credits",
+            )
+        )
 
 
 def _try_create_decision_followup(
@@ -517,6 +596,14 @@ class SlimeTtsBody(BaseModel):
     text: str = Field(..., min_length=1, max_length=4096)
 
 
+class UsageRedeemCodeBody(BaseModel):
+    code: str = Field(min_length=1, max_length=500)
+
+
+class UsageRedeemVoucherBody(BaseModel):
+    code: str = Field(min_length=1, max_length=500)
+
+
 class RunResponse(BaseModel):
     trace: dict
     notes: list[str]
@@ -555,6 +642,10 @@ def root() -> dict[str, object]:
         "routes": [
             "/api/health",
             "/api/me",
+            "/api/usage/credits",
+            "/api/usage/transactions",
+            "/api/usage/redeem-code",
+            "/api/usage/redeem-voucher",
             "/api/threads",
             "/api/personas",
             "/api/personas/switch",
@@ -628,6 +719,32 @@ def health_alias() -> dict[str, str]:
 @app.get("/api/me")
 def api_me(user: dict[str, str | None] = Depends(get_current_user)) -> dict[str, str | None]:
     return {"id": user.get("id"), "email": user.get("email")}
+
+
+@app.get("/api/usage/credits")
+def usage_get_credits() -> dict[str, object]:
+    settings = _settings_for_active_user()
+    return credits_api_payload(settings.foresight_user_id, settings=settings)
+
+
+@app.get("/api/usage/transactions")
+def usage_list_transactions(limit: int = 20) -> dict[str, object]:
+    settings = _settings_for_active_user()
+    lim = max(1, min(int(limit), 100))
+    rows = list_transactions_json(settings.foresight_user_id, limit=lim, settings=settings)
+    return {"transactions": rows}
+
+
+@app.post("/api/usage/redeem-code")
+def usage_redeem_code_endpoint(body: UsageRedeemCodeBody) -> dict[str, object]:
+    settings = _settings_for_active_user()
+    return redeem_test_code(settings.foresight_user_id, body.code, settings=settings)
+
+
+@app.post("/api/usage/redeem-voucher")
+def usage_redeem_voucher_endpoint(body: UsageRedeemVoucherBody) -> dict[str, object]:
+    settings = _settings_for_active_user()
+    return redeem_voucher_code(settings.foresight_user_id, body.code, settings=settings)
 
 
 @app.get("/api/threads")
@@ -769,45 +886,58 @@ def _client_anchor_iso(client_now_iso: str | None) -> str | None:
     return s if len(s) >= 10 else None
 
 
-@app.post("/api/run", response_model=RunResponse)
-def run_decision(body: RunRequest) -> RunResponse:
+@app.post("/api/run", response_model=None)
+def run_decision(body: RunRequest, request: Request):
     settings = _settings_for_active_user()
+    rid = _credit_header_request_id(request) or f"run:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "decision_report", request_id=rid, metadata={"endpoint": "/api/run"})
+    if gate_err is not None:
+        return gate_err
     ctx, notes = _build_context(settings)
     merge_done = False
-    if body.clarification_answers:
-        persist_clarification_followup(
-            settings,
-            thread=None,
-            user_plain_message=body.raw_input.strip(),
+    try:
+        if body.clarification_answers:
+            persist_clarification_followup(
+                settings,
+                thread=None,
+                user_plain_message=body.raw_input.strip(),
+                clarification_answers=body.clarification_answers,
+                save_to_profile_requested=bool(body.save_clarification_to_profile),
+                llm=ctx.llm,
+            )
+            merge_done = True
+        trace = run_pipeline(
+            ctx,
+            body.raw_input.strip(),
+            persist_trace=True,
+            anchor_now_iso=_client_anchor_iso(body.client_now_iso),
             clarification_answers=body.clarification_answers,
-            save_to_profile_requested=bool(body.save_clarification_to_profile),
-            llm=ctx.llm,
+            save_clarification_to_profile=body.save_clarification_to_profile,
+            preserve_raw_input=body.preserve_raw_input,
+            clarification_profile_merge_done_externally=merge_done,
         )
-        merge_done = True
-    trace = run_pipeline(
-        ctx,
-        body.raw_input.strip(),
-        persist_trace=True,
-        anchor_now_iso=_client_anchor_iso(body.client_now_iso),
-        clarification_answers=body.clarification_answers,
-        save_clarification_to_profile=body.save_clarification_to_profile,
-        preserve_raw_input=body.preserve_raw_input,
-        clarification_profile_merge_done_externally=merge_done,
-    )
-    _try_create_decision_followup(settings, trace, None)
-    trace_path = settings.traces_dir / f"{trace.decision_id}.json"
-    return RunResponse(
-        trace=trace.model_dump(mode="json"),
-        notes=notes,
-        trace_path=str(trace_path),
-    )
+        _try_create_decision_followup(settings, trace, None)
+        trace_path = settings.traces_dir / f"{trace.decision_id}.json"
+        return RunResponse(
+            trace=trace.model_dump(mode="json"),
+            notes=notes,
+            trace_path=str(trace_path),
+        )
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Decision pipeline failed", settings=settings)
+        raise
 
 
-@app.post("/api/run/stream")
-def run_decision_stream(body: RunRequest) -> StreamingResponse:
+@app.post("/api/run/stream", response_model=None)
+def run_decision_stream(body: RunRequest, request: Request):
     """SSE: notes, meta, per-stage ``partial`` payloads, then ``complete`` with full ``DecisionTrace``."""
 
     settings = _settings_for_active_user()
+    rid = _credit_header_request_id(request) or f"run_stream:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "decision_report", request_id=rid, metadata={"endpoint": "/api/run/stream"})
+    if gate_err is not None:
+        return gate_err
     ctx, notes = _build_context(settings)
 
     def gen():
@@ -841,15 +971,17 @@ def run_decision_stream(body: RunRequest) -> StreamingResponse:
                     _try_create_decision_followup(settings, ev["trace"], None)
                 yield _sse_chunk(ev)
         except Exception as e:
+            if tx is not None:
+                refund_for_transaction(tx, "Decision stream failed", settings=settings)
             # Without this, uvicorn closes the socket mid-chunk → browser ERR_INCOMPLETE_CHUNKED_ENCODING / "network error".
             yield _sse_chunk({"event": "error", "detail": f"{type(e).__name__}: {e!s}"})
 
     return _sse_streaming_response(gen())
 
 
-@app.post("/run", response_model=RunResponse)
-def run_decision_alias(body: RunRequest) -> RunResponse:
-    return run_decision(body)
+@app.post("/run", response_model=None)
+def run_decision_alias(body: RunRequest, request: Request):
+    return run_decision(body, request)
 
 
 @app.get("/api/profile")
@@ -1111,10 +1243,14 @@ def get_tier3_profile() -> dict:
     }
 
 
-@app.post("/api/clarify")
-def clarify(body: ClarifyRequest) -> dict:
+@app.post("/api/clarify", response_model=None)
+def clarify(body: ClarifyRequest, request: Request):
     """Return optional multiple-choice questions before running the full pipeline."""
     settings = _settings_for_active_user()
+    rid = _credit_header_request_id(request) or f"clarify:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "shadow_chat", request_id=rid, metadata={"endpoint": "/api/clarify"})
+    if gate_err is not None:
+        return gate_err
     ctx, _notes = _build_context(settings)
     profile = load_user_profile(settings)
     recent = list(body.recent_messages or [])
@@ -1143,24 +1279,29 @@ def clarify(body: ClarifyRequest) -> dict:
             "clarification_events": events,
             "clarification_state": default_clarification_state(),
         }
-    result = run_clarify_gate(
-        body.raw_input.strip(),
-        ctx.llm,
-        profile=profile,
-        recent_messages=[{"role": str(x.get("role") or ""), "content": str(x.get("content") or "")} for x in recent],
-        thread_clarification_events=events,
-        purpose=(body.purpose.strip() if (body.purpose or "").strip() else None),
-        thread_metadata=thread_meta,
-    )
-    if result.need_clarification and thread is not None:
-        for q in result.questions:
-            append_clarification_event(
-                thread,
-                kind="asked",
-                target_dimension=q.id,
-                question_prompt=q.prompt,
-            )
-    return result.model_dump(mode="json")
+    try:
+        result = run_clarify_gate(
+            body.raw_input.strip(),
+            ctx.llm,
+            profile=profile,
+            recent_messages=[{"role": str(x.get("role") or ""), "content": str(x.get("content") or "")} for x in recent],
+            thread_clarification_events=events,
+            purpose=(body.purpose.strip() if (body.purpose or "").strip() else None),
+            thread_metadata=thread_meta,
+        )
+        if result.need_clarification and thread is not None:
+            for q in result.questions:
+                append_clarification_event(
+                    thread,
+                    kind="asked",
+                    target_dimension=q.id,
+                    question_prompt=q.prompt,
+                )
+        return result.model_dump(mode="json")
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Clarify gate failed", settings=settings)
+        raise
 
 
 @app.post("/api/shadow-chat/threads/{thread_id}/clarification-skip")
@@ -1600,6 +1741,8 @@ class ShadowThreadMessageRequest(BaseModel):
     save_clarification_to_profile: bool = Field(default=False)
     #: Echoed on clarification SSE + done.metrics so the client can ignore stale async cards.
     client_turn_seq: int | None = None
+    #: Idempotency / dedupe for Slime Credits charging when the client retries the same turn.
+    credit_request_id: str | None = Field(default=None, max_length=200)
 
 
 class ShadowDecisionReportStreamRequest(BaseModel):
@@ -1607,6 +1750,7 @@ class ShadowDecisionReportStreamRequest(BaseModel):
     recent_messages: list[dict] = Field(default_factory=list)
     clarification_answers: dict[str, str] | None = Field(default=None)
     save_clarification_to_profile: bool = Field(default=False)
+    credit_request_id: str | None = Field(default=None, max_length=200)
 
 
 class ShadowReportContextRequest(BaseModel):
@@ -1626,8 +1770,8 @@ def _simple_chat_reply(message: str) -> str:
     )
 
 
-@app.post("/api/chat/unified")
-def unified_chat(body: UnifiedChatRequest) -> dict:
+@app.post("/api/chat/unified", response_model=None)
+def unified_chat(body: UnifiedChatRequest, request: Request):
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
     if body.thread_id:
@@ -1652,6 +1796,25 @@ def unified_chat(body: UnifiedChatRequest) -> dict:
     profile_updates: list[str] = []
     shadow_updates: list[str] = []
 
+    credit_feat: CreditFeature | None = None
+    if action == "generate_decision_report":
+        credit_feat = "decision_report"
+    elif message:
+        credit_feat = "shadow_chat"
+
+    credit_tx: CreditTransaction | None = None
+    if credit_feat is not None:
+        tid_part = str(thread.get("thread_id") or "new")
+        rid = _credit_header_request_id(request) or f"unified:{tid_part}:{uuid.uuid4().hex}"
+        credit_tx, gate_err = _credit_gate(
+            settings,
+            credit_feat,
+            request_id=rid,
+            metadata={"endpoint": "/api/chat/unified", "user_action": action},
+        )
+        if gate_err is not None:
+            return gate_err
+
     if message:
         append_message(thread, role="user", content=message, mode=mode)
         detection = detect_chat_mode_intent(
@@ -1667,111 +1830,116 @@ def unified_chat(body: UnifiedChatRequest) -> dict:
         ds["decision_report"] = True
         save_thread(thread)
 
-    assistant_text = ""
-    if action == "generate_decision_report":
-        ctx, _ = _build_context(settings)
-        trace = run_pipeline(ctx, message or "Help me decide.", persist_trace=True)
-        decision_trace = trace.model_dump(mode="json")
-        mode = "decision_report"
-        thread["mode"] = mode
-        append_message(
-            thread,
-            role="assistant",
-            content="I generated a decision report. You can close it and keep chatting here.",
-            mode=mode,
-            decision_id=trace.decision_id,
-        )
-    elif mode == "roleplay":
-        try:
-            msgs = _slice_shadow_messages(thread)
-            out = run_shadow_turn(
-                msgs,
-                settings=settings,
-                thread_id=str(thread.get("thread_id") or "") or None,
-                working_summary=str(thread.get("working_summary") or ""),
-                temporary_context_prompt=format_temporary_context_prompt(thread),
+    try:
+        assistant_text = ""
+        if action == "generate_decision_report":
+            ctx, _ = _build_context(settings)
+            trace = run_pipeline(ctx, message or "Help me decide.", persist_trace=True)
+            decision_trace = trace.model_dump(mode="json")
+            mode = "decision_report"
+            thread["mode"] = mode
+            append_message(
+                thread,
+                role="assistant",
+                content="I generated a decision report. You can close it and keep chatting here.",
+                mode=mode,
+                decision_id=trace.decision_id,
             )
-            assistant_text = out.reply.strip()
-            append_temporary_context_items(thread, out.thread_only_items)
-            rec = out.profile_record_texts
-            if rec:
-                profile_updates.extend(rec)
-                shadow_updates.extend(rec)
-        except Exception:
-            assistant_text = _simple_chat_reply(message)
-        append_message(thread, role="assistant", content=assistant_text, mode=mode)
-        _finalize_shadow_thread_turn(thread, settings=settings)
-    else:
-        # Normal mode still uses the existing shadow engine as a passive memory-aware dialogue core,
-        # but does not force users into explicit "ShadowChat page" navigation.
-        try:
-            msgs = _slice_shadow_messages(thread)
-            out = run_shadow_turn(
-                msgs,
-                settings=settings,
-                thread_id=str(thread.get("thread_id") or "") or None,
-                working_summary=str(thread.get("working_summary") or ""),
-                temporary_context_prompt=format_temporary_context_prompt(thread),
-            )
-            assistant_text = out.reply.strip()
-            append_temporary_context_items(thread, out.thread_only_items)
-            rec = out.profile_record_texts
-            if rec:
-                profile_updates.extend(rec)
-                shadow_updates.extend(rec)
-        except Exception:
-            assistant_text = _simple_chat_reply(message)
-        append_message(thread, role="assistant", content=assistant_text, mode=mode)
-        _finalize_shadow_thread_turn(thread, settings=settings)
-        passive_memory_enabled = os.getenv("ENABLE_UNIFIED_CHAT_PASSIVE_MEMORY", "false").strip().lower() == "true"
-        if message and (settings.openai_api_key or "").strip() and passive_memory_enabled:
+        elif mode == "roleplay":
             try:
-                _out = run_shadow_turn(
-                    [{"role": "user", "content": message}],
+                msgs = _slice_shadow_messages(thread)
+                out = run_shadow_turn(
+                    msgs,
                     settings=settings,
+                    thread_id=str(thread.get("thread_id") or "") or None,
+                    working_summary=str(thread.get("working_summary") or ""),
+                    temporary_context_prompt=format_temporary_context_prompt(thread),
                 )
-                rec = _out.profile_record_texts
+                assistant_text = out.reply.strip()
+                append_temporary_context_items(thread, out.thread_only_items)
+                rec = out.profile_record_texts
                 if rec:
                     profile_updates.extend(rec)
                     shadow_updates.extend(rec)
             except Exception:
-                pass
+                assistant_text = _simple_chat_reply(message)
+            append_message(thread, role="assistant", content=assistant_text, mode=mode)
+            _finalize_shadow_thread_turn(thread, settings=settings)
+        else:
+            # Normal mode still uses the existing shadow engine as a passive memory-aware dialogue core,
+            # but does not force users into explicit "ShadowChat page" navigation.
+            try:
+                msgs = _slice_shadow_messages(thread)
+                out = run_shadow_turn(
+                    msgs,
+                    settings=settings,
+                    thread_id=str(thread.get("thread_id") or "") or None,
+                    working_summary=str(thread.get("working_summary") or ""),
+                    temporary_context_prompt=format_temporary_context_prompt(thread),
+                )
+                assistant_text = out.reply.strip()
+                append_temporary_context_items(thread, out.thread_only_items)
+                rec = out.profile_record_texts
+                if rec:
+                    profile_updates.extend(rec)
+                    shadow_updates.extend(rec)
+            except Exception:
+                assistant_text = _simple_chat_reply(message)
+            append_message(thread, role="assistant", content=assistant_text, mode=mode)
+            _finalize_shadow_thread_turn(thread, settings=settings)
+            passive_memory_enabled = os.getenv("ENABLE_UNIFIED_CHAT_PASSIVE_MEMORY", "false").strip().lower() == "true"
+            if message and (settings.openai_api_key or "").strip() and passive_memory_enabled:
+                try:
+                    _out = run_shadow_turn(
+                        [{"role": "user", "content": message}],
+                        settings=settings,
+                    )
+                    rec = _out.profile_record_texts
+                    if rec:
+                        profile_updates.extend(rec)
+                        shadow_updates.extend(rec)
+                except Exception:
+                    pass
 
-    ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
-    if action == "send_message" and message and not ds.get("role_mode", False) and detection.intent == "roleplay_candidate":
-        suggestion = {
-            "type": "role_mode",
-            "title": "Enter Role Mode?",
-            "message": "It looks like you may be starting a roleplay or simulation. Role Mode keeps the story state consistent while preserving this chat history.",
-            "actions": ["enter_role_mode", "continue_normally", "dismiss_suggestion"],
+        ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
+        if action == "send_message" and message and not ds.get("role_mode", False) and detection.intent == "roleplay_candidate":
+            suggestion = {
+                "type": "role_mode",
+                "title": "Enter Role Mode?",
+                "message": "It looks like you may be starting a roleplay or simulation. Role Mode keeps the story state consistent while preserving this chat history.",
+                "actions": ["enter_role_mode", "continue_normally", "dismiss_suggestion"],
+            }
+        elif action == "send_message" and message and not ds.get("decision_report", False) and detection.intent == "decision_candidate":
+            suggestion = {
+                "type": "decision_report",
+                "title": "Turn this into a decision report?",
+                "message": "I can structure this into options, trade-offs, risks, consequences, and an action plan.",
+                "actions": ["generate_decision_report", "continue_normally"],
+            }
+
+        if action == "close_decision_report":
+            append_message(
+                thread,
+                role="assistant",
+                content="Decision report closed. We can keep chatting from here.",
+                mode="normal",
+            )
+
+        thread = _load_thread_or_404(str(thread["thread_id"]), uid=uid)
+        return {
+            "assistant_message": thread.get("messages", [])[-1] if thread.get("messages") else None,
+            "mode": thread.get("mode", "normal"),
+            "suggestion": suggestion,
+            "decision_trace": decision_trace,
+            "profile_updates": profile_updates,
+            "shadow_updates": shadow_updates,
+            "thread_id": thread["thread_id"],
+            "messages": thread.get("messages", []),
         }
-    elif action == "send_message" and message and not ds.get("decision_report", False) and detection.intent == "decision_candidate":
-        suggestion = {
-            "type": "decision_report",
-            "title": "Turn this into a decision report?",
-            "message": "I can structure this into options, trade-offs, risks, consequences, and an action plan.",
-            "actions": ["generate_decision_report", "continue_normally"],
-        }
-
-    if action == "close_decision_report":
-        append_message(
-            thread,
-            role="assistant",
-            content="Decision report closed. We can keep chatting from here.",
-            mode="normal",
-        )
-
-    thread = _load_thread_or_404(str(thread["thread_id"]), uid=uid)
-    return {
-        "assistant_message": thread.get("messages", [])[-1] if thread.get("messages") else None,
-        "mode": thread.get("mode", "normal"),
-        "suggestion": suggestion,
-        "decision_trace": decision_trace,
-        "profile_updates": profile_updates,
-        "shadow_updates": shadow_updates,
-        "thread_id": thread["thread_id"],
-        "messages": thread.get("messages", []),
-    }
+    except Exception:
+        if credit_tx is not None:
+            refund_for_transaction(credit_tx, "Unified chat failed", settings=settings)
+        raise
 
 
 def _chunk_text(text: str, *, step: int = 18) -> list[str]:
@@ -2055,11 +2223,28 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
     }
 
 
-@app.post("/api/shadow-chat/threads/{thread_id}/stream")
-def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -> StreamingResponse:
+@app.post("/api/shadow-chat/threads/{thread_id}/stream", response_model=None)
+def stream_shadow_chat_message(
+    thread_id: str, body: ShadowThreadMessageRequest, request: Request
+):
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
     _load_thread_or_404(thread_id, uid=uid)
+    hdr = _credit_header_request_id(request)
+    body_rid = (body.credit_request_id or "").strip() or None
+    rid = hdr or body_rid or (
+        f"shadow_stream:{thread_id}:{body.client_turn_seq}"
+        if body.client_turn_seq is not None
+        else f"shadow_stream:{thread_id}:{uuid.uuid4().hex}"
+    )
+    credit_tx, gate_err = _credit_gate(
+        settings,
+        "shadow_chat",
+        request_id=rid,
+        metadata={"endpoint": "shadow_stream", "thread_id": thread_id},
+    )
+    if gate_err is not None:
+        return gate_err
 
     def _gen():
         tid = thread_id
@@ -2490,6 +2675,8 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
             )
         except Exception as e:
             _log.exception("stream_shadow_chat_message failed thread_id=%s", thread_id)
+            if credit_tx is not None:
+                refund_for_transaction(credit_tx, "Shadow stream failed", settings=settings)
             yield _sse_chunk({"type": "error", "message": str(e)})
             yield _sse_chunk(
                 {
@@ -2505,11 +2692,24 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
     return _sse_streaming_response(_gen())
 
 
-@app.post("/api/shadow-chat/threads/{thread_id}/decision-report/stream")
-def stream_shadow_decision_report(thread_id: str, body: ShadowDecisionReportStreamRequest) -> StreamingResponse:
+@app.post("/api/shadow-chat/threads/{thread_id}/decision-report/stream", response_model=None)
+def stream_shadow_decision_report(
+    thread_id: str, body: ShadowDecisionReportStreamRequest, request: Request
+):
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
     _load_thread_or_404(thread_id, uid=uid)
+    hdr = _credit_header_request_id(request)
+    body_rid = (body.credit_request_id or "").strip() or None
+    rid = hdr or body_rid or f"decision_report_stream:{thread_id}:{uuid.uuid4().hex}"
+    credit_tx, gate_err = _credit_gate(
+        settings,
+        "decision_report",
+        request_id=rid,
+        metadata={"endpoint": "decision_report_stream", "thread_id": thread_id},
+    )
+    if gate_err is not None:
+        return gate_err
 
     def _gen():
         t0 = datetime.now(timezone.utc)
@@ -2594,6 +2794,8 @@ def stream_shadow_decision_report(thread_id: str, body: ShadowDecisionReportStre
                         }
                     )
                     return
+            if credit_tx is not None:
+                refund_for_transaction(credit_tx, "Decision report stream incomplete", settings=settings)
             yield _sse_chunk({"type": "error", "message": "Pipeline ended without a complete report."})
             yield _sse_chunk(
                 {
@@ -2606,6 +2808,8 @@ def stream_shadow_decision_report(thread_id: str, body: ShadowDecisionReportStre
             )
         except Exception as e:
             _log.exception("stream_shadow_decision_report failed thread_id=%s", thread_id)
+            if credit_tx is not None:
+                refund_for_transaction(credit_tx, "Decision report stream error", settings=settings)
             yield _sse_chunk({"type": "error", "message": str(e)})
             yield _sse_chunk(
                 {
@@ -2624,19 +2828,31 @@ class PersonalizationIngestRequest(BaseModel):
     text: str = Field(min_length=1)
 
 
-@app.post("/api/personalization/ingest")
-def personalization_ingest(body: PersonalizationIngestRequest) -> dict:
+@app.post("/api/personalization/ingest", response_model=None)
+def personalization_ingest(body: PersonalizationIngestRequest, request: Request):
     """Analyze pasted/exported chat or email text; merge behavioral insights into UserProfile (+ Tier 3)."""
     settings = _settings_for_active_user()
+    rid = _credit_header_request_id(request) or f"personalization:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "memory_import", request_id=rid, metadata={"endpoint": "/api/personalization/ingest"})
+    if gate_err is not None:
+        return gate_err
     if not (settings.openai_api_key or "").strip():
+        if tx is not None:
+            refund_for_transaction(tx, "OpenAI not configured", settings=settings)
         raise HTTPException(status_code=503, detail="Personalization ingest requires OPENAI_API_KEY")
     try:
         merged, ext, path = ingest_personalization_text(body.text.strip(), settings=settings)
     except ValueError as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Personalization validation error", settings=settings)
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Personalization runtime error", settings=settings)
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Personalization ingest failed", settings=settings)
         raise HTTPException(status_code=502, detail=f"Personalization ingest failed: {e!s}") from e
     return {
         "ok": True,
@@ -2647,11 +2863,17 @@ def personalization_ingest(body: PersonalizationIngestRequest) -> dict:
     }
 
 
-@app.post("/api/shadow/chat")
-def shadow_chat(body: ShadowChatRequest) -> dict:
+@app.post("/api/shadow/chat", response_model=None)
+def shadow_chat(body: ShadowChatRequest, request: Request):
     """Dialogue with the user's shadow self (not a therapist); no decisions. Updates shadow-self notes."""
     settings = _settings_for_active_user()
+    rid = _credit_header_request_id(request) or f"shadow_chat:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "shadow_chat", request_id=rid, metadata={"endpoint": "/api/shadow/chat"})
+    if gate_err is not None:
+        return gate_err
     if not (settings.openai_api_key or "").strip():
+        if tx is not None:
+            refund_for_transaction(tx, "OpenAI not configured", settings=settings)
         raise HTTPException(status_code=503, detail="Shadow chat requires OPENAI_API_KEY")
     try:
         msgs = [m.model_dump() for m in body.messages]
@@ -2662,10 +2884,16 @@ def shadow_chat(body: ShadowChatRequest) -> dict:
         recorded_facts = out.profile_record_texts
         used_memory_facts = out.used_memory_facts
     except ValueError as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Shadow chat validation error", settings=settings)
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Shadow chat runtime error", settings=settings)
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Shadow chat failed", settings=settings)
         raise HTTPException(status_code=502, detail=f"Shadow chat failed: {e!s}") from e
     return {
         "reply": reply,
@@ -2679,8 +2907,8 @@ def shadow_chat(body: ShadowChatRequest) -> dict:
     }
 
 
-@app.post("/api/option-chat")
-def option_chat(body: OptionChatRequest) -> dict:
+@app.post("/api/option-chat", response_model=None)
+def option_chat(body: OptionChatRequest, request: Request):
     """Follow-up Q&A for one option card, grounded in the already-generated decision trace."""
     settings = _settings_for_active_user()
     if not (settings.openai_api_key or "").strip():
@@ -2735,6 +2963,10 @@ def option_chat(body: OptionChatRequest) -> dict:
         f"User follow-up question:\n{body.question.strip()}\n\n"
         "Return JSON with one field: answer."
     )
+    rid = _credit_header_request_id(request) or f"option_chat:{trace.decision_id}:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "shadow_chat", request_id=rid, metadata={"endpoint": "/api/option-chat"})
+    if gate_err is not None:
+        return gate_err
     try:
         out = structured_predict(llm, OptionChatReply, prompt)
         if isinstance(out, OptionChatReply):
@@ -2742,6 +2974,8 @@ def option_chat(body: OptionChatRequest) -> dict:
         else:
             ans = OptionChatReply.model_validate(out).answer.strip()
     except Exception as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Option chat LLM failed", settings=settings)
         raise HTTPException(status_code=502, detail=f"option_chat_failed: {e!s}") from e
     return {"answer": ans, "decision_id": trace.decision_id, "option_id": option.option_id}
 
@@ -3019,29 +3253,44 @@ def calendar_delete_event(event_id: str) -> dict[str, Any]:
     return {"ok": True}
 
 
-@app.post("/api/calendar-agent/parse")
-def calendar_agent_parse(body: CalendarAgentParseRequest) -> dict[str, Any]:
+@app.post("/api/calendar-agent/parse", response_model=None)
+def calendar_agent_parse(body: CalendarAgentParseRequest, request: Request):
     settings = _settings_for_active_user()
-    intent = parse_calendar_intent(
-        body.text,
-        {
-            "thread_id": body.thread_id,
-            "decision_id": body.decision_id,
-            "current_event_id": body.current_event_id,
-        },
-        settings=settings,
-        source=_agent_calendar_source(body.source),
-    )
-    return {"intent": intent.model_dump(mode="json")}
+    rid = _credit_header_request_id(request) or f"cal_parse:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "calendar_agent", request_id=rid, metadata={"endpoint": "/api/calendar-agent/parse"})
+    if gate_err is not None:
+        return gate_err
+    try:
+        intent = parse_calendar_intent(
+            body.text,
+            {
+                "thread_id": body.thread_id,
+                "decision_id": body.decision_id,
+                "current_event_id": body.current_event_id,
+            },
+            settings=settings,
+            source=_agent_calendar_source(body.source),
+        )
+        return {"intent": intent.model_dump(mode="json")}
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Calendar parse failed", settings=settings)
+        raise
 
 
-@app.post("/api/calendar-agent/draft")
-def calendar_agent_draft(body: CalendarAgentDraftRequest) -> dict[str, Any]:
+@app.post("/api/calendar-agent/draft", response_model=None)
+def calendar_agent_draft(body: CalendarAgentDraftRequest, request: Request):
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
+    rid = _credit_header_request_id(request) or f"cal_draft:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "calendar_agent", request_id=rid, metadata={"endpoint": "/api/calendar-agent/draft"})
+    if gate_err is not None:
+        return gate_err
     try:
         intent = AgentCalendarIntent.model_validate(body.intent)
     except ValidationError as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Calendar draft invalid intent", settings=settings)
         raise HTTPException(status_code=400, detail=f"invalid_intent: {e!s}") from e
     tasks: list[AgentCalendarTask] | None = None
     if body.tasks:
@@ -3055,16 +3304,21 @@ def calendar_agent_draft(body: CalendarAgentDraftRequest) -> dict[str, Any]:
     else:
         existing = cal_agent_list_events(settings, uid)
 
-    draft = build_draft_from_intent(
-        intent,
-        settings=settings,
-        user_id=uid,
-        existing_events=existing,
-        tasks=tasks,
-        user_timezone=body.timezone.strip() or "UTC",
-        now=datetime.now(timezone.utc),
-    )
-    return {"draft": draft.model_dump(mode="json")}
+    try:
+        draft = build_draft_from_intent(
+            intent,
+            settings=settings,
+            user_id=uid,
+            existing_events=existing,
+            tasks=tasks,
+            user_timezone=body.timezone.strip() or "UTC",
+            now=datetime.now(timezone.utc),
+        )
+        return {"draft": draft.model_dump(mode="json")}
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Calendar draft failed", settings=settings)
+        raise
 
 
 @app.post("/api/calendar-agent/confirm")
@@ -3082,20 +3336,34 @@ def calendar_agent_confirm(body: CalendarAgentConfirmRequest) -> dict[str, Any]:
     return {"ok": True, "events": [e.model_dump(mode="json") for e in confirmed]}
 
 
-@app.post("/api/calendar-agent/alternatives")
-def calendar_agent_alternatives(body: CalendarAgentAlternativesRequest) -> dict[str, Any]:
+@app.post("/api/calendar-agent/alternatives", response_model=None)
+def calendar_agent_alternatives(body: CalendarAgentAlternativesRequest, request: Request):
     settings = _settings_for_active_user()
-    alts = alternatives_for_draft(
-        settings=settings,
-        user_id=settings.foresight_user_id,
-        draft_id=body.draft_id.strip(),
-        preference=body.preference.strip().lower(),
+    rid = _credit_header_request_id(request) or f"cal_alt:{body.draft_id.strip()}"
+    tx, gate_err = _credit_gate(
+        settings,
+        "calendar_agent",
+        request_id=rid,
+        metadata={"endpoint": "/api/calendar-agent/alternatives"},
     )
-    return {"alternatives": [a.model_dump(mode="json") for a in alts]}
+    if gate_err is not None:
+        return gate_err
+    try:
+        alts = alternatives_for_draft(
+            settings=settings,
+            user_id=settings.foresight_user_id,
+            draft_id=body.draft_id.strip(),
+            preference=body.preference.strip().lower(),
+        )
+        return {"alternatives": [a.model_dump(mode="json") for a in alts]}
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Calendar alternatives failed", settings=settings)
+        raise
 
 
-@app.post("/api/calendar-agent/from-report")
-def calendar_agent_from_report(body: CalendarFromReportRequest) -> dict[str, Any]:
+@app.post("/api/calendar-agent/from-report", response_model=None)
+def calendar_agent_from_report(body: CalendarFromReportRequest, request: Request):
     settings = _settings_for_active_user()
     try:
         trace = load_decision_trace(body.decision_id.strip(), settings=settings)
@@ -3104,15 +3372,29 @@ def calendar_agent_from_report(body: CalendarFromReportRequest) -> dict[str, Any
     trace_user = _trace_user_id(trace)
     if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
         raise HTTPException(status_code=404, detail="trace_not_found")
-    existing = cal_agent_list_events(settings, settings.foresight_user_id)
-    draft = draft_from_report(
-        settings=settings,
-        user_id=settings.foresight_user_id,
-        decision_id=body.decision_id.strip(),
-        thread_id=body.thread_id,
-        existing_events=existing,
+    rid = _credit_header_request_id(request) or f"cal_from_report:{body.decision_id.strip()}"
+    tx, gate_err = _credit_gate(
+        settings,
+        "calendar_agent",
+        request_id=rid,
+        metadata={"endpoint": "/api/calendar-agent/from-report"},
     )
-    return {"draft": draft.model_dump(mode="json")}
+    if gate_err is not None:
+        return gate_err
+    try:
+        existing = cal_agent_list_events(settings, settings.foresight_user_id)
+        draft = draft_from_report(
+            settings=settings,
+            user_id=settings.foresight_user_id,
+            decision_id=body.decision_id.strip(),
+            thread_id=body.thread_id,
+            existing_events=existing,
+        )
+        return {"draft": draft.model_dump(mode="json")}
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Calendar from-report failed", settings=settings)
+        raise
 
 
 @app.get("/api/calendar-agent/preferences")
@@ -3430,11 +3712,17 @@ def _run_slime_voice_pipeline(
     }
 
 
-@app.post("/api/slime/tts")
-def slime_tts(body: SlimeTtsBody) -> Response:
+@app.post("/api/slime/tts", response_model=None)
+def slime_tts(body: SlimeTtsBody, request: Request):
     """Text → MP3 via OpenAI TTS. Used by Slime Buddy for auto-play after voice-command (browser-friendly)."""
     settings = _settings_for_active_user()
+    rid = _credit_header_request_id(request) or f"slime_tts:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "tts", request_id=rid, metadata={"endpoint": "/api/slime/tts"})
+    if gate_err is not None:
+        return gate_err
     if not (settings.openai_api_key or "").strip():
+        if tx is not None:
+            refund_for_transaction(tx, "OpenAI not configured", settings=settings)
         raise HTTPException(
             status_code=503,
             detail="OPENAI_API_KEY is required for server TTS (Slime Buddy auto-play).",
@@ -3442,6 +3730,8 @@ def slime_tts(body: SlimeTtsBody) -> Response:
     try:
         from openai import OpenAI
     except ImportError as e:
+        if tx is not None:
+            refund_for_transaction(tx, "OpenAI package missing", settings=settings)
         raise HTTPException(status_code=503, detail="openai package required for TTS") from e
 
     text = body.text.strip()[:4096]
@@ -3450,6 +3740,8 @@ def slime_tts(body: SlimeTtsBody) -> Response:
         resp = client.audio.speech.create(model="tts-1", voice="alloy", input=text)
     except Exception as e:
         _log.exception("slime TTS OpenAI call failed")
+        if tx is not None:
+            refund_for_transaction(tx, "TTS provider error", settings=settings)
         raise HTTPException(status_code=502, detail=f"TTS failed: {e!s}") from e
 
     try:
@@ -3459,6 +3751,8 @@ def slime_tts(body: SlimeTtsBody) -> Response:
         resp.stream_to_file(buf)
         audio_bytes = buf.getvalue()
     if not audio_bytes:
+        if tx is not None:
+            refund_for_transaction(tx, "TTS empty response", settings=settings)
         raise HTTPException(status_code=502, detail="TTS returned empty audio")
     return Response(content=audio_bytes, media_type="audio/mpeg")
 
@@ -3488,6 +3782,7 @@ def slime_confirm_calendar_block(body: SlimeConfirmCalendarBody) -> dict[str, An
 
 @app.post("/api/slime/voice-command")
 async def slime_voice_command(
+    request: Request,
     audio: UploadFile = File(...),
     current_route: str | None = Form(None),
     thread_id: str | None = Form(None),
@@ -3497,6 +3792,12 @@ async def slime_voice_command(
     """Push-to-talk: local ASR (default faster-whisper) + GPT-4o-mini tool routing."""
     settings = _settings_for_active_user()
     raw = await audio.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty_audio")
+    rid = _credit_header_request_id(request) or f"slime_voice:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(settings, "slime_voice", request_id=rid, metadata={"endpoint": "/api/slime/voice-command"})
+    if gate_err is not None:
+        return gate_err
     try:
         body = await asyncio.to_thread(
             _run_slime_voice_pipeline,
@@ -3509,11 +3810,17 @@ async def slime_voice_command(
             settings,
         )
     except ValueError as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Slime voice validation error", settings=settings)
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Slime voice runtime error", settings=settings)
         raise HTTPException(status_code=422, detail=str(e)) from e
     except ModuleNotFoundError as e:
         _log.exception("slime voice command missing dependency")
+        if tx is not None:
+            refund_for_transaction(tx, "Slime voice missing dependency", settings=settings)
         raise HTTPException(
             status_code=422,
             detail=(
@@ -3523,12 +3830,14 @@ async def slime_voice_command(
         ) from e
     except Exception as e:
         _log.exception("slime voice command failed")
+        if tx is not None:
+            refund_for_transaction(tx, "Slime voice failed", settings=settings)
         raise HTTPException(status_code=500, detail=f"voice_command_failed: {e!s}") from e
     return JSONResponse(content=body)
 
 
-@app.get("/api/traces/{decision_id}/resource-drops")
-def get_trace_resource_drops(decision_id: str) -> dict:
+@app.get("/api/traces/{decision_id}/resource-drops", response_model=None)
+def get_trace_resource_drops(decision_id: str, request: Request):
     """Post-hoc resource suggestions (does not block pipeline); Tavily optional."""
     settings = _settings_for_active_user()
     try:
@@ -3538,11 +3847,25 @@ def get_trace_resource_drops(decision_id: str) -> dict:
     trace_user = _trace_user_id(trace)
     if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
         raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}")
+    rid = _credit_header_request_id(request) or f"resource_drops:{decision_id}"
+    tx, gate_err = _credit_gate(
+        settings,
+        "resource_search",
+        request_id=rid,
+        metadata={"endpoint": "/api/traces/resource-drops", "decision_id": decision_id},
+    )
+    if gate_err is not None:
+        return gate_err
     try:
         drops = generate_resource_drops_for_recommendation(trace, settings=settings)
     except Exception:
         drops = calendar_fallback_drops(trace, recommendation=None)
-    return {"resource_drops": resource_drops_as_json(drops)}
+    try:
+        return {"resource_drops": resource_drops_as_json(drops)}
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Resource drops serialization failed", settings=settings)
+        raise
 
 
 @app.get("/api/traces/{decision_id}")
@@ -3655,8 +3978,8 @@ def diary_sources(date: str, timezone: str = "UTC") -> dict:
     }
 
 
-@app.post("/api/diary/generate")
-def diary_generate(body: DiaryGenerateBody) -> dict:
+@app.post("/api/diary/generate", response_model=None)
+def diary_generate(body: DiaryGenerateBody, request: Request):
     if not _RE_DATE.match((body.date or "").strip()):
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
     settings = _settings_for_active_user()
@@ -3676,8 +3999,15 @@ def diary_generate(body: DiaryGenerateBody) -> dict:
     if existing is not None and not body.force:
         return {"ok": True, "cached": True, "entry": existing.model_dump(mode="json")}
 
+    rid = _credit_header_request_id(request) or f"diary_gen:{body.date.strip()}:{body.force}"
+    tx, gate_err = _credit_gate(settings, "diary_generate", request_id=rid, metadata={"endpoint": "/api/diary/generate"})
+    if gate_err is not None:
+        return gate_err
+
     entry = generate_diary_entry(uid, bundle, settings=settings)
     if entry is None:
+        if tx is not None:
+            refund_for_transaction(tx, "Diary had nothing to synthesize", settings=settings)
         return {
             "ok": True,
             "empty": True,
@@ -3685,24 +4015,29 @@ def diary_generate(body: DiaryGenerateBody) -> dict:
             "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
         }
 
-    created_new = existing is None
-    if existing is not None:
-        entry = entry.model_copy(
-            update={
-                "id": existing.id,
-                "created_at": existing.created_at,
-                "user_edited": existing.user_edited,
-                "memory_status": existing.memory_status,
-            }
-        )
-    entry = attach_links(entry, bundle)
-    save_entry(settings, uid, stamp_times(entry, created=created_new))
-    loaded = load_entry(settings, uid, body.date.strip())
-    return {"ok": True, "empty": False, "entry": (loaded or entry).model_dump(mode="json")}
+    try:
+        created_new = existing is None
+        if existing is not None:
+            entry = entry.model_copy(
+                update={
+                    "id": existing.id,
+                    "created_at": existing.created_at,
+                    "user_edited": existing.user_edited,
+                    "memory_status": existing.memory_status,
+                }
+            )
+        entry = attach_links(entry, bundle)
+        save_entry(settings, uid, stamp_times(entry, created=created_new))
+        loaded = load_entry(settings, uid, body.date.strip())
+        return {"ok": True, "empty": False, "entry": (loaded or entry).model_dump(mode="json")}
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Diary generate failed", settings=settings)
+        raise
 
 
-@app.post("/api/diary/regenerate-cleaner")
-def diary_regenerate_cleaner(body: DiaryRegenerateCleanBody) -> dict:
+@app.post("/api/diary/regenerate-cleaner", response_model=None)
+def diary_regenerate_cleaner(body: DiaryRegenerateCleanBody, request: Request):
     """Re-run noise filter + two-stage diary writer; replace stored entry unless user_edited blocks."""
     if not _RE_DATE.match((body.date or "").strip()):
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
@@ -3722,8 +4057,20 @@ def diary_regenerate_cleaner(body: DiaryRegenerateCleanBody) -> dict:
             "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
         }
 
+    rid = _credit_header_request_id(request) or f"diary_regen:{body.date.strip()}"
+    tx, gate_err = _credit_gate(
+        settings,
+        "diary_generate",
+        request_id=rid,
+        metadata={"endpoint": "/api/diary/regenerate-cleaner"},
+    )
+    if gate_err is not None:
+        return gate_err
+
     entry = generate_diary_entry(uid, bundle, settings=settings)
     if entry is None:
+        if tx is not None:
+            refund_for_transaction(tx, "Diary regenerate had nothing to synthesize", settings=settings)
         return {
             "ok": True,
             "empty": True,
@@ -3731,20 +4078,25 @@ def diary_regenerate_cleaner(body: DiaryRegenerateCleanBody) -> dict:
             "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
         }
 
-    created_new = existing is None
-    if existing is not None:
-        entry = entry.model_copy(
-            update={
-                "id": existing.id,
-                "created_at": existing.created_at,
-                "user_edited": existing.user_edited,
-                "memory_status": existing.memory_status,
-            }
-        )
-    entry = attach_links(entry, bundle)
-    save_entry(settings, uid, stamp_times(entry, created=created_new))
-    loaded = load_entry(settings, uid, body.date.strip())
-    return {"ok": True, "empty": False, "entry": (loaded or entry).model_dump(mode="json")}
+    try:
+        created_new = existing is None
+        if existing is not None:
+            entry = entry.model_copy(
+                update={
+                    "id": existing.id,
+                    "created_at": existing.created_at,
+                    "user_edited": existing.user_edited,
+                    "memory_status": existing.memory_status,
+                }
+            )
+        entry = attach_links(entry, bundle)
+        save_entry(settings, uid, stamp_times(entry, created=created_new))
+        loaded = load_entry(settings, uid, body.date.strip())
+        return {"ok": True, "empty": False, "entry": (loaded or entry).model_dump(mode="json")}
+    except Exception:
+        if tx is not None:
+            refund_for_transaction(tx, "Diary regenerate failed", settings=settings)
+        raise
 
 
 @app.post("/api/diary/entries/{entry_id}/save-insight")

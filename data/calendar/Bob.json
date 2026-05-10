@@ -1,10 +1,10 @@
 {
   "events": [
     {
-      "id": "evt-c170c34b9822",
-      "title": "New Event",
-      "start": "2026-05-09T09:00:00-04:00",
-      "end": "2026-05-09T10:00:00-04:00",
+      "id": "evt-266a08b7aa8d",
+      "title": "Event on Monday",
+      "start": "2026-05-11T09:00:00-04:00",
+      "end": "2026-05-11T10:00:00-04:00",
       "description": "",
       "source": "manual",
       "locked": false,
@@ -14,10 +14,23 @@
       "metadata": {}
     },
     {
-      "id": "evt-266a08b7aa8d",
-      "title": "Event on Monday",
+      "id": "evt-7a94d6c0b34f",
+      "title": "Hanging out with Andrew",
       "start": "2026-05-11T09:00:00-04:00",
-      "end": "2026-05-11T10:00:00-04:00",
+      "end": "2026-05-11T11:00:00-04:00",
+      "description": "",
+      "source": "manual",
+      "locked": false,
+      "conflict": false,
+      "decision_id": null,
+      "thread_id": null,
+      "metadata": {}
+    },
+    {
+      "id": "evt-c170c34b9822",
+      "title": "New Event",
+      "start": "2026-05-09T09:00:00-04:00",
+      "end": "2026-05-09T10:00:00-04:00",
       "description": "",
       "source": "manual",
       "locked": false,

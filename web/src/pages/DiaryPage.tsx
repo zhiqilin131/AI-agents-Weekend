@@ -13,6 +13,7 @@ import {
 import { DiaryTrackViewport, diarySlotAnchorForDate } from '../features/diary/DiaryTrackViewport';
 import { DiarySlimeWalker } from '../features/diary/DiarySlimeWalker';
 import type { DiaryEntryDto, DiaryJumpPhase, DiaryMonthDay } from '../features/diary/types';
+import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../hooks/useSlimeProfile';
 import { apiFetch } from '../utils/apiFetch';
 import { apiFetchErrorMessage } from '../utils/apiOrigin';
@@ -31,6 +32,7 @@ function usePrefersReducedMotion(): boolean {
 }
 
 export default function DiaryPage() {
+  const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const { slimeProfile } = useSlimeProfile();
   const profile = slimeProfile ?? DEFAULT_SLIME_PROFILE;
   const reducedMotion = usePrefersReducedMotion();
@@ -196,9 +198,14 @@ export default function DiaryPage() {
     setRegenBusy(true);
     setEntryErr(null);
     try {
+      const diaryCredit =
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `diary-${Date.now()}`;
       const r = await apiFetch('/api/diary/regenerate-cleaner', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Credit-Request-Id': diaryCredit,
+        },
         body: JSON.stringify({
           date: selectedDate,
           timezone: tz,
@@ -210,6 +217,20 @@ export default function DiaryPage() {
         entry?: DiaryEntryDto;
         detail?: string;
       };
+      if (r.status === 402) {
+        showInsufficient({
+          required: Number((j as { required?: number }).required ?? 0),
+          balance:
+            typeof (j as { balance?: unknown }).balance === 'number'
+              ? ((j as { balance?: number }).balance as number)
+              : null,
+          message:
+            typeof (j as { message?: string }).message === 'string'
+              ? (j as { message: string }).message
+              : 'You need more Slime Credits for this action.',
+        });
+        return;
+      }
       if (r.status === 409) {
         setEntryErr(typeof j.detail === 'string' ? j.detail : 'Confirmation required to replace edited diary.');
         return;
@@ -221,6 +242,7 @@ export default function DiaryPage() {
       } else if (j.entry) {
         setEntry(j.entry);
       }
+      void refreshCredits();
       const ym = selectedDate.slice(0, 7);
       fetchedMonthsRef.current.delete(ym);
       await fetchMonth(ym);
@@ -235,9 +257,14 @@ export default function DiaryPage() {
     setGenBusy(true);
     setEntryErr(null);
     try {
+      const diaryCredit =
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `diary-${Date.now()}`;
       const r = await apiFetch('/api/diary/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Credit-Request-Id': diaryCredit,
+        },
         body: JSON.stringify({ date: selectedDate, timezone: tz, force: true }),
       });
       const j = (await r.json()) as {
@@ -246,7 +273,19 @@ export default function DiaryPage() {
         source_counts?: Record<string, unknown>;
         source_diagnostics?: Record<string, unknown>;
         detail?: string;
+        required?: number;
+        balance?: number;
+        message?: string;
       };
+      if (r.status === 402) {
+        showInsufficient({
+          required: Number(j.required ?? 0),
+          balance: typeof j.balance === 'number' ? j.balance : null,
+          message:
+            typeof j.message === 'string' ? j.message : 'You need more Slime Credits for this action.',
+        });
+        return;
+      }
       if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : r.statusText);
       if (j.empty) {
         setEntry(null);
@@ -254,6 +293,7 @@ export default function DiaryPage() {
       } else if (j.entry) {
         setEntry(j.entry);
       }
+      void refreshCredits();
       const ym = selectedDate.slice(0, 7);
       fetchedMonthsRef.current.delete(ym);
       await fetchMonth(ym);

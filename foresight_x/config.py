@@ -124,6 +124,65 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Slime Credits (usage limits) ---
+    enable_credit_limits: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("enable_credit_limits", "ENABLE_CREDIT_LIMITS"),
+    )
+    default_slime_credits: int = Field(
+        default=15,
+        ge=0,
+        validation_alias=AliasChoices("default_slime_credits", "DEFAULT_SLIME_CREDITS"),
+    )
+    test_code_reward_credits: int = Field(
+        default=100,
+        ge=0,
+        validation_alias=AliasChoices("test_code_reward_credits", "TEST_CODE_REWARD_CREDITS"),
+    )
+    slime_test_code: str = Field(default="", validation_alias=AliasChoices("slime_test_code", "SLIME_TEST_CODE"))
+    admin_unlimited_user_ids: str = Field(
+        default="",
+        validation_alias=AliasChoices("admin_unlimited_user_ids", "ADMIN_UNLIMITED_USER_IDS"),
+    )
+    enable_admin_unlimited: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("enable_admin_unlimited", "ENABLE_ADMIN_UNLIMITED"),
+    )
+    admin_user_ids: str = Field(default="", validation_alias=AliasChoices("admin_user_ids", "ADMIN_USER_IDS"))
+    admin_emails: str = Field(default="", validation_alias=AliasChoices("admin_emails", "ADMIN_EMAILS"))
+    admin_local_user_ids: str = Field(
+        default="",
+        validation_alias=AliasChoices("admin_local_user_ids", "ADMIN_LOCAL_USER_IDS"),
+    )
+    slime_voucher_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("slime_voucher_enabled", "SLIME_VOUCHER_ENABLED"),
+    )
+    slime_voucher_code: str = Field(default="", validation_alias=AliasChoices("slime_voucher_code", "SLIME_VOUCHER_CODE"))
+    slime_voucher_reward_credits: int = Field(
+        default=15,
+        ge=0,
+        validation_alias=AliasChoices("slime_voucher_reward_credits", "SLIME_VOUCHER_REWARD_CREDITS"),
+    )
+    slime_voucher_max_redemptions_per_user: int = Field(
+        default=1,
+        ge=1,
+        validation_alias=AliasChoices(
+            "slime_voucher_max_redemptions_per_user",
+            "SLIME_VOUCHER_MAX_REDEMPTIONS_PER_USER",
+        ),
+    )
+    credit_cost_shadow_chat: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_SHADOW_CHAT"))
+    credit_cost_slime_chat: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_SLIME_CHAT"))
+    credit_cost_slime_voice: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_SLIME_VOICE"))
+    credit_cost_decision_report: int = Field(default=5, ge=0, validation_alias=AliasChoices("CREDIT_COST_DECISION_REPORT"))
+    credit_cost_diary_generate: int = Field(default=2, ge=0, validation_alias=AliasChoices("CREDIT_COST_DIARY_GENERATE"))
+    credit_cost_memory_import: int = Field(default=3, ge=0, validation_alias=AliasChoices("CREDIT_COST_MEMORY_IMPORT"))
+    credit_cost_calendar_agent: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_CALENDAR_AGENT"))
+    credit_cost_resource_search: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_RESOURCE_SEARCH"))
+    credit_cost_tts: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_TTS"))
+    credit_cost_asr: int = Field(default=0, ge=0, validation_alias=AliasChoices("CREDIT_COST_ASR"))
+
     @model_validator(mode="after")
     def _supabase_implies_jwt_tenancy(self) -> Self:
         """Chroma, traces, profile, chat_threads, graph — all keyed by ``foresight_user_id`` from JWT ``sub``."""

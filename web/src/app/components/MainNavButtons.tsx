@@ -1,11 +1,12 @@
 import type { ComponentType, SVGProps } from 'react';
-import { useNavigate } from 'react-router';
-import { BookOpen, CalendarDays, Ghost, History, LogOut, MessagesSquare } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router';
+import { BookOpen, CalendarDays, Ghost, History, Home, LogOut, MessagesSquare } from 'lucide-react';
 import { SlimeAdvisor } from './report/SlimeAdvisor';
 import { PersonaSwitcher } from './PersonaSwitcher';
 import { cn } from './ui/utils';
 import { useAuth } from '../../auth/AuthContext';
 import { isSupabaseEnvConfigured } from '../../auth/RequireAuthLayout';
+import { SlimeCreditsChipNav } from './credits/SlimeCreditsContext';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../../hooks/useSlimeProfile';
 
 type NavIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
@@ -79,6 +80,11 @@ const btnClassCompact =
   'font-medium text-slate-700 shadow-sm transition-colors hover:border-indigo-200 hover:bg-slate-50 ' +
   'focus:outline-none focus:ring-2 focus:ring-indigo-400/30';
 
+function isHomeNavRoute(pathname: string): boolean {
+  if (pathname === '/') return true;
+  return pathname.startsWith('/trace/');
+}
+
 export function MainNavButtons({
   variant = 'default',
   className,
@@ -88,6 +94,8 @@ export function MainNavButtons({
   className?: string;
 }) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const hideHome = isHomeNavRoute(pathname);
   const { session, signOut } = useAuth();
   const compact = variant === 'compact';
   const btnClass = compact ? btnClassCompact : btnClassDefault;
@@ -98,45 +106,78 @@ export function MainNavButtons({
     fontWeight: compact ? 500 : 600,
   };
 
+  const homeBtn = !hideHome ? (
+    <button type="button" onClick={() => navigate('/')} className={btnClass} style={btnStyle} title="Home">
+      <NavIconSlot Icon={Home} compact={compact} colorClass="text-violet-600" />
+      Home
+    </button>
+  ) : null;
+
+  const navPills = (
+    <>
+      <button type="button" onClick={() => navigate('/chat')} className={btnClass} style={btnStyle}>
+        <NavIconSlot Icon={MessagesSquare} compact={compact} colorClass="text-indigo-600" />
+        Chat
+      </button>
+      <button type="button" onClick={() => navigate('/history')} className={btnClass} style={btnStyle}>
+        <NavIconSlot Icon={History} compact={compact} colorClass="text-purple-600" />
+        History
+      </button>
+      <button type="button" onClick={() => navigate('/diary')} className={btnClass} style={btnStyle}>
+        <NavIconSlot Icon={BookOpen} compact={compact} colorClass="text-emerald-600" />
+        Diary
+      </button>
+      <button type="button" onClick={() => navigate('/execution')} className={btnClass} style={btnStyle}>
+        <NavIconSlot Icon={CalendarDays} compact={compact} colorClass="text-purple-600" />
+        Calendar
+      </button>
+      <button type="button" onClick={() => navigate('/buddy')} className={btnClass} style={btnStyle}>
+        <NavIconSlot Icon={Ghost} compact={compact} colorClass="text-fuchsia-600" />
+        {compact ? 'Buddy' : 'Slime buddy'}
+      </button>
+      {isSupabaseEnvConfigured() && !session ? (
+        <>
+          <button type="button" onClick={() => navigate('/login')} className={btnClass} style={btnStyle}>
+            {compact ? 'Log in' : 'Sign in'}
+          </button>
+          <button type="button" onClick={() => navigate('/register')} className={btnClass} style={btnStyle}>
+            {compact ? 'Join' : 'Register'}
+          </button>
+        </>
+      ) : null}
+    </>
+  );
+
+  const scrollClass =
+    'min-w-0 flex-1 overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]';
+
   return (
     <>
       <div className={cn(!compact && 'mb-8', className)}>
-        {!compact ? <PersonaSwitcher compact /> : null}
-        <div className="w-full min-w-0 overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]">
-          {/* w-max + mx-auto: centered when the row fits; scroll horizontally when it doesn’t */}
-          <div className="mx-auto flex w-max flex-nowrap items-center gap-2 py-3 px-1">
-            <button type="button" onClick={() => navigate('/chat')} className={btnClass} style={btnStyle}>
-              <NavIconSlot Icon={MessagesSquare} compact={compact} colorClass="text-indigo-600" />
-              Chat
-            </button>
-            <button type="button" onClick={() => navigate('/history')} className={btnClass} style={btnStyle}>
-              <NavIconSlot Icon={History} compact={compact} colorClass="text-purple-600" />
-              History
-            </button>
-            <button type="button" onClick={() => navigate('/diary')} className={btnClass} style={btnStyle}>
-              <NavIconSlot Icon={BookOpen} compact={compact} colorClass="text-emerald-600" />
-              Diary
-            </button>
-            <button type="button" onClick={() => navigate('/execution')} className={btnClass} style={btnStyle}>
-              <NavIconSlot Icon={CalendarDays} compact={compact} colorClass="text-purple-600" />
-              Calendar
-            </button>
-            <button type="button" onClick={() => navigate('/buddy')} className={btnClass} style={btnStyle}>
-              <NavIconSlot Icon={Ghost} compact={compact} colorClass="text-fuchsia-600" />
-              {compact ? 'Buddy' : 'Slime buddy'}
-            </button>
-            {isSupabaseEnvConfigured() && !session ? (
-              <>
-                <button type="button" onClick={() => navigate('/login')} className={btnClass} style={btnStyle}>
-                  {compact ? 'Log in' : 'Sign in'}
-                </button>
-                <button type="button" onClick={() => navigate('/register')} className={btnClass} style={btnStyle}>
-                  {compact ? 'Join' : 'Register'}
-                </button>
-              </>
-            ) : null}
+        {!compact ? (
+          <div className="flex w-full min-w-0 items-center gap-2 py-2">
+            {homeBtn}
+            <div className="shrink-0">
+              <PersonaSwitcher compact />
+            </div>
+            <div className={scrollClass}>
+              <div className="flex w-max flex-nowrap items-center gap-2 px-1">{navPills}</div>
+            </div>
+            <div className="flex shrink-0 items-center self-center">
+              <SlimeCreditsChipNav />
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex w-full min-w-0 items-center gap-2 py-3 px-1">
+            {homeBtn}
+            <div className={scrollClass}>
+              <div className="flex w-max flex-nowrap items-center gap-2">{navPills}</div>
+            </div>
+            <div className="flex shrink-0 items-center self-center">
+              <SlimeCreditsChipNav compact />
+            </div>
+          </div>
+        )}
       </div>
       {/* Sign out: fixed bottom-left so the five main pills stay centered above */}
       {isSupabaseEnvConfigured() && session ? (

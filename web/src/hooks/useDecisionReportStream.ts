@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
 import { apiFetch } from '../utils/apiFetch';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
 import { parseSseBlocks } from '../utils/parseSse';
@@ -11,6 +12,7 @@ export type DecisionReportStreamResult = {
 };
 
 export function useDecisionReportStream() {
+  const { showInsufficient } = useSlimeCredits();
   const [status, setStatus] = useState<StreamStatus>('idle');
   const [progressStep, setProgressStep] = useState('Structuring decision');
   const [partialTrace, setPartialTrace] = useState<Record<string, unknown> | null>(null);
@@ -80,19 +82,41 @@ export function useDecisionReportStream() {
     };
 
     try {
+      const creditReq =
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `dr-${Date.now()}`;
       const res = await apiFetch(
         `/api/shadow-chat/threads/${encodeURIComponent(params.threadId)}/decision-report/stream`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-Credit-Request-Id': creditReq },
           body: JSON.stringify({
             decision_prompt: params.decisionPrompt,
             clarification_answers: params.clarificationAnswers,
             save_clarification_to_profile: Boolean(params.saveClarificationToProfile),
+            credit_request_id: creditReq,
           }),
           signal: controller.signal,
         },
       );
+      if (res.status === 402) {
+        let j: Record<string, unknown> = {};
+        try {
+          j = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* ignore */
+        }
+        showInsufficient({
+          required: Number(j.required ?? 0),
+          balance: typeof j.balance === 'number' ? j.balance : null,
+          message:
+            typeof j.message === 'string'
+              ? j.message
+              : 'You need more Slime Credits for this action.',
+        });
+        setStatus('error');
+        setIsStreaming(false);
+        return { trace: null, error: 'insufficient_credits' };
+      }
       if (!res.ok || !res.body) {
         const t = await res.text();
         throw new Error(t || res.statusText);
@@ -138,7 +162,7 @@ export function useDecisionReportStream() {
     } finally {
       setIsStreaming(false);
     }
-  }, []);
+  }, [showInsufficient]);
 
   const cancel = useCallback(() => {
     controllerRef.current?.abort();

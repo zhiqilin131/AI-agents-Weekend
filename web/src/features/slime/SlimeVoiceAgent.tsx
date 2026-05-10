@@ -22,6 +22,7 @@ import {
 } from '../../utils/slimeVoiceActions';
 import { refetchSlimeProfileGlobal } from '../../hooks/useSlimeProfile';
 import { cn } from '../../app/components/ui/utils';
+import { useSlimeCredits } from '../../app/components/credits/SlimeCreditsContext';
 
 export type VoiceAgentState =
   | 'idle'
@@ -212,6 +213,7 @@ export function SlimeVoiceAgent({
   className,
 }: SlimeVoiceAgentProps) {
   const navigate = useNavigate();
+  const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const { storageUserKey } = useExecutionStorageUserKey();
   const sendVoiceBlobRef = useRef<(blob: Blob | null) => Promise<void>>(async () => {});
   const { supported, recording, error, setError, startRecording, stopRecording, speechPhase } = useVoiceRecorder({
@@ -323,12 +325,33 @@ export function SlimeVoiceAgent({
 
       void (async () => {
         try {
+          const ttsCredit =
+            typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tts-${Date.now()}`;
           const r = await apiFetch('/api/slime/tts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Credit-Request-Id': ttsCredit,
+            },
             body: JSON.stringify({ text }),
           });
           if (gen !== ttsGenRef.current) return;
+          if (r.status === 402) {
+            let j: Record<string, unknown> = {};
+            try {
+              j = (await r.json()) as Record<string, unknown>;
+            } catch {
+              /* ignore */
+            }
+            showInsufficient({
+              required: Number(j.required ?? 0),
+              balance: typeof j.balance === 'number' ? j.balance : null,
+              message:
+                typeof j.message === 'string'
+                  ? j.message
+                  : 'You need more Slime Credits for this action.',
+            });
+          }
           if (r.ok) {
             const blob = await r.blob();
             if (gen !== ttsGenRef.current) return;
@@ -383,7 +406,7 @@ export function SlimeVoiceAgent({
         speak(text, synthOpts);
       })();
     },
-    [ttsSupported, slimeProfile.voice, speak, cancelTts, cancelBuddyAudio],
+    [ttsSupported, slimeProfile.voice, speak, cancelTts, cancelBuddyAudio, showInsufficient],
   );
 
   const runSpokenSequence = useCallback(
@@ -503,12 +526,37 @@ export function SlimeVoiceAgent({
       }
       setVoiceState('thinking');
       try {
-        const res = await apiFetch('/api/slime/voice-command', { method: 'POST', body: fd });
+        const vcCredit =
+          typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `vc-${Date.now()}`;
+        const res = await apiFetch('/api/slime/voice-command', {
+          method: 'POST',
+          headers: { 'X-Credit-Request-Id': vcCredit },
+          body: fd,
+        });
+        if (res.status === 402) {
+          let j: Record<string, unknown> = {};
+          try {
+            j = (await res.json()) as Record<string, unknown>;
+          } catch {
+            /* ignore */
+          }
+          showInsufficient({
+            required: Number(j.required ?? 0),
+            balance: typeof j.balance === 'number' ? j.balance : null,
+            message:
+              typeof j.message === 'string'
+                ? j.message
+                : 'You need more Slime Credits for this action.',
+          });
+          setVoiceState('idle');
+          return;
+        }
         if (!res.ok) {
           const t = await res.text();
           throw new Error(httpErrorBodyToMessage(t, res.statusText));
         }
         const data = (await res.json()) as VoiceResponse;
+        void refreshCredits();
         if (data.thread_id) onThreadId?.(data.thread_id);
         const mus = data.memory_updates;
         if (mus?.length) {
@@ -655,6 +703,8 @@ export function SlimeVoiceAgent({
       onDecisionSuggestion,
       onProfileMemorySaved,
       onMemoryEvidenceRetrieved,
+      showInsufficient,
+      refreshCredits,
     ],
   );
 

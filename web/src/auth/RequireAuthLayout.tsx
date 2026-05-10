@@ -1,4 +1,5 @@
 import { Navigate, Outlet } from 'react-router';
+import { SlimeCreditsProvider } from '../app/components/credits/SlimeCreditsContext';
 import { FollowupNotificationManager } from '../app/components/followup/FollowupNotificationManager';
 import { useAuth } from './AuthContext';
 
@@ -18,10 +19,10 @@ export function RequireAuthLayout() {
 
   if (!isSupabaseEnvConfigured()) {
     return (
-      <>
+      <SlimeCreditsProvider>
         <FollowupNotificationManager />
         <Outlet />
-      </>
+      </SlimeCreditsProvider>
     );
   }
 
@@ -38,9 +39,9 @@ export function RequireAuthLayout() {
   }
 
   return (
-    <>
+    <SlimeCreditsProvider>
       <FollowupNotificationManager />
       <Outlet />
-    </>
+    </SlimeCreditsProvider>
   );
 }

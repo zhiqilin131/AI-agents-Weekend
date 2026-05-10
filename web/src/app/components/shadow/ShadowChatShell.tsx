@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { Sparkles, X } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useAuth } from '../../../auth/AuthContext';
+import { useSlimeCredits } from '../credits/SlimeCreditsContext';
 import { MainNavButtons } from '../MainNavButtons';
 import type { ClarifyQuestion } from '../ClarifyDialog';
 import { ClarificationCard, type ClarificationGateMeta } from './ClarificationCard';
@@ -43,6 +44,7 @@ export function ShadowChatShell({
 } = {}) {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
   const [threads, setThreads] = useState<ShadowThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -335,17 +337,23 @@ export function ShadowChatShell({
       pushTimeline('Reading memory');
       setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: 'user', content: text }]);
 
+      const creditReq =
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `chat-${Date.now()}`;
       let res: Response;
       try {
         res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/stream`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Credit-Request-Id': creditReq,
+          },
           body: JSON.stringify({
             message: text,
             user_action: userAction,
             clarification_answers: clarificationAnswers,
             save_clarification_to_profile: Boolean(saveClarificationToProfile),
             client_turn_seq: streamSeq,
+            credit_request_id: creditReq,
           }),
         });
       } catch (e) {
@@ -353,8 +361,33 @@ export function ShadowChatShell({
         pushTimeline(e instanceof Error ? e.message : 'Network request failed');
         return;
       }
+      if (res.status === 402) {
+        let j: Record<string, unknown> = {};
+        try {
+          j = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* ignore */
+        }
+        showInsufficient({
+          required: Number(j.required ?? 0),
+          balance: typeof j.balance === 'number' ? j.balance : null,
+          message:
+            typeof j.message === 'string'
+              ? j.message
+              : 'You need more Slime Credits for this action.',
+        });
+        setAgentStatus('idle');
+        setSending(false);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === 'user' && last.content === text) return prev.slice(0, -1);
+          return prev;
+        });
+        return;
+      }
       if (!res.ok || !res.body) {
         setAgentStatus('error');
+        setSending(false);
         return;
       }
       const reader = res.body.getReader();
@@ -424,6 +457,7 @@ export function ShadowChatShell({
           if (ev.stream_error) {
             setAgentStatus('error');
           } else {
+            void refreshCredits();
             if (ev.metrics && typeof ev.metrics === 'object') {
               pushTimeline(`response ${String((ev.metrics as Record<string, unknown>).response_total_ms ?? '')}ms`);
             }
@@ -521,6 +555,7 @@ export function ShadowChatShell({
       if (doneTrace && typeof doneTrace.decision_id === 'string') {
         setAgentStatus('report_complete' as AgentStatus);
         pushTimeline('Report complete');
+        void refreshCredits();
         await loadThread(activeThreadId);
         await refreshThreads();
       }
@@ -548,11 +583,33 @@ export function ShadowChatShell({
           body.thread_id = activeThreadId;
           body.recent_messages = messages.slice(-8).map((m) => ({ role: m.role, content: m.content }));
         }
+        const clarifyCredit =
+          typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `clarify-${Date.now()}`;
         const cr = await apiFetch('/api/clarify', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Credit-Request-Id': clarifyCredit,
+          },
           body: JSON.stringify(body),
         });
+        if (cr.status === 402) {
+          let j: Record<string, unknown> = {};
+          try {
+            j = (await cr.json()) as Record<string, unknown>;
+          } catch {
+            /* ignore */
+          }
+          showInsufficient({
+            required: Number(j.required ?? 0),
+            balance: typeof j.balance === 'number' ? j.balance : null,
+            message:
+              typeof j.message === 'string'
+                ? j.message
+                : 'You need more Slime Credits for this action.',
+          });
+          return true;
+        }
         if (cr.ok) {
           const gate = (await cr.json()) as {
             need_clarification?: boolean;
@@ -576,7 +633,7 @@ export function ShadowChatShell({
       }
       return false;
     },
-    [activeThreadId, messages],
+    [activeThreadId, messages, showInsufficient],
   );
 
   const applyCalendarCoachFromChat = useCallback(async () => {

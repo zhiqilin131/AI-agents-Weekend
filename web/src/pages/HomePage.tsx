@@ -12,6 +12,7 @@ import { apiFetch } from '../utils/apiFetch';
 import { parseSseBlocks } from '../utils/parseSse';
 import type { AppState, DecisionReport } from '../app/model';
 import { HomeRoamingSlime } from '../app/components/home/HomeRoamingSlime';
+import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
 
 const PIPELINE_STAGES = ['enhance', 'perceive', 'retrieve', 'infer', 'simulate', 'evaluate', 'finalize'] as const;
 
@@ -57,6 +58,7 @@ type Tier3ProfileView = {
 export default function HomePage() {
   const navigate = useNavigate();
   const routeTraceId = useParams().decisionId;
+  const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
 
   const [state, setState] = useState<AppState>(() => (routeTraceId ? 'loading' : 'empty'));
   const [decisionInput, setDecisionInput] = useState('');
@@ -183,12 +185,39 @@ export default function HomePage() {
           body.preserve_raw_input = true;
         }
 
+        const runCredit =
+          typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `run-${Date.now()}`;
         const res = await apiFetch('/api/run/stream', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Credit-Request-Id': runCredit,
+          },
           body: JSON.stringify(body),
           signal: controller.signal,
         });
+        if (res.status === 402) {
+          let j: Record<string, unknown> = {};
+          try {
+            j = (await res.json()) as Record<string, unknown>;
+          } catch {
+            /* ignore */
+          }
+          showInsufficient({
+            required: Number(j.required ?? 0),
+            balance: typeof j.balance === 'number' ? j.balance : null,
+            message:
+              typeof j.message === 'string'
+                ? j.message
+                : 'You need more Slime Credits for this action.',
+          });
+          window.clearTimeout(timeoutId);
+          setLoadingStage(null);
+          setState('empty');
+          setRunProgress(0);
+          setRunStageLabel('Ready');
+          return;
+        }
         if (!res.ok) {
           const text = await res.text();
           throw new Error(text || res.statusText);
@@ -247,6 +276,7 @@ export default function HomePage() {
         }
         if (!trace) throw new Error('Incomplete response (no trace)');
 
+        void refreshCredits();
         setLiveTrace(null);
         setFullTrace(trace);
         setNotes(gotNotes);
@@ -274,7 +304,7 @@ export default function HomePage() {
         setRunProgress(0);
       }
     },
-    [decisionInput, loadTier3Profile, navigate],
+    [decisionInput, loadTier3Profile, navigate, refreshCredits, showInsufficient],
   );
 
   const handleRunDecision = async () => {
@@ -283,11 +313,34 @@ export default function HomePage() {
     setClarifyGateHint(null);
     setClarifyChecking(true);
     try {
+      const clarifyCredit =
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `clarify-${Date.now()}`;
       const cr = await apiFetch('/api/clarify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Credit-Request-Id': clarifyCredit,
+        },
         body: JSON.stringify({ raw_input: decisionInput }),
       });
+      if (cr.status === 402) {
+        let j: Record<string, unknown> = {};
+        try {
+          j = (await cr.json()) as Record<string, unknown>;
+        } catch {
+          /* ignore */
+        }
+        showInsufficient({
+          required: Number(j.required ?? 0),
+          balance: typeof j.balance === 'number' ? j.balance : null,
+          message:
+            typeof j.message === 'string'
+              ? j.message
+              : 'You need more Slime Credits for this action.',
+        });
+        setClarifyChecking(false);
+        return;
+      }
       if (cr.ok) {
         const gate = (await cr.json()) as {
           need_clarification?: boolean;

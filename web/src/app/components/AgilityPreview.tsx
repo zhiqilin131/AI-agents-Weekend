@@ -13,10 +13,20 @@ export type AgilityPreviewData = {
   review_checkpoint?: string;
 };
 
+/** Sidebar variant only shows headline, summary, and first risk line — skip empty shell cards. */
+export function agilityPreviewSidebarHasContent(preview: AgilityPreviewData | null | undefined): boolean {
+  if (!preview) return false;
+  const h = (preview.headline ?? '').trim();
+  const s = (preview.summary ?? '').trim();
+  const r = (preview.risk_windows?.[0] ?? '').trim();
+  return Boolean(h || s || r);
+}
+
 export function AgilityPreview({ preview, variant = 'default' }: { preview: AgilityPreviewData | null; variant?: 'default' | 'sidebar' }) {
   if (!preview) return null;
   const sidebar = variant === 'sidebar';
   if (sidebar) {
+    if (!agilityPreviewSidebarHasContent(preview)) return null;
     const risk = preview.risk_windows?.[0];
     return (
       <section className="w-full px-3 py-3">
