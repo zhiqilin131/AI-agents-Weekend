@@ -86,6 +86,19 @@ If both are set, the SPA requires sign-in before Chat, Profile, etc. Omit either
 
 See `web/.env.example` and repo `.env.example`.
 
+## Deployment persistence (why memory disappears after redeploy)
+
+All durable user data (profile, structured memory, **Shadow chat threads**, traces, diary paths, graph snapshots, etc.) lives under **`FORESIGHT_DATA_DIR`** on disk (`profile/`, `chat_threads/`, `memory/`, …). **Chroma** uses **`CHROMA_PERSIST_DIR`** separately.
+
+- **Typical PaaS containers** use an **ephemeral filesystem**: each new deploy gets a fresh disk unless you attach storage.
+- The repo **Dockerfile** sets `FORESIGHT_DATA_DIR=/data` and `CHROMA_PERSIST_DIR=/data/chroma` so one mounted volume can hold everything.
+
+**Railway:** create a **Volume**, mount it at **`/data`** on the API service (same path the image expects). Redeploys then keep the same files.
+
+**Other hosts:** bind-mount or attach block storage to `/data` (or override `FORESIGHT_DATA_DIR` / `CHROMA_PERSIST_DIR` to paths on persistent storage).
+
+If you previously deployed without a volume, data was only inside the container and **a redeploy would look like “all memory vanished”** — that is expected until persistent storage is wired up.
+
 ## Docs
 
 - Voice / Slime: `docs/voice_slime_agent.md`, `docs/voice_asr.md`

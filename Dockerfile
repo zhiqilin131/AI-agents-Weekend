@@ -1,9 +1,13 @@
 FROM python:3.11-slim
 
 # Slime voice-command: cloud ASR fits small Railway RAM (needs OPENAI_API_KEY). For local Whisper in Docker: ASR_PROVIDER=faster_whisper.
+#
+# Persist EVERYTHING user-specific under /data (mount a Railway volume here). Without FORESIGHT_DATA_DIR on /data,
+# profile + shadow threads + traces default to ./data inside the image and are wiped on every redeploy.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    FORESIGHT_DATA_DIR=/data \
     CHROMA_PERSIST_DIR=/data/chroma \
     ASR_PROVIDER=openai
 
@@ -25,7 +29,7 @@ RUN pip install --upgrade pip setuptools wheel
 COPY . .
 RUN pip install -e ".[dev,web,decision,deploy]"
 
-# Railway volume mount target for Chroma persistence.
+# Railway (or any host): attach a persistent volume mounted at /data so profile/, chat_threads/, chroma/, etc. survive redeploys.
 RUN mkdir -p /data/chroma
 
 EXPOSE 8765

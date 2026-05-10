@@ -15,7 +15,7 @@ import { ChatMessageList } from './ChatMessageList';
 import { ChatSidebar } from './ChatSidebar';
 import { DecisionReportStreamingPanel } from './DecisionReportStreamingPanel';
 import { DecisionSuggestionCard } from './DecisionSuggestionCard';
-import { ProfileUpdateCard } from './ProfileUpdateCard';
+import { ProfileMemoryToastStack, type ProfileMemoryToast, profileMemoryEventDedupeKey } from './ProfileMemoryToastStack';
 import { ShadowChatInput } from './ShadowChatInput';
 import type { AgentStatus, ShadowMessage, ShadowSuggestion, ShadowThread } from './types';
 import { detectCalendarFeedbackIntent } from '../../../utils/calendarFeedbackIntent';
@@ -48,9 +48,10 @@ export function ShadowChatShell({
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
   const [timeline, setTimeline] = useState<string[]>(['Ready']);
   const [suggestion, setSuggestion] = useState<ShadowSuggestion | null>(null);
-  const [profileUpdates, setProfileUpdates] = useState<string[]>([]);
-  /** Profile saves from thread JSON — shown inside the chat transcript after reload */
-  const [threadMemoryLog, setThreadMemoryLog] = useState<Array<{ kind: string; items: string[]; at: string }>>([]);
+  const [profileMemoryToasts, setProfileMemoryToasts] = useState<ProfileMemoryToast[]>([]);
+  const profileMemoryToastThreadRef = useRef<string | null>(null);
+  const profileMemoryToastKeysRef = useRef<Set<string>>(new Set());
+  const profileMemoryToastTimersRef = useRef<Map<string, number>>(new Map());
   const [reportOpen, setReportOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [clarifyOpen, setClarifyOpen] = useState(false);
@@ -76,6 +77,42 @@ export function ShadowChatShell({
   const [inputBootstrap, setInputBootstrap] = useState<string | null>(null);
   const reportStream = useDecisionReportStream();
   const { loadExistingTrace } = reportStream;
+
+  const dismissProfileMemoryToast = useCallback((id: string) => {
+    const t = profileMemoryToastTimersRef.current.get(id);
+    if (t != null) {
+      window.clearTimeout(t);
+      profileMemoryToastTimersRef.current.delete(id);
+    }
+    setProfileMemoryToasts((prev) => prev.filter((x) => x.id !== id));
+  }, []);
+
+  const clearAllProfileMemoryToasts = useCallback(() => {
+    profileMemoryToastTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+    profileMemoryToastTimersRef.current.clear();
+    setProfileMemoryToasts([]);
+  }, []);
+
+  const scheduleProfileMemoryToast = useCallback(
+    (ev: { items: string[]; at: string }) => {
+      const id =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `pm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      setProfileMemoryToasts((prev) => [...prev.slice(-4), { id, items: ev.items, at: ev.at }]);
+      const timer = window.setTimeout(() => dismissProfileMemoryToast(id), 6200);
+      profileMemoryToastTimersRef.current.set(id, timer);
+    },
+    [dismissProfileMemoryToast],
+  );
+
+  useEffect(
+    () => () => {
+      profileMemoryToastTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+      profileMemoryToastTimersRef.current.clear();
+    },
+    [],
+  );
 
   const pushTimeline = (x: string) =>
     setTimeline((s) => {
@@ -105,18 +142,33 @@ export function ShadowChatShell({
     }
     if (!res.ok) return;
     const data = (await res.json()) as { thread: ShadowThread };
-    setActiveThreadId(data.thread.thread_id);
+    const tid = data.thread.thread_id;
+    const mem = Array.isArray(data.thread.memory_events)
+      ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string }>)
+      : [];
+    const profileEvents = mem.filter(
+      (ev) => ev.kind === 'profile_update' && Array.isArray(ev.items) && ev.items.length > 0,
+    );
+
+    if (profileMemoryToastThreadRef.current !== tid) {
+      profileMemoryToastThreadRef.current = tid;
+      clearAllProfileMemoryToasts();
+      profileMemoryToastKeysRef.current = new Set(profileEvents.map(profileMemoryEventDedupeKey));
+    } else {
+      for (const ev of profileEvents) {
+        const k = profileMemoryEventDedupeKey(ev);
+        if (profileMemoryToastKeysRef.current.has(k)) continue;
+        profileMemoryToastKeysRef.current.add(k);
+        scheduleProfileMemoryToast({ items: ev.items, at: ev.at });
+      }
+    }
+
+    setActiveThreadId(tid);
     setMessages(data.thread.messages || []);
     setSuggestion(null);
     if (!opts?.preservePendingSuggestion) {
       lastDecisionSuggestionRef.current = null;
     }
-    setProfileUpdates([]);
-    setThreadMemoryLog(
-      Array.isArray(data.thread.memory_events)
-        ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string }>)
-        : [],
-    );
   };
 
   const newChat = async () => {
@@ -141,8 +193,11 @@ export function ShadowChatShell({
       setMessages([]);
       setSuggestion(null);
       lastDecisionSuggestionRef.current = null;
-      setProfileUpdates([]);
-      setThreadMemoryLog([]);
+      profileMemoryToastThreadRef.current = null;
+      profileMemoryToastKeysRef.current.clear();
+      profileMemoryToastTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+      profileMemoryToastTimersRef.current.clear();
+      setProfileMemoryToasts([]);
       const sp = new URLSearchParams(window.location.search);
       if (sp.has('thread')) {
         sp.delete('thread');
@@ -173,14 +228,17 @@ export function ShadowChatShell({
       setMessages([]);
       setSuggestion(null);
       lastDecisionSuggestionRef.current = null;
-      setProfileUpdates([]);
-      setThreadMemoryLog([]);
+      profileMemoryToastThreadRef.current = null;
+      profileMemoryToastKeysRef.current.clear();
+      profileMemoryToastTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+      profileMemoryToastTimersRef.current.clear();
+      setProfileMemoryToasts([]);
     }
   }, [threads, activeThreadId, initialThreadId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, timeline, threadMemoryLog]);
+  }, [messages, timeline]);
 
   /** Recover `report_generating` if chat streaming callbacks briefly set `idle` during report generation. */
   useEffect(() => {
@@ -331,8 +389,7 @@ export function ShadowChatShell({
           draft += String(ev.content || '');
           upsertDraft();
         } else if (type === 'profile_update') {
-          const items = Array.isArray(ev.items) ? ev.items.map(String) : [];
-          setProfileUpdates(items);
+          /* Shown via bottom-left toast after thread reload (loadThread). */
         } else if (type === 'thread_context_note') {
           const note =
             typeof ev.message === 'string' && ev.message.trim()
@@ -566,7 +623,7 @@ export function ShadowChatShell({
   }, [messages, clarifyOpen, requestClarifyIfNeeded]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
+    <div className="relative min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
       <div className="mx-auto max-w-[1500px]">
         <MainNavButtons />
         <div className="mb-4 flex items-center justify-between">
@@ -592,7 +649,6 @@ export function ShadowChatShell({
               <div className="min-h-[58vh] max-h-[66vh] overflow-y-auto px-1 py-3">
                 <ChatMessageList
                   messages={messages}
-                  memoryLog={threadMemoryLog}
                   onOpenReportArtifact={onOpenReportArtifact}
                   onReviseArtifact={onReviseFromArtifactOrPanel}
                   onArtifactExecutionCalendar={openExecutionCalendar}
@@ -607,7 +663,6 @@ export function ShadowChatShell({
                   onGenerate={() => void onGenerateDecisionReport()}
                   onKeep={() => setSuggestion(null)}
                 />
-                <ProfileUpdateCard items={profileUpdates} />
                 {calendarCoachHint ? (
                   <div className="relative overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-white/95 via-indigo-50/40 to-violet-50/50 px-3 py-3 shadow-[0_8px_30px_rgba(99,102,241,0.12)]">
                     <button
@@ -779,6 +834,7 @@ export function ShadowChatShell({
         onReviseReport={(decisionId) => void onReviseFromArtifactOrPanel(decisionId)}
         shadowThreadId={activeThreadId}
       />
+      <ProfileMemoryToastStack toasts={profileMemoryToasts} onDismiss={dismissProfileMemoryToast} />
     </div>
   );
 }

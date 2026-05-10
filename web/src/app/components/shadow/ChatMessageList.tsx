@@ -1,14 +1,6 @@
 import type { ShadowMessage } from './types';
 import { DecisionReportArtifactCard, type ArtifactStatus } from './DecisionReportArtifactCard';
 
-function formatMemoryEventAt(iso: string): string {
-  const t = (iso || '').trim();
-  if (!t) return '';
-  const d = Date.parse(t);
-  if (Number.isNaN(d)) return t.slice(0, 16);
-  return new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
 const SUGGESTION_CHIPS = [
   'Help me decide something concrete',
   'I want to reflect on a situation',
@@ -18,15 +10,12 @@ const SUGGESTION_CHIPS = [
 
 export function ChatMessageList({
   messages,
-  memoryLog = [],
   onOpenReportArtifact,
   onReviseArtifact,
   onArtifactExecutionCalendar,
   onSuggestionChip,
 }: {
   messages: ShadowMessage[];
-  /** Thread `memory_events` (e.g. profile saves) — rendered in-chat after messages */
-  memoryLog?: Array<{ kind: string; items: string[]; at: string }>;
   onOpenReportArtifact: (decisionId: string) => void;
   onReviseArtifact: (decisionId: string) => void;
   onArtifactExecutionCalendar: (decisionId: string) => void;
@@ -104,23 +93,6 @@ export function ChatMessageList({
           </div>
         );
       })}
-      {memoryLog
-        .filter((ev) => ev.kind === 'profile_update' && Array.isArray(ev.items) && ev.items.length > 0)
-        .map((ev, idx) => (
-          <div key={`mem-${ev.at}-${idx}`} className="flex justify-start">
-            <div className="max-w-[85%] rounded-2xl border border-emerald-200/90 bg-emerald-50/95 px-4 py-2.5 text-sm shadow-sm">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-800">Saved to profile memory</p>
-              <ul className="mt-1.5 list-disc space-y-1 pl-4 text-[13px] leading-snug text-emerald-950">
-                {ev.items.slice(0, 6).map((line, i) => (
-                  <li key={`${line}-${i}`}>{line}</li>
-                ))}
-              </ul>
-              {ev.at ? (
-                <p className="mt-1.5 text-[10px] text-emerald-800/75">{formatMemoryEventAt(ev.at)}</p>
-              ) : null}
-            </div>
-          </div>
-        ))}
     </div>
   );
 }
