@@ -10,6 +10,10 @@ from foresight_x.config import load_settings
 from foresight_x.perception.clarification_gate import default_clarification_state
 
 
+class ThreadNotFoundError(KeyError):
+    """No saved thread JSON for this ``user_id`` + ``thread_id`` (and caller forbids auto-create)."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -82,11 +86,15 @@ def list_threads(*, user_id: str) -> list[dict[str, Any]]:
     return sorted(out, key=lambda x: str(x.get("updated_at") or ""), reverse=True)
 
 
-def load_thread(thread_id: str | None, *, user_id: str) -> dict[str, Any]:
+def load_thread(thread_id: str | None, *, user_id: str, allow_create: bool = True) -> dict[str, Any]:
     if not thread_id:
+        if not allow_create:
+            raise ThreadNotFoundError("missing thread_id")
         return create_thread(user_id=user_id)
     p = _thread_path(user_id, thread_id)
     if not p.is_file():
+        if not allow_create:
+            raise ThreadNotFoundError(thread_id)
         return create_thread(user_id=user_id)
     try:
         t = json.loads(p.read_text(encoding="utf-8"))

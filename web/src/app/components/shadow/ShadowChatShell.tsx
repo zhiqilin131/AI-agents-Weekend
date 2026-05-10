@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Sparkles, X } from 'lucide-react';
 import { useNavigate } from 'react-router';
+import { useAuth } from '../../../auth/AuthContext';
 import { MainNavButtons } from '../MainNavButtons';
 import type { ClarifyQuestion } from '../ClarifyDialog';
 import { ClarificationCard, type ClarificationGateMeta } from './ClarificationCard';
@@ -40,6 +41,7 @@ export function ShadowChatShell({
   initialOpenReportId?: string | null;
 } = {}) {
   const navigate = useNavigate();
+  const { session } = useAuth();
   const [threads, setThreads] = useState<ShadowThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ShadowMessage[]>([]);
@@ -81,15 +83,26 @@ export function ShadowChatShell({
       return [...s, x].slice(-6);
     });
 
-  const refreshThreads = async () => {
+  const refreshThreads = useCallback(async () => {
     const res = await apiFetch('/api/shadow-chat/threads');
     if (!res.ok) return;
     const data = (await res.json()) as { threads: ShadowThread[] };
     setThreads(data.threads || []);
-  };
+  }, []);
 
   const loadThread = async (id: string, opts?: { preservePendingSuggestion?: boolean }) => {
     const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`);
+    if (res.status === 404) {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.has('thread')) {
+        sp.delete('thread');
+        const q = sp.toString();
+        navigate(q ? `/chat?${q}` : '/chat', { replace: true });
+      }
+      setActiveThreadId(null);
+      await refreshThreads();
+      return;
+    }
     if (!res.ok) return;
     const data = (await res.json()) as { thread: ShadowThread };
     setActiveThreadId(data.thread.thread_id);
@@ -118,11 +131,28 @@ export function ShadowChatShell({
     await loadThread(data.thread.thread_id);
   };
 
+  const prevAuthUserRef = useRef<string | undefined>(undefined);
+
   useEffect(() => {
-    void (async () => {
-      await refreshThreads();
-    })();
-  }, []);
+    const key = session?.user?.id ?? '';
+    const prev = prevAuthUserRef.current;
+    if (prev !== undefined && prev !== key) {
+      setActiveThreadId(null);
+      setMessages([]);
+      setSuggestion(null);
+      lastDecisionSuggestionRef.current = null;
+      setProfileUpdates([]);
+      setThreadMemoryLog([]);
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.has('thread')) {
+        sp.delete('thread');
+        const q = sp.toString();
+        navigate(q ? `/chat?${q}` : '/chat', { replace: true });
+      }
+    }
+    prevAuthUserRef.current = key;
+    void refreshThreads();
+  }, [session?.user?.id, navigate, refreshThreads]);
 
   useEffect(() => {
     try {

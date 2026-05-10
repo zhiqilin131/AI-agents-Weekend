@@ -100,6 +100,7 @@ from foresight_x.shadow.thread_context import append_temporary_context_items, fo
 from foresight_x.shadow.thread_summary import maybe_update_thread_summary
 from foresight_x.structured_predict import structured_predict
 from foresight_x.chat import (
+    ThreadNotFoundError,
     append_message,
     create_thread,
     delete_thread,
@@ -287,6 +288,14 @@ def _settings_for_active_user():
     s = load_settings()
     uid = _active_user_id(s)
     return s.model_copy(update={"foresight_user_id": uid})
+
+
+def _load_thread_or_404(thread_id: str, *, uid: str) -> dict:
+    """Load a chat thread JSON for ``uid`` or 404 (never auto-create a new id)."""
+    try:
+        return load_thread(thread_id, user_id=uid, allow_create=False)
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="thread_not_found") from exc
 
 
 def _persona_settings(user_id: str):
@@ -1037,13 +1046,19 @@ def clarify(body: ClarifyRequest) -> dict:
     events: list[dict[str, Any]] = []
     thread: dict[str, Any] | None = None
     if body.thread_id:
-        thread = load_thread(body.thread_id, user_id=settings.foresight_user_id)
-        events = list(thread.get("clarification_events") or [])
-        if not recent:
-            recent = [
-                {"role": str(m.get("role") or ""), "content": str(m.get("content") or "")}
-                for m in (thread.get("messages") or [])[-8:]
-            ]
+        try:
+            thread = load_thread(body.thread_id, user_id=settings.foresight_user_id, allow_create=False)
+        except ThreadNotFoundError:
+            thread = None
+        if thread is not None:
+            events = list(thread.get("clarification_events") or [])
+            if not recent:
+                recent = [
+                    {"role": str(m.get("role") or ""), "content": str(m.get("content") or "")}
+                    for m in (thread.get("messages") or [])[-8:]
+                ]
+        else:
+            events = []
     thread_meta: dict[str, Any]
     if thread is not None:
         thread_meta = thread
@@ -1078,7 +1093,7 @@ def shadow_clarification_skip(thread_id: str, body: ClarifySkipRequest) -> dict:
     """Record a skipped clarification so the gate does not immediately repeat the same dimension."""
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
-    thread = load_thread(thread_id, user_id=uid)
+    thread = _load_thread_or_404(thread_id, uid=uid)
     append_clarification_event(
         thread,
         kind="skipped",
@@ -1089,7 +1104,7 @@ def shadow_clarification_skip(thread_id: str, body: ClarifySkipRequest) -> dict:
     n_user = sum(1 for m in thread.get("messages", []) if str(m.get("role") or "") == "user")
     st["suppress_clarify_until_user_count"] = n_user + 8
     save_thread(thread)
-    return {"ok": True, "thread": load_thread(thread_id, user_id=uid)}
+    return {"ok": True, "thread": _load_thread_or_404(thread_id, uid=uid)}
 
 
 @app.get("/api/traces")
@@ -1291,7 +1306,10 @@ def _simple_chat_reply(message: str) -> str:
 def unified_chat(body: UnifiedChatRequest) -> dict:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
-    thread = load_thread(body.thread_id, user_id=uid)
+    if body.thread_id:
+        thread = _load_thread_or_404(body.thread_id, uid=uid)
+    else:
+        thread = create_thread(user_id=uid)
     mode = str(body.mode or thread.get("mode") or "normal")
     action = (body.user_action or "send_message").strip()
     message = (body.message or "").strip()
@@ -1419,7 +1437,7 @@ def unified_chat(body: UnifiedChatRequest) -> dict:
             mode="normal",
         )
 
-    thread = load_thread(thread["thread_id"], user_id=uid)
+    thread = _load_thread_or_404(str(thread["thread_id"]), uid=uid)
     return {
         "assistant_message": thread.get("messages", [])[-1] if thread.get("messages") else None,
         "mode": thread.get("mode", "normal"),
@@ -1540,7 +1558,7 @@ def create_shadow_chat_thread(body: ShadowThreadCreateRequest | None = None) -> 
 def get_shadow_chat_thread(thread_id: str) -> dict:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
-    t = load_thread(thread_id, user_id=uid)
+    t = _load_thread_or_404(thread_id, uid=uid)
     return {"thread": t}
 
 
@@ -1557,7 +1575,7 @@ def set_shadow_report_context(thread_id: str, body: ShadowReportContextRequest) 
     """Pin or clear active decision report context for revision-style follow-ups."""
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
-    thread = load_thread(thread_id, user_id=uid)
+    thread = _load_thread_or_404(thread_id, uid=uid)
     did = (body.decision_id or "").strip()
     if not did:
         thread.pop("active_report_context", None)
@@ -1567,14 +1585,14 @@ def set_shadow_report_context(thread_id: str, body: ShadowReportContextRequest) 
             "mode": (body.mode or "revision").strip() or "revision",
         }
     save_thread(thread)
-    return {"ok": True, "thread": load_thread(thread_id, user_id=uid)}
+    return {"ok": True, "thread": _load_thread_or_404(thread_id, uid=uid)}
 
 
 @app.post("/api/shadow-chat/threads/{thread_id}/messages")
 def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -> dict:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
-    thread = load_thread(thread_id, user_id=uid)
+    thread = _load_thread_or_404(thread_id, uid=uid)
     mode = str(body.mode or thread.get("mode") or "normal")
     msg = body.message.strip()
     effective_msg = merge_clarification_answers(msg, body.clarification_answers)
@@ -1615,7 +1633,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
                 profile_updated=True,
             )
             _finalize_shadow_thread_turn(thread, settings=settings)
-            refreshed = load_thread(thread_id, user_id=uid)
+            refreshed = _load_thread_or_404(thread_id, uid=uid)
             return {
                 "thread": refreshed,
                 "suggestion": None,
@@ -1703,7 +1721,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
             intent.intent,
             dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
         )
-    refreshed = load_thread(thread_id, user_id=uid)
+    refreshed = _load_thread_or_404(thread_id, uid=uid)
     return {
         "thread": refreshed,
         "suggestion": suggestion,
@@ -1717,11 +1735,12 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
 def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -> StreamingResponse:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
+    _load_thread_or_404(thread_id, uid=uid)
 
     def _gen():
         tid = thread_id
         try:
-            thread = load_thread(thread_id, user_id=uid)
+            thread = load_thread(thread_id, user_id=uid, allow_create=False)
             tid = str(thread.get("thread_id") or thread_id)
             mode = str(body.mode or thread.get("mode") or "normal")
             message = body.message.strip()
@@ -2165,12 +2184,13 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
 def stream_shadow_decision_report(thread_id: str, body: ShadowDecisionReportStreamRequest) -> StreamingResponse:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
+    _load_thread_or_404(thread_id, uid=uid)
 
     def _gen():
         t0 = datetime.now(timezone.utc)
         tid = thread_id
         try:
-            thread = load_thread(thread_id, user_id=uid)
+            thread = load_thread(thread_id, user_id=uid, allow_create=False)
             tid = str(thread.get("thread_id") or thread_id)
             ctx, _ = _build_context(settings)
             prompt = body.decision_prompt.strip()

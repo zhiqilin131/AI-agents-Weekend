@@ -1,6 +1,7 @@
 from foresight_x.chat.mode_detector import ChatModeDetection, detect_chat_mode_intent
 from foresight_x.chat.intent_detector import ChatIntentResult, detect_chat_intent
 from foresight_x.chat.thread_store import (
+    ThreadNotFoundError,
     append_message,
     create_thread,
     delete_thread,
@@ -14,6 +15,7 @@ __all__ = [
     "ChatIntentResult",
     "detect_chat_mode_intent",
     "detect_chat_intent",
+    "ThreadNotFoundError",
     "append_message",
     "create_thread",
     "delete_thread",
