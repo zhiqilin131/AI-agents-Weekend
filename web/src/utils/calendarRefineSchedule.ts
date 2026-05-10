@@ -1,9 +1,5 @@
 import { apiFetch } from './apiFetch';
-import {
-  EXECUTION_EVENTS_STORAGE_KEY,
-  EXECUTION_SCHEDULE_COACH_OPTIONS_KEY,
-  EXECUTION_TASKS_STORAGE_KEY,
-} from './executionStorageKeys';
+import { executionStorageKeys } from './executionStorageKeys';
 import { taskIdFromAiCalendarEventId } from './executionCalendarSelection';
 
 /** Default window aligned with ExecutionPlannerPage */
@@ -58,10 +54,10 @@ export function normalizePlannerCoachOptions(o: Record<string, unknown> | null |
   };
 }
 
-/** Load accumulated coach constraints (merged with defaults). */
-export function loadCoachSchedulerOptions(): PlannerCoachOptions {
+/** Load accumulated coach constraints (merged with defaults). Scoped per signed-in / persona user. */
+export function loadCoachSchedulerOptions(storageUserKey: string): PlannerCoachOptions {
   try {
-    const raw = localStorage.getItem(EXECUTION_SCHEDULE_COACH_OPTIONS_KEY);
+    const raw = localStorage.getItem(executionStorageKeys(storageUserKey).coachOptions);
     if (!raw) return normalizePlannerCoachOptions({});
     const o = JSON.parse(raw) as Record<string, unknown>;
     return normalizePlannerCoachOptions(o);
@@ -70,9 +66,9 @@ export function loadCoachSchedulerOptions(): PlannerCoachOptions {
   }
 }
 
-export function saveCoachSchedulerOptions(opts: PlannerCoachOptions): void {
+export function saveCoachSchedulerOptions(storageUserKey: string, opts: PlannerCoachOptions): void {
   try {
-    localStorage.setItem(EXECUTION_SCHEDULE_COACH_OPTIONS_KEY, JSON.stringify(opts));
+    localStorage.setItem(executionStorageKeys(storageUserKey).coachOptions, JSON.stringify(opts));
   } catch {
     // ignore
   }
@@ -182,14 +178,16 @@ export async function refineScheduleWithFeedback(params: {
 
 /** Persist planner state like ExecutionPlannerPage.runAutoSchedule */
 export function mergeRefinedScheduleIntoStorage(
+  storageUserKey: string,
   res: RefineScheduleResponse,
   opts?: { targetTaskIds?: string[] | null },
 ): void {
   const schedule = res.schedule;
   const scheduled = schedule.scheduled_events ?? [];
   const targetSet = new Set((opts?.targetTaskIds ?? []).filter(Boolean));
+  const keys = executionStorageKeys(storageUserKey);
   try {
-    const raw = localStorage.getItem(EXECUTION_EVENTS_STORAGE_KEY);
+    const raw = localStorage.getItem(keys.events);
     const existing = (raw ? JSON.parse(raw) : []) as CalendarEventPayload[];
     let next: CalendarEventPayload[];
     if (!Array.isArray(existing)) {
@@ -206,25 +204,29 @@ export function mergeRefinedScheduleIntoStorage(
       });
       next = [...busy, ...keptAi, ...scheduled];
     }
-    localStorage.setItem(EXECUTION_EVENTS_STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(keys.events, JSON.stringify(next));
     if (Array.isArray(res.tasks_input) && res.tasks_input.length >= 0) {
-      localStorage.setItem(EXECUTION_TASKS_STORAGE_KEY, JSON.stringify(res.tasks_input));
+      localStorage.setItem(keys.tasks, JSON.stringify(res.tasks_input));
     }
     if (res.adjusted_options && typeof res.adjusted_options === 'object') {
-      saveCoachSchedulerOptions(normalizePlannerCoachOptions(res.adjusted_options as Record<string, unknown>));
+      saveCoachSchedulerOptions(
+        storageUserKey,
+        normalizePlannerCoachOptions(res.adjusted_options as Record<string, unknown>),
+      );
     }
   } catch {
     // ignore
   }
 }
 
-export function readExecutionPlannerSnapshot(): {
+export function readExecutionPlannerSnapshot(storageUserKey: string): {
   tasks: ExecutionTaskPayload[];
   events: CalendarEventPayload[];
 } {
+  const keys = executionStorageKeys(storageUserKey);
   try {
-    const te = localStorage.getItem(EXECUTION_TASKS_STORAGE_KEY);
-    const ev = localStorage.getItem(EXECUTION_EVENTS_STORAGE_KEY);
+    const te = localStorage.getItem(keys.tasks);
+    const ev = localStorage.getItem(keys.events);
     return {
       tasks: te ? (JSON.parse(te) as ExecutionTaskPayload[]) : [],
       events: ev ? (JSON.parse(ev) as CalendarEventPayload[]) : [],

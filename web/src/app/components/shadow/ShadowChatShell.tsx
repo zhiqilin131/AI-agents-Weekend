@@ -9,6 +9,7 @@ import { ClarificationCard, type ClarificationGateMeta } from './ClarificationCa
 import { apiFetch } from '../../../utils/apiFetch';
 import { parseSseBlocks } from '../../../utils/parseSse';
 import { refetchSlimeProfileGlobal } from '../../../hooks/useSlimeProfile';
+import { useExecutionStorageUserKey } from '../../../hooks/useExecutionStorageUserKey';
 import { useDecisionReportStream } from '../../../hooks/useDecisionReportStream';
 import { AgentPresence3DPanel } from './AgentPresence3DPanel';
 import { ChatMessageList } from './ChatMessageList';
@@ -42,6 +43,7 @@ export function ShadowChatShell({
 } = {}) {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
   const [threads, setThreads] = useState<ShadowThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ShadowMessage[]>([]);
@@ -579,9 +581,13 @@ export function ShadowChatShell({
 
   const applyCalendarCoachFromChat = useCallback(async () => {
     if (!calendarCoachHint?.trim()) return;
+    if (!storageReady || !storageUserKey) {
+      pushTimeline('Calendar workspace still loading — try again in a moment.');
+      return;
+    }
     setCalendarCoachBusy(true);
     try {
-      const { tasks, events } = readExecutionPlannerSnapshot();
+      const { tasks, events } = readExecutionPlannerSnapshot(storageUserKey);
       if (tasks.length === 0) {
         sessionStorage.setItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY, calendarCoachHint.trim());
         setCalendarCoachHint(null);
@@ -595,9 +601,9 @@ export function ShadowChatShell({
         tasks,
         plannerEvents: events,
         targetTaskIds,
-        options: loadCoachSchedulerOptions(),
+        options: loadCoachSchedulerOptions(storageUserKey),
       });
-      mergeRefinedScheduleIntoStorage(res, { targetTaskIds });
+      mergeRefinedScheduleIntoStorage(storageUserKey, res, { targetTaskIds });
       clearSelectedBlocksContext();
       setPlannerSelectionContext(null);
       pushTimeline('Execution calendar updated from chat');
@@ -607,7 +613,7 @@ export function ShadowChatShell({
     } finally {
       setCalendarCoachBusy(false);
     }
-  }, [calendarCoachHint, navigate, pushTimeline]);
+  }, [calendarCoachHint, navigate, pushTimeline, storageReady, storageUserKey]);
 
   const onGenerateDecisionReport = useCallback(async () => {
     primeSpeechSynthesisFromGesture();

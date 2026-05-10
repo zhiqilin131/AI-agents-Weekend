@@ -163,6 +163,68 @@ def interpret_calendar_feedback(
         label = ", ".join(names[i] for i in opt.allowed_weekdays)
         notes.append(f"Scheduling only on: {label}.")
 
+    # Task / block duration (Slime chat — "extend to 90 minutes", "shorter blocks")
+    set_minutes: int | None = None
+    m_abs = re.search(r"\b(\d{1,3})\s*(?:minutes|minute|mins|min)\b", t)
+    if not m_abs:
+        m_cn = re.search(r"(\d{1,3})\s*分钟", feedback)
+        if m_cn:
+            try:
+                cand = int(m_cn.group(1))
+                if 15 <= cand <= 480:
+                    set_minutes = cand
+            except ValueError:
+                set_minutes = None
+    elif m_abs:
+        try:
+            cand = int(m_abs.group(1))
+            if 15 <= cand <= 480:
+                set_minutes = cand
+        except ValueError:
+            set_minutes = None
+    m_hour = re.search(r"\b(\d)\s*(?:hours|hour|hrs|hr|h)\b", t)
+    if m_hour and set_minutes is None:
+        try:
+            h = int(m_hour.group(1))
+            cand = h * 60
+            if 15 <= cand <= 480:
+                set_minutes = cand
+        except ValueError:
+            pass
+
+    longer = any(
+        x in t
+        for x in (
+            "longer",
+            "extend",
+            "more time",
+            "bigger block",
+            "拉长",
+            "加长",
+            "延长",
+            "久一点",
+        )
+    )
+    shorter = any(x in t for x in ("shorter", "压缩", "缩短", "少一点时间", "少一点"))
+    block_ctx = any(
+        x in t for x in ("block", "task", "slot", "meeting", "session", "event", "duration", "length")
+    ) or any(x in feedback for x in ("任务", "块", "会议", "日程", "时长", "事件"))
+
+    if filtered and set_minutes is not None and (longer or shorter or block_ctx):
+        filtered = [x.model_copy(update={"duration_minutes": set_minutes}) for x in filtered]
+        notes.append(f"Set each planning block length to about {set_minutes} minutes.")
+    elif filtered and longer:
+        filtered = [
+            x.model_copy(update={"duration_minutes": min(480, max(15, int(x.duration_minutes) + 30))})
+            for x in filtered
+        ]
+        notes.append("Increased each task duration by 30 minutes.")
+    elif filtered and shorter:
+        filtered = [
+            x.model_copy(update={"duration_minutes": max(15, int(x.duration_minutes) - 15)}) for x in filtered
+        ]
+        notes.append("Shortened each task duration by 15 minutes.")
+
     # Task removal: only explicit quoted substring (reliable vs free text).
     m = re.search(r"['\"]([^'\"]{2,80})['\"]", feedback)
     needle = (m.group(1).strip().lower() if m else None) or None

@@ -284,19 +284,6 @@ export default function ProfilePage() {
             <h1 className="text-2xl text-gray-900 md:text-3xl" style={{ fontWeight: 700 }}>
               Profile
             </h1>
-            <p className="mt-1 text-xs leading-snug text-gray-600 md:text-sm md:leading-relaxed">
-              Edit priorities and structured memory below. Customize your Slime Advisor (look, motion, voice) on{' '}
-              <button
-                type="button"
-                onClick={() => navigate('/buddy')}
-                className="font-semibold text-violet-800 underline decoration-violet-300 underline-offset-2 hover:text-violet-950"
-              >
-                Buddy home
-              </button>{' '}
-              — same profile powers reports and Shadow. Scoped to{' '}
-              <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">FORESIGHT_USER_ID</code> ·{' '}
-              <code className="rounded bg-white/80 px-1 text-[10px] md:text-xs">data/profile/</code>.
-            </p>
           </div>
           {isSupabaseEnvConfigured() && session ? (
             <div className="mt-3 flex shrink-0 flex-col items-stretch gap-2 sm:items-end md:mt-0">

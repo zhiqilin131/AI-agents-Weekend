@@ -84,3 +84,18 @@ def test_make_it_saturday_sets_allowed_weekday():
 def test_weekend_sets_sat_sun():
     opt, _, _ = interpret_calendar_feedback("only on weekend please", SchedulerOptions(), [])
     assert opt.allowed_weekdays == [5, 6]
+
+
+def test_explicit_minutes_sets_task_duration():
+    base = SchedulerOptions()
+    tasks = [ExecutionTask(id="1", title="Deep work", duration_minutes=60)]
+    _opt, notes, t2 = interpret_calendar_feedback("extend blocks to 90 minutes", base, tasks)
+    assert t2[0].duration_minutes == 90
+    assert any("90" in n for n in notes)
+
+
+def test_longer_without_number_bumps_duration():
+    base = SchedulerOptions()
+    tasks = [ExecutionTask(id="1", title="A", duration_minutes=60)]
+    _opt, _notes, t2 = interpret_calendar_feedback("please make the blocks longer", base, tasks)
+    assert t2[0].duration_minutes == 90

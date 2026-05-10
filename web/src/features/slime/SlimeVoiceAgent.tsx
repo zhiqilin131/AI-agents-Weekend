@@ -13,7 +13,8 @@ import type { SlimeProfile } from '../../app/model';
 import { apiFetch } from '../../utils/apiFetch';
 import { apiFetchErrorMessage } from '../../utils/apiOrigin';
 import { confirmCalendarDraft } from '../../utils/calendarAgentApi';
-import { EXECUTION_EVENTS_STORAGE_KEY, SLIME_VOICE_CALENDAR_RESOLVED_KEY } from '../../utils/executionStorageKeys';
+import { executionStorageKeys, SLIME_VOICE_CALENDAR_RESOLVED_KEY } from '../../utils/executionStorageKeys';
+import { useExecutionStorageUserKey } from '../../hooks/useExecutionStorageUserKey';
 import {
   applySlimeVoiceFrontendAction,
   normalizeVoiceSlimePatch,
@@ -211,6 +212,7 @@ export function SlimeVoiceAgent({
   className,
 }: SlimeVoiceAgentProps) {
   const navigate = useNavigate();
+  const { storageUserKey } = useExecutionStorageUserKey();
   const sendVoiceBlobRef = useRef<(blob: Blob | null) => Promise<void>>(async () => {});
   const { supported, recording, error, setError, startRecording, stopRecording, speechPhase } = useVoiceRecorder({
     autoStopOnSilence: true,
@@ -405,16 +407,18 @@ export function SlimeVoiceAgent({
   );
 
   const mergeCalendarEvent = useCallback((event: Record<string, unknown>) => {
+    if (!storageUserKey) return;
     try {
-      const raw = localStorage.getItem(EXECUTION_EVENTS_STORAGE_KEY);
+      const k = executionStorageKeys(storageUserKey).events;
+      const raw = localStorage.getItem(k);
       const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
       if (!Array.isArray(arr)) return;
       arr.push(event);
-      localStorage.setItem(EXECUTION_EVENTS_STORAGE_KEY, JSON.stringify(arr));
+      localStorage.setItem(k, JSON.stringify(arr));
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [storageUserKey]);
 
   const onConfirmCalendar = useCallback(async () => {
     primeSpeechSynthesisFromGesture();

@@ -38,9 +38,10 @@ export function buildLocalAgilityPreview(args: {
       'Avoid stacking all critical tasks on one day; spread across the week.',
       'Keep buffer time before hard deadlines for revision/recovery.',
     ],
-    risk_windows: args.riskLabels && args.riskLabels.length > 0
-      ? args.riskLabels.slice(0, 3).map((r) => `Watch for ${r} under time pressure.`)
-      : ['Mid-week: plan drift if no review checkpoint is scheduled.'],
+    risk_windows:
+      args.riskLabels && args.riskLabels.length > 0
+        ? args.riskLabels.slice(0, 3).map((r) => `Watch for ${r} under time pressure.`)
+        : [],
     first_steps: steps.length > 0 ? steps : [
       { title: 'Define first executable task and schedule it', duration_minutes: 60 },
       { title: 'Prepare required material/checklist', duration_minutes: 45 },

@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { CalendarDays, ChevronLeft, ChevronRight, Download, Home, MessageSquare, RotateCcw, Sparkles } from 'lucide-react';
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Home,
+  MessageSquare,
+  RotateCcw,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { addDays, addMinutes, differenceInMinutes, format, isSameDay, parseISO, setHours, setMinutes, startOfDay, startOfWeek } from 'date-fns';
 import { apiFetch } from '../utils/apiFetch';
 import { MainNavButtons } from '../app/components/MainNavButtons';
@@ -20,10 +31,9 @@ import {
 import { parseIcsToCalendarEvents, exportEventsToIcs } from '../utils/ics';
 import { mapRecommendationActionsToTasks } from '../utils/executionTasks';
 import {
-  EXECUTION_EVENTS_STORAGE_KEY,
+  CALENDAR_AGENT_SESSION_DRAFT_KEY,
   EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY,
-  EXECUTION_SCHEDULE_COACH_OPTIONS_KEY,
-  EXECUTION_TASKS_STORAGE_KEY,
+  executionStorageKeys,
   SLIME_VOICE_CALENDAR_RESOLVED_KEY,
 } from '../utils/executionStorageKeys';
 import {
@@ -40,7 +50,7 @@ import { SlimeAdvisor } from '../app/components/report/SlimeAdvisor';
 import { CalendarAgentPanel } from '../app/components/calendar/CalendarAgentPanel';
 import { useSlimeProfile } from '../hooks/useSlimeProfile';
 import type { CalendarAgentDraft } from '../utils/calendarAgentApi';
-import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from '../utils/executionStorageKeys';
+import { useExecutionStorageUserKey } from '../hooks/useExecutionStorageUserKey';
 
 type TraceShape = {
   decision_id: string;
@@ -59,7 +69,9 @@ const VIEW_DAY_START_HOUR = 0;
 const VIEW_DAY_END_HOUR = 24;
 const SLOT_MINUTES = 30;
 const SLOT_COUNT = (VIEW_DAY_END_HOUR - VIEW_DAY_START_HOUR) * (60 / SLOT_MINUTES);
-const SLOT_HEIGHT_PX = 24;
+/** Shorter rows so more hours fit; outer panel scrolls vertically. */
+const SLOT_HEIGHT_PX = 20;
+const DETAIL_DRAG_THRESHOLD_PX = 6;
 const WEEKDAY_SHORT = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'] as const;
 
 /** Match Shadow Chat shell cards */
@@ -81,6 +93,11 @@ const COACH_QUICK_ACTIONS: { label: string; text: string }[] = [
 
 export default function ExecutionPlannerPage() {
   const { slimeProfile } = useSlimeProfile();
+  const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
+  const storageKeys = useMemo(
+    () => (storageUserKey ? executionStorageKeys(storageUserKey) : null),
+    [storageUserKey],
+  );
   const navigate = useNavigate();
   const { decisionId } = useParams();
   const [searchParams] = useSearchParams();
@@ -102,11 +119,19 @@ export default function ExecutionPlannerPage() {
   const [scheduleCoachBusy, setScheduleCoachBusy] = useState(false);
   const [scheduleCoachNote, setScheduleCoachNote] = useState<string | null>(null);
   /** Accumulated scheduler prefs from prior coach runs (merged on each Re-plan). */
-  const [coachBaseOptions, setCoachBaseOptions] = useState<PlannerCoachOptions>(() => loadCoachSchedulerOptions());
+  const [coachBaseOptions, setCoachBaseOptions] = useState<PlannerCoachOptions>(() => normalizePlannerCoachOptions({}));
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [draftPlacement, setDraftPlacement] = useState<{ id: string; start: string; end: string; conflict: boolean } | null>(null);
   const [sessionAgentDraft, setSessionAgentDraft] = useState<CalendarAgentDraft | null>(null);
   const calendarBodyRef = useRef<HTMLDivElement | null>(null);
+  const pendingPointerRef = useRef<{
+    eventId: string;
+    clientX: number;
+    clientY: number;
+    start: string;
+    end: string;
+  } | null>(null);
+  const plannerHydratedRef = useRef(false);
   const serverSyncSkipUntilRef = useRef<number>(0);
   const dragStateRef = useRef<{
     eventId: string;
@@ -116,6 +141,34 @@ export default function ExecutionPlannerPage() {
     start: string;
     end: string;
   } | null>(null);
+
+  const [detailEventId, setDetailEventId] = useState<string | null>(null);
+  const [detailTitle, setDetailTitle] = useState('');
+  const [detailStartLocal, setDetailStartLocal] = useState('');
+  const [detailEndLocal, setDetailEndLocal] = useState('');
+  const [detailDescription, setDetailDescription] = useState('');
+  const [detailLocked, setDetailLocked] = useState(false);
+
+  const detailEvent = useMemo(() => events.find((e) => e.id === detailEventId) ?? null, [detailEventId, events]);
+
+  useEffect(() => {
+    if (!detailEventId) return;
+    if (!events.some((e) => e.id === detailEventId)) setDetailEventId(null);
+  }, [detailEventId, events]);
+
+  useEffect(() => {
+    if (!detailEventId || !detailEvent || detailEvent.id !== detailEventId) return;
+    setDetailTitle(detailEvent.title);
+    setDetailStartLocal(format(parseISO(detailEvent.start), "yyyy-MM-dd'T'HH:mm"));
+    setDetailEndLocal(format(parseISO(detailEvent.end), "yyyy-MM-dd'T'HH:mm"));
+    setDetailDescription(detailEvent.description ?? '');
+    setDetailLocked(Boolean(detailEvent.locked));
+  }, [detailEventId, detailEvent]);
+
+  useEffect(() => {
+    if (!storageReady || !storageUserKey) return;
+    setCoachBaseOptions(loadCoachSchedulerOptions(storageUserKey));
+  }, [storageReady, storageUserKey]);
 
   useEffect(() => {
     if (!decisionId) {
@@ -204,6 +257,7 @@ export default function ExecutionPlannerPage() {
   }, []);
 
   useEffect(() => {
+    if (!storageReady) return;
     try {
       const raw = sessionStorage.getItem(SLIME_VOICE_CALENDAR_DRAFT_KEY);
       if (!raw) return;
@@ -237,9 +291,10 @@ export default function ExecutionPlannerPage() {
     } catch {
       // ignore
     }
-  }, []);
+  }, [storageReady]);
 
   useEffect(() => {
+    if (!storageReady) return;
     try {
       const raw = sessionStorage.getItem(SLIME_VOICE_CALENDAR_RESOLVED_KEY);
       if (!raw) return;
@@ -267,26 +322,35 @@ export default function ExecutionPlannerPage() {
     } catch {
       // ignore
     }
-  }, []);
+  }, [storageReady]);
 
   useEffect(() => {
+    plannerHydratedRef.current = false;
+    if (!storageReady || !storageKeys) return;
     try {
-      const rawEvents = localStorage.getItem(EXECUTION_EVENTS_STORAGE_KEY);
+      const rawEvents = localStorage.getItem(storageKeys.events);
       if (rawEvents) {
         const parsed = JSON.parse(rawEvents) as CalendarEvent[];
         if (Array.isArray(parsed)) setEvents(parsed);
+      } else {
+        setEvents([]);
       }
-      const rawTasks = localStorage.getItem(EXECUTION_TASKS_STORAGE_KEY);
+      const rawTasks = localStorage.getItem(storageKeys.tasks);
       if (rawTasks) {
         const parsed = JSON.parse(rawTasks) as ExecutionTask[];
         if (Array.isArray(parsed)) setTasks(parsed);
+      } else {
+        setTasks([]);
       }
     } catch {
       // ignore local cache parse failures
+    } finally {
+      plannerHydratedRef.current = true;
     }
-  }, []);
+  }, [storageReady, storageKeys]);
 
   useEffect(() => {
+    if (!storageReady || !storageUserKey) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -326,11 +390,12 @@ export default function ExecutionPlannerPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [storageReady, storageUserKey]);
 
   useEffect(() => {
-    localStorage.setItem(EXECUTION_EVENTS_STORAGE_KEY, JSON.stringify(events));
-  }, [events]);
+    if (!storageKeys || !plannerHydratedRef.current) return;
+    localStorage.setItem(storageKeys.events, JSON.stringify(events));
+  }, [events, storageKeys]);
 
   useEffect(() => {
     if (Date.now() < serverSyncSkipUntilRef.current) return;
@@ -357,8 +422,9 @@ export default function ExecutionPlannerPage() {
   }, [events]);
 
   useEffect(() => {
-    localStorage.setItem(EXECUTION_TASKS_STORAGE_KEY, JSON.stringify(tasks));
-  }, [tasks]);
+    if (!storageKeys || !plannerHydratedRef.current) return;
+    localStorage.setItem(storageKeys.tasks, JSON.stringify(tasks));
+  }, [tasks, storageKeys]);
 
   const coachConstraintsLine = useMemo(() => {
     const parts: string[] = [];
@@ -533,7 +599,7 @@ export default function ExecutionPlannerPage() {
         targetTaskIds: targetsArg,
         options: coachBaseOptions,
       });
-      mergeRefinedScheduleIntoStorage(res, { targetTaskIds: targetsArg });
+      if (storageUserKey) mergeRefinedScheduleIntoStorage(storageUserKey, res, { targetTaskIds: targetsArg });
       setCoachBaseOptions(normalizePlannerCoachOptions(res.adjusted_options as Record<string, unknown>));
       const scheduled = res.schedule.scheduled_events ?? [];
       const un = res.schedule.unscheduled_tasks ?? [];
@@ -682,6 +748,24 @@ export default function ExecutionPlannerPage() {
 
   useEffect(() => {
     const onMouseMove = (ev: MouseEvent) => {
+      const pend = pendingPointerRef.current;
+      if (pend && !dragStateRef.current) {
+        const dx = ev.clientX - pend.clientX;
+        const dy = ev.clientY - pend.clientY;
+        if (dx * dx + dy * dy >= DETAIL_DRAG_THRESHOLD_PX * DETAIL_DRAG_THRESHOLD_PX) {
+          dragStateRef.current = {
+            eventId: pend.eventId,
+            mode: 'move',
+            x: pend.clientX,
+            y: pend.clientY,
+            start: pend.start,
+            end: pend.end,
+          };
+          pendingPointerRef.current = null;
+        } else {
+          return;
+        }
+      }
       const ds = dragStateRef.current;
       const body = calendarBodyRef.current;
       if (!ds || !body) return;
@@ -725,6 +809,15 @@ export default function ExecutionPlannerPage() {
     };
 
     const onMouseUp = () => {
+      const pend = pendingPointerRef.current;
+      if (pend && !dragStateRef.current) {
+        pendingPointerRef.current = null;
+        setDetailEventId(pend.eventId);
+        if (events.some((e) => e.id === pend.eventId && e.source === 'ai')) {
+          setSelectedAiEventIds([pend.eventId]);
+        }
+        return;
+      }
       const ds = dragStateRef.current;
       if (!ds) return;
       if (draftPlacement && draftPlacement.id === ds.eventId) {
@@ -757,12 +850,47 @@ export default function ExecutionPlannerPage() {
     };
   }, [days, draftPlacement, events]);
 
-  if (loading) {
+  const persistDetailEdits = () => {
+    if (!detailEventId) return;
+    const startD = new Date(detailStartLocal);
+    const endD = new Date(detailEndLocal);
+    if (!(startD.getTime() < endD.getTime())) {
+      setCalendarWarning('End time must be after start time.');
+      return;
+    }
+    setEvents((prev) =>
+      prev.map((x) =>
+        x.id === detailEventId
+          ? {
+              ...x,
+              title: detailTitle.slice(0, 200),
+              start: startD.toISOString(),
+              end: endD.toISOString(),
+              description: detailDescription.slice(0, 500),
+              locked: detailLocked,
+            }
+          : x,
+      ),
+    );
+    setCalendarWarning(null);
+    setDetailEventId(null);
+  };
+
+  const deleteDetailEvent = () => {
+    if (!detailEventId) return;
+    setEvents((prev) => prev.filter((x) => x.id !== detailEventId));
+    setSelectedAiEventIds((prev) => prev.filter((id) => id !== detailEventId));
+    setDetailEventId(null);
+  };
+
+  if (loading || !storageReady) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
         <div className="mx-auto max-w-[1500px]">
           <MainNavButtons />
-          <p className="mt-6 text-gray-600">Loading calendar…</p>
+          <p className="mt-6 text-gray-600">
+            {loading ? 'Loading calendar…' : 'Preparing your workspace…'}
+          </p>
         </div>
       </div>
     );
@@ -791,9 +919,6 @@ export default function ExecutionPlannerPage() {
               <h1 className="text-3xl text-gray-900" style={{ fontWeight: 700 }}>
                 Execution Calendar
               </h1>
-              <p className="text-sm text-gray-500">
-                Upload ICS, plan tasks, and refine with the schedule coach. Drag AI blocks · ⌘/Ctrl multi-select · drag on grid to box-select.
-              </p>
             </div>
           </div>
           <nav className="flex flex-wrap items-center gap-2" aria-label="Page actions">
@@ -890,8 +1015,8 @@ export default function ExecutionPlannerPage() {
                 </span>
               </div>
 
-              <div className="overflow-x-auto pt-3">
-                <div className="min-w-[980px]">
+              <div className="max-h-[min(420px,52vh)] overflow-auto pt-3">
+                <div className="min-h-[280px] min-w-[720px]">
                   <div
                     className="mb-1 grid overflow-hidden rounded-2xl border border-indigo-100/60 bg-gradient-to-b from-white/90 to-violet-50/40"
                     style={{ gridTemplateColumns: '56px repeat(7, minmax(0,1fr))' }}
@@ -977,39 +1102,39 @@ export default function ExecutionPlannerPage() {
                                     onMouseDown={(event) => {
                                       if (source !== 'ai') return;
                                       event.stopPropagation();
-                                      dragStateRef.current = {
-                                        eventId: ev.id,
-                                        mode: 'move',
-                                        x: event.clientX,
-                                        y: event.clientY,
-                                        start: ev.start,
-                                        end: ev.end,
-                                      };
                                       setCalendarWarning(null);
-                                    }}
-                                    onClick={(event) => {
-                                      if (source !== 'ai') {
-                                        setSelectedAiEventIds([]);
-                                        return;
-                                      }
-                                      event.stopPropagation();
                                       if (event.metaKey || event.ctrlKey) {
+                                        pendingPointerRef.current = null;
                                         setSelectedAiEventIds((prev) =>
                                           prev.includes(ev.id) ? prev.filter((id) => id !== ev.id) : [...prev, ev.id],
                                         );
-                                      } else {
-                                        setSelectedAiEventIds([ev.id]);
+                                        return;
                                       }
+                                      pendingPointerRef.current = {
+                                        eventId: ev.id,
+                                        clientX: event.clientX,
+                                        clientY: event.clientY,
+                                        start: ev.start,
+                                        end: ev.end,
+                                      };
+                                    }}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      if (source === 'ai') return;
+                                      setSelectedAiEventIds([]);
+                                      setDetailEventId(ev.id);
                                     }}
                                     title={`${ev.title}\n${ev.startLabel}–${ev.endLabel}`}
                                     className={`absolute left-0.5 right-0.5 z-30 overflow-hidden rounded-lg border px-1 py-0.5 text-left leading-tight shadow-sm ${
                                       source === 'uploaded'
-                                        ? 'border-purple-200/80 bg-white/90 text-gray-800 backdrop-blur-sm'
-                                        : conflictFlash
-                                          ? 'cursor-grab border-rose-500 bg-rose-500/90 text-white shadow-md'
-                                          : isSelected
-                                            ? 'cursor-grab border-violet-700 bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-500/20'
-                                            : 'cursor-grab border-indigo-400/60 bg-gradient-to-r from-indigo-500 to-violet-500 text-white shadow-indigo-500/15'
+                                        ? 'cursor-pointer border-purple-200/80 bg-white/90 text-gray-800 backdrop-blur-sm'
+                                        : source === 'ai'
+                                          ? conflictFlash
+                                            ? 'cursor-grab border-rose-500 bg-rose-500/90 text-white shadow-md'
+                                            : isSelected
+                                              ? 'cursor-grab border-violet-700 bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-500/20'
+                                              : 'cursor-grab border-indigo-400/60 bg-gradient-to-r from-indigo-500 to-violet-500 text-white shadow-indigo-500/15'
+                                          : 'cursor-pointer border-indigo-400/60 bg-gradient-to-r from-indigo-500 to-violet-500 text-white shadow-indigo-500/15'
                                     }`}
                                     style={{ top: `${ev.topPct}%`, height: `${Math.max(4, ev.heightPct)}%` }}
                                   >
@@ -1018,6 +1143,7 @@ export default function ExecutionPlannerPage() {
                                       <div
                                         onMouseDown={(event) => {
                                           event.stopPropagation();
+                                          pendingPointerRef.current = null;
                                           dragStateRef.current = {
                                             eventId: ev.id,
                                             mode: 'resize',
@@ -1075,16 +1201,23 @@ export default function ExecutionPlannerPage() {
                   type="button"
                   className="inline-flex items-center gap-1 rounded-full border border-indigo-200/90 bg-white/80 px-3 py-1.5 text-xs font-medium text-indigo-900 hover:bg-white"
                   onClick={() => {
-                    localStorage.removeItem(EXECUTION_EVENTS_STORAGE_KEY);
-                    localStorage.removeItem(EXECUTION_TASKS_STORAGE_KEY);
-                    localStorage.removeItem(EXECUTION_SCHEDULE_COACH_OPTIONS_KEY);
-                    setCoachBaseOptions(loadCoachSchedulerOptions());
+                    plannerHydratedRef.current = false;
+                    if (storageKeys) {
+                      localStorage.removeItem(storageKeys.events);
+                      localStorage.removeItem(storageKeys.tasks);
+                      localStorage.removeItem(storageKeys.coachOptions);
+                    }
+                    setCoachBaseOptions(
+                      storageUserKey ? loadCoachSchedulerOptions(storageUserKey) : normalizePlannerCoachOptions({}),
+                    );
                     setEvents([]);
                     setTasks([]);
                     setUnscheduled([]);
                     setSelectedAiEventIds([]);
                     setAltSuggestion(null);
                     setCalendarWarning(null);
+                    setDetailEventId(null);
+                    plannerHydratedRef.current = true;
                   }}
                 >
                   <RotateCcw className="h-3.5 w-3.5" aria-hidden />
@@ -1212,6 +1345,109 @@ export default function ExecutionPlannerPage() {
             )}
           </aside>
         </div>
+
+        {detailEventId && detailEvent ? (
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/25 p-4 backdrop-blur-[2px]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="event-detail-title"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setDetailEventId(null);
+            }}
+          >
+            <div
+              className="relative w-full max-w-md rounded-2xl border border-gray-200/90 bg-gray-50/95 p-5 shadow-2xl shadow-slate-900/20"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-2 border-b border-gray-200/80 pb-3">
+                <div className="min-w-0">
+                  <h2 id="event-detail-title" className="text-base font-semibold text-gray-900">
+                    Event details
+                  </h2>
+                  <p className="mt-0.5 text-[11px] uppercase tracking-wide text-gray-500">
+                    {detailEvent.source === 'ai' ? 'AI block' : detailEvent.source === 'uploaded' ? 'Imported' : 'Manual'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-full p-1.5 text-gray-500 hover:bg-gray-200/80 hover:text-gray-800"
+                  aria-label="Close event details"
+                  onClick={() => setDetailEventId(null)}
+                >
+                  <X className="h-4 w-4" aria-hidden />
+                </button>
+              </div>
+
+              <label className="mt-4 block text-[11px] font-medium text-gray-600">Title</label>
+              <input
+                value={detailTitle}
+                onChange={(e) => setDetailTitle(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-400/25"
+              />
+
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-medium text-gray-600">Start</label>
+                  <input
+                    type="datetime-local"
+                    value={detailStartLocal}
+                    onChange={(e) => setDetailStartLocal(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-2 py-2 text-xs text-gray-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-400/25"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-gray-600">End</label>
+                  <input
+                    type="datetime-local"
+                    value={detailEndLocal}
+                    onChange={(e) => setDetailEndLocal(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-2 py-2 text-xs text-gray-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-400/25"
+                  />
+                </div>
+              </div>
+
+              <label className="mt-3 block text-[11px] font-medium text-gray-600">Notes</label>
+              <textarea
+                value={detailDescription}
+                onChange={(e) => setDetailDescription(e.target.value)}
+                rows={3}
+                className="mt-1 w-full resize-none rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-400/25"
+              />
+
+              <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={detailLocked}
+                  onChange={(e) => setDetailLocked(e.target.checked)}
+                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400/40"
+                />
+                Locked (schedule coach should avoid moving this block)
+              </label>
+
+              <div className="mt-5 flex flex-wrap items-center justify-end gap-2 border-t border-gray-200/80 pt-4">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-white px-3 py-2 text-xs font-medium text-rose-800 hover:bg-rose-50"
+                  onClick={deleteDetailEvent}
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2 text-xs font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500"
+                  onClick={persistDetailEdits}
+                >
+                  Save
+                </button>
+              </div>
+              <p className="mt-2 text-[10px] text-gray-500">
+                Tip: AI blocks — click to open details; drag to move; drag the bottom edge to resize. ⌘/Ctrl-click to multi-select.
+              </p>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
