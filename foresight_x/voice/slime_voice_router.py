@@ -18,6 +18,33 @@ _log = logging.getLogger(__name__)
 _ROUTER_SLIME_KEYS = frozenset({"name", "color_theme", "shape"})
 
 
+def _explicit_report_schedule_intent(transcript: str) -> bool:
+    """
+    True when the user is clearly asking to schedule items **from an existing decision report**
+    (report-linked wording), so we should not silently reinterpret as a generic calendar draft.
+    """
+    t = (transcript or "").lower()
+    needles = (
+        "from my decision report",
+        "from the decision report",
+        "from my report",
+        "from that report",
+        "from the report",
+        "report next step",
+        "next steps from the report",
+        "next actions from the report",
+        "schedule my report",
+        "schedule the report",
+        "report plan",
+        "report onto",
+        "report on the calendar",
+        "report to the calendar",
+        "decision report onto",
+        "trace ",
+    )
+    return any(n in t for n in needles)
+
+
 def _routing_context_json(ctx: SlimeVoiceContext) -> str:
     """Omit most persona/voice text from tool-router context — keep fields that disambiguate name vs user address."""
     d = ctx.model_dump(mode="json")
@@ -32,6 +59,17 @@ def _routing_context_json(ctx: SlimeVoiceContext) -> str:
             if nick is not None and str(nick).strip():
                 slim["user_nickname_saved"] = str(nick).strip()[:48]
         d["slime_profile"] = slim
+    ruc = d.get("recent_ui_context")
+    if isinstance(ruc, dict):
+        did = str(ruc.get("decision_id") or ruc.get("active_decision_id") or "").strip()
+        tz = ruc.get("timezone")
+        hints: dict[str, Any] = {}
+        if did:
+            hints["decision_id_in_ui_context"] = did[:80]
+        if tz:
+            hints["timezone"] = str(tz)[:80]
+        if hints:
+            d["routing_hints"] = hints
     return json.dumps(d, ensure_ascii=False)[:12000]
 
 
@@ -76,7 +114,9 @@ Allowed tools:
    history, diary or journal, buddy or slime_buddy, reflect (legacy shadow UI).
 2) search_memory — arguments: {{"query": "<string>", "scope": "profile|chat_history|decision_reports|all"}}
 3) create_calendar_draft — arguments: {{"title": "<string>", "duration_minutes": <number|null>, "date_hint": "<string|null>", "time_hint": "<string|null>", "description": "<string|null>"}}
-4) schedule_decision_plan — arguments: {{"decision_id": "<string|null>"}} — schedule next_actions from a decision report into a draft calendar (decision_id from context if user says "this report").
+   DEFAULT for “add / put / schedule something on my calendar or execution calendar” when the user describes tasks, plans, blocks, or reminders WITHOUT tying them to an existing decision report.
+   Put multi-step natural-language plans into **description** when helpful; title can be short (e.g. “Relationship plan”).
+4) schedule_decision_plan — arguments: {{"decision_id": "<string|null>"}} — ONLY when scheduling **next_actions / execution plan copied FROM an existing decision report** (user mentions the report, report next steps, or routing_hints.decision_id_in_ui_context is set).
 5) open_decision_report_flow — arguments: {{"decision_prompt": "<string>"}}
 6) update_slime_profile — arguments: {{"patch": {{ ... partial Slime Studio fields (same as Personalize UI) }}}}
    Top-level patch keys: name, color_theme (aurora|violet|mint|sunset|lime|silver|custom), custom_colors {{primary,secondary,glow}} hex,
@@ -102,8 +142,11 @@ Rules:
   Map user intent: "diary / journal / 日记" → route diary; "profile / my profile / account / 个人资料 / 档案页" → route profile;
   "buddy / slime / this page" → route buddy when they want Slime Buddy home.
 - Memory: use search_memory with a concrete query; scope "all" when user asks generally about what they said.
-- Calendar: create_calendar_draft for new blocks ("add 30 minutes Saturday morning", "gym tomorrow at 9", "review next Friday"). Include time_hint when user says morning/afternoon/evening or a clock time. The app will ask for confirmation before saving.
-- schedule_decision_plan when user wants to put the **decision report execution plan** on the calendar ("schedule my report plan", "put next steps on the calendar"). Pass decision_id when known from context.
+- Calendar (important):
+  • **create_calendar_draft** — Use for almost all “add to calendar / execution calendar / planner / schedule a block” requests, including vague “put this plan there” or long spoken plans. Do **not** require a decision report.
+  • **schedule_decision_plan** — Use **only** when the user clearly wants events generated **from an existing decision report** (mentions report/next steps from report) **or** routing_hints include decision_id_in_ui_context and they ask to schedule that report’s plan. If no decision_id is available and they did not anchor to a report, prefer **create_calendar_draft**.
+  • **open_decision_report_flow** — Only when they want to **start a new** structured decision analysis in chat—not for putting arbitrary plans on the calendar.
+  Include time_hint for morning/afternoon/evening or clock times. The app confirms before saving.
 - Profile updates: update_slime_profile. Use patch.persona.user_nickname when the user changes what **they** want to be called (e.g. "call me …", "refer to me as …", "叫我…", "称呼我…", "别叫我 master 了"). Use patch.name **only** when they name/rename **the Slime** ("your name is …", "I'll call you Blob", "你就叫…"). Never put the user's requested form of address into patch.name.
 - Confirm appearance/safety: requires_confirmation=true unless the user was very explicit and the change is minor (still confirm for Slime renames, user_nickname changes, and custom colors).
 - Do not claim to have executed actions; tools + frontend will do that.
@@ -149,6 +192,20 @@ def route_slime_voice_command(
         )
     elapsed_ms = (time.perf_counter() - t0) * 1000
     _log.info("slime voice route_llm_ms=%.0f tool=%s", elapsed_ms, raw.tool_name)
+
+    if raw.tool_name == "schedule_decision_plan":
+        args_d = dict(raw.arguments or {})
+        ruc = user_context.recent_ui_context or {}
+        arg_did = str(args_d.get("decision_id") or "").strip()
+        ctx_did = str(ruc.get("decision_id") or ruc.get("active_decision_id") or "").strip()
+        if not arg_did and not ctx_did and not _explicit_report_schedule_intent(transcript):
+            raw = raw.model_copy(
+                update={
+                    "tool_name": "create_calendar_draft",
+                    "arguments": {},
+                }
+            )
+            _log.info("slime voice reroute schedule_decision_plan → create_calendar_draft (no report anchor)")
 
     intent_map = {
         "navigate": "navigate",

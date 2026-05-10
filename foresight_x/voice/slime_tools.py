@@ -652,8 +652,24 @@ def execute_slime_tool(
 
     if name == "schedule_decision_plan":
         tr, fe = tool_schedule_decision_plan(args, context=context, settings=settings)
+        if not tr.get("ok") and str(tr.get("error") or "") == "missing_decision_id":
+            tz = str(context.recent_ui_context.get("timezone") or "UTC")
+            tr2, fe2 = tool_create_calendar_draft(
+                {},
+                transcript=transcript,
+                settings=settings,
+                user_timezone=tz,
+                context=context,
+            )
+            if tr2.get("ok"):
+                r = tr2.get("resolved") or {}
+                disp = str(r.get("display_summary") or "")
+                title = str(r.get("title") or "Calendar block")
+                neutral = f"I can add this to your calendar: {title}, {disp}. Confirm below to save it."
+                text = _persona_spoken(neutral, tool_name="create_calendar_draft", transcript=transcript, settings=settings)
+                return tr2, fe2, text
         if not tr.get("ok"):
-            neutral = "I need an open decision report to schedule — open a report first, or say which decision ID."
+            neutral = "I need a decision report ID to pull its execution plan — open a report on the planner, or describe what to schedule and I'll draft calendar blocks."
             text = _persona_spoken(neutral, tool_name="schedule_decision_plan", transcript=transcript, settings=settings)
             return tr, fe, text
         n = len((tr.get("calendar_agent_draft") or {}).get("proposed_events") or [])

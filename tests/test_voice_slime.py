@@ -176,6 +176,37 @@ def test_navigate_tool_validates_route() -> None:
     assert fe_bad["type"] == "none"
 
 
+def test_schedule_decision_plan_without_id_falls_back_to_calendar_draft(tmp_path: Path) -> None:
+    """Router sometimes picks schedule_decision_plan without a trace id; user meant a normal calendar add."""
+    settings = Settings(
+        foresight_user_id="u_cal_fb",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_cal_fb.json").write_text(
+        json.dumps({"user_id": "u_cal_fb", "memory_facts": [], "priority_lines": [], "about_me": ""}),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_cal_fb", recent_ui_context={"timezone": "UTC"})
+    route = SlimeVoiceRouteResult(
+        intent="calendar_plan",
+        tool_name="schedule_decision_plan",
+        arguments={},
+        requires_confirmation=False,
+    )
+    tr, fe, text = execute_slime_tool(
+        route,
+        ctx,
+        settings=settings,
+        transcript="Put this detailed plan on my execution calendar tomorrow afternoon",
+    )
+    assert tr.get("ok") is True
+    assert fe.get("type") == "calendar_draft_confirm"
+    assert text
+
+
 def test_navigate_diary_journal_profile_aliases() -> None:
     d, fe_d = tool_navigate({"route": "diary"})
     assert d["ok"] and fe_d["route"] == "/diary"
