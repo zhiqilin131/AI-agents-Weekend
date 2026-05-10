@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router';
 import { useAuth } from '../auth/AuthContext';
-import { supabaseGateEnabled } from '../auth/RequireAuthLayout';
+import { isSupabaseEnvConfigured, supabaseGateEnabled } from '../auth/RequireAuthLayout';
 
 export default function LoginPage() {
   const { supabase, session, loading } = useAuth();
@@ -11,19 +11,47 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (!supabaseGateEnabled()) {
+  if (!loading && session) {
     return <Navigate to="/" replace />;
   }
 
-  if (!loading && session) {
-    return <Navigate to="/" replace />;
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-600">
+        Loading…
+      </div>
+    );
+  }
+
+  if (!isSupabaseEnvConfigured()) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-slate-50 to-violet-50/50 px-4">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-8 shadow-lg">
+          <h1 className="text-center text-xl font-semibold text-slate-900">Sign in</h1>
+          <p className="mt-3 text-center text-sm text-slate-600 leading-relaxed">
+            Authentication is not configured in this build. Add{' '}
+            <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">VITE_SUPABASE_URL</code> and{' '}
+            <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">VITE_SUPABASE_ANON_KEY</code> in Vercel
+            (or <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">web/.env.local</code> locally), then redeploy
+            or restart the dev server.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="mt-6 w-full rounded-full border border-slate-200 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+          >
+            Back to home
+          </button>
+        </div>
+      </div>
+    );
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     if (!supabase) {
-      setError('Auth is not configured.');
+      setError('Auth client failed to initialize.');
       return;
     }
     setBusy(true);
@@ -44,6 +72,11 @@ export default function LoginPage() {
       <div className="w-full max-w-sm rounded-2xl border border-slate-200/80 bg-white p-8 shadow-lg">
         <h1 className="text-center text-xl font-semibold text-slate-900">Sign in</h1>
         <p className="mt-1 text-center text-sm text-slate-500">Use your Foresight-X account</p>
+        {!supabaseGateEnabled() ? (
+          <p className="mt-2 text-center text-xs text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-1.5">
+            Optional sign-in: app stays open without login until the API sets <code className="text-[10px]">REQUIRE_AUTH</code>.
+          </p>
+        ) : null}
         <form onSubmit={(e) => void onSubmit(e)} className="mt-6 flex flex-col gap-4">
           <label className="block text-sm font-medium text-slate-700">
             Email

@@ -1,6 +1,13 @@
 import { Navigate, Outlet } from 'react-router';
 import { useAuth } from './AuthContext';
 
+/** True when Vite env has Supabase client credentials (login UI can work). */
+export function isSupabaseEnvConfigured(): boolean {
+  const url = import.meta.env.VITE_SUPABASE_URL?.trim();
+  const anon = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+  return Boolean(url && anon);
+}
+
 /** When Supabase URL is set, require login unless ``VITE_REQUIRE_AUTH=false``. */
 export function supabaseGateEnabled(): boolean {
   const url = import.meta.env.VITE_SUPABASE_URL?.trim();
