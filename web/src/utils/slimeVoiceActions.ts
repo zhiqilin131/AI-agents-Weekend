@@ -53,13 +53,24 @@ export function applySlimeVoiceFrontendAction(
   }
 }
 
+function normalizePersonaVoicePatch(p: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (k === 'user_nickname') out.userNickname = v;
+    else out[k] = v;
+  }
+  return out;
+}
+
 /** Normalize snake_case profile patches from the API into the web PATCH shape. */
 export function normalizeVoiceSlimePatch(patch: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(patch)) {
     if (k === 'color_theme') out.colorTheme = v;
     else if (k === 'custom_colors') out.customColors = v;
-    else out[k] = v;
+    else if (k === 'persona' && v && typeof v === 'object' && !Array.isArray(v)) {
+      out.persona = normalizePersonaVoicePatch(v as Record<string, unknown>);
+    } else out[k] = v;
   }
   return out;
 }

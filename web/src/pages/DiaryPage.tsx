@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MainNavButtons } from '../app/components/MainNavButtons';
-import { DiaryDebugPanel } from '../features/diary/DiaryDebugPanel';
 import { DiaryEntryCard } from '../features/diary/DiaryEntryCard';
 import { useDiaryKeyboardShortcuts } from '../features/diary/DiaryKeyboardShortcuts';
 import {
@@ -30,8 +29,6 @@ function usePrefersReducedMotion(): boolean {
   return rm;
 }
 
-type SourceDiagPanel = Record<string, unknown>;
-
 export default function DiaryPage() {
   const { slimeProfile } = useSlimeProfile();
   const profile = slimeProfile ?? DEFAULT_SLIME_PROFILE;
@@ -52,11 +49,11 @@ export default function DiaryPage() {
   const [entry, setEntry] = useState<DiaryEntryDto | null>(null);
   const [loadingEntry, setLoadingEntry] = useState(false);
   const [genBusy, setGenBusy] = useState(false);
+  const [regenBusy, setRegenBusy] = useState(false);
   const [listErr, setListErr] = useState<string | null>(null);
   const [entryErr, setEntryErr] = useState<string | null>(null);
   const [jumpPhase, setJumpPhase] = useState<DiaryJumpPhase>('idle');
   const [jumpSegment, setJumpSegment] = useState<{ from: number; to: number } | null>(null);
-  const [sourceDiagnostics, setSourceDiagnostics] = useState<SourceDiagPanel | null>(null);
 
   const vpRef = useRef<HTMLDivElement | null>(null);
   const [vpW, setVpW] = useState(520);
@@ -119,7 +116,7 @@ export default function DiaryPage() {
     const toIx = visibleDates.indexOf(selectedDate);
     if (fromIx >= 0 && toIx >= 0 && fromIx !== toIx) {
       setJumpSegment({ from: fromIx, to: toIx });
-      const t = window.setTimeout(() => setJumpSegment(null), 900);
+      const t = window.setTimeout(() => setJumpSegment(null), 1150);
       return () => window.clearTimeout(t);
     }
     setJumpSegment(null);
@@ -148,25 +145,6 @@ export default function DiaryPage() {
     void fetchEntry(selectedDate);
   }, [selectedDate, fetchEntry]);
 
-  useEffect(() => {
-    if (!import.meta.env.DEV || !selectedDate) return;
-    let cancelled = false;
-    void fetch(
-      apiUrl(
-        `/api/diary/sources/${encodeURIComponent(selectedDate)}?timezone=${encodeURIComponent(tz)}`,
-      ),
-    )
-      .then((r) => r.json())
-      .then((j: { source_counts?: Record<string, unknown>; source_diagnostics?: Record<string, unknown> }) => {
-        if (cancelled || !j) return;
-        setSourceDiagnostics({ ...(j.source_counts || {}), ...(j.source_diagnostics || {}) });
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedDate, tz]);
-
   const [landingRipple, setLandingRipple] = useState<string | null>(null);
   useEffect(() => {
     const t = setTimeout(() => setLandingRipple(selectedDate), reducedMotion ? 60 : 540);
@@ -183,7 +161,7 @@ export default function DiaryPage() {
     const prev = selectedDateRef.current;
     if (prev && prev !== d) {
       setJumpOriginDate(prev);
-      window.setTimeout(() => setJumpOriginDate(null), 720);
+      window.setTimeout(() => setJumpOriginDate(null), 1150);
     }
     setSelectedDate(d);
     selectedDateRef.current = d;
@@ -211,10 +189,50 @@ export default function DiaryPage() {
     onHome: () => handleSelectDate(today),
   });
 
+  async function regenerateCleaner() {
+    if (!entry) return;
+    if (entry.user_edited && !window.confirm('Replace your edited diary with a freshly distilled entry?')) return;
+    setRegenBusy(true);
+    setEntryErr(null);
+    try {
+      const r = await fetch(apiUrl('/api/diary/regenerate-cleaner'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: selectedDate,
+          timezone: tz,
+          confirm_replace: Boolean(entry.user_edited),
+        }),
+      });
+      const j = (await r.json()) as {
+        empty?: boolean;
+        entry?: DiaryEntryDto;
+        detail?: string;
+      };
+      if (r.status === 409) {
+        setEntryErr(typeof j.detail === 'string' ? j.detail : 'Confirmation required to replace edited diary.');
+        return;
+      }
+      if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : r.statusText);
+      if (j.empty) {
+        setEntry(null);
+        setEntryErr('No activity found for this day.');
+      } else if (j.entry) {
+        setEntry(j.entry);
+      }
+      const ym = selectedDate.slice(0, 7);
+      fetchedMonthsRef.current.delete(ym);
+      await fetchMonth(ym);
+    } catch (e) {
+      setEntryErr(apiFetchErrorMessage(e));
+    } finally {
+      setRegenBusy(false);
+    }
+  }
+
   async function generateSelected() {
     setGenBusy(true);
     setEntryErr(null);
-    setSourceDiagnostics(null);
     try {
       const r = await fetch(apiUrl('/api/diary/generate'), {
         method: 'POST',
@@ -229,9 +247,6 @@ export default function DiaryPage() {
         detail?: string;
       };
       if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : r.statusText);
-      if (j.source_diagnostics || j.source_counts) {
-        setSourceDiagnostics({ ...(j.source_counts || {}), ...(j.source_diagnostics || {}) });
-      }
       if (j.empty) {
         setEntry(null);
         setEntryErr('No activity found for this day.');
@@ -303,8 +318,6 @@ export default function DiaryPage() {
 
         {listErr ? <p className="mb-3 text-center text-sm text-rose-600">{listErr}</p> : null}
 
-        <DiaryDebugPanel diagnostics={sourceDiagnostics} />
-
         <div ref={vpRef} className="w-full">
           <DiaryTrackViewport
             visibleDays={visibleDays}
@@ -344,6 +357,8 @@ export default function DiaryPage() {
           }}
           onGenerateFromDay={() => void generateSelected()}
           generateBusy={genBusy}
+          onRegenerateCleaner={() => void regenerateCleaner()}
+          regenerateBusy={regenBusy}
         />
       </div>
     </div>

@@ -270,7 +270,11 @@ def _memory_facts_for_target_day(
     tz: ZoneInfo,
     chat_keywords: set[str],
 ) -> tuple[list[MemoryFactRef], int]:
-    """Match memories by created_at / updated_at / valid_from local day, import day, or keyword overlap."""
+    """Match memories by recording time (created_at / updated_at local day) or keyword overlap.
+
+    We intentionally do **not** match on ``valid_from``: that field often encodes biography or validity
+    dates (e.g. \"started in 2023\"), not the day the user actually interacted with the product.
+    """
 
     def _words(s: str) -> set[str]:
         return {w for w in re.findall(r"[a-zA-Z]{4,}", s.lower())}
@@ -295,17 +299,6 @@ def _memory_facts_for_target_day(
         ua = _parse_iso_timestamp(ua_str)
         if ua is not None and _local_date(ua, tz) == target:
             include = True
-
-        vf = (f.valid_from or "").strip()
-        if vf:
-            d0 = _parse_iso_timestamp(vf)
-            if d0 is not None and _local_date(d0, tz) == target:
-                include = True
-
-        if src == "import":
-            created = _parse_iso_timestamp(f.created_at or "")
-            if created is not None and _local_date(created, tz) == target:
-                include = True
 
         if not include and chat_keywords:
             fw = _words(text)
@@ -340,9 +333,7 @@ def collect_diary_sources_for_date(
 
     profile_raw = load_user_profile(s_user)
     undated_before = sum(
-        1
-        for f in _active_memory_facts(list(profile_raw.memory_facts))
-        if not _parse_iso_timestamp(f.created_at or "") and not _parse_iso_timestamp((f.valid_from or "").strip())
+        1 for f in _active_memory_facts(list(profile_raw.memory_facts)) if not _parse_iso_timestamp(f.created_at or "")
     )
     diagnostics.undated_memory_records_before_backfill = undated_before
 

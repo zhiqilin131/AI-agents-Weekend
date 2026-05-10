@@ -40,6 +40,41 @@ def test_backfill_uses_source_timestamp_qualifier() -> None:
     assert fixed.memory_facts[0].created_at.startswith("2026-03-15")
 
 
+def test_backfill_does_not_use_valid_from_as_recording_time() -> None:
+    """Biography-style valid_from must not become created_at (would pin facts to wrong diary days)."""
+    p = UserProfile(
+        memory_facts=[
+            ProfileMemoryFact(
+                id="fact-v",
+                text="Something referencing an old year in prose",
+                source="shadow",
+                created_at="",
+                valid_from="2023-06-01T12:00:00Z",
+            )
+        ]
+    )
+    fixed, changed = backfill_memory_fact_timestamps(p, profile_path_fs=None)
+    assert changed is True
+    assert not fixed.memory_facts[0].created_at.startswith("2023")
+
+
+def test_backfill_ignores_untrusted_source_timestamp_for_shadow() -> None:
+    p = UserProfile(
+        memory_facts=[
+            ProfileMemoryFact(
+                id="fact-s",
+                text="Hallucinated qualifier date",
+                source="shadow",
+                created_at="",
+                qualifiers={"source_timestamp": "2023-01-01T00:00:00Z"},
+            )
+        ]
+    )
+    fixed, changed = backfill_memory_fact_timestamps(p, profile_path_fs=None)
+    assert changed is True
+    assert not fixed.memory_facts[0].created_at.startswith("2023")
+
+
 def test_backfill_respects_existing_created_at() -> None:
     p = UserProfile(
         memory_facts=[

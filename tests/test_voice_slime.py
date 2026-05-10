@@ -219,6 +219,38 @@ def test_profile_update_requires_confirmation() -> None:
     assert fe.get("type") == "confirm"
 
 
+def test_profile_update_user_nickname_uses_persona_patch_requires_confirmation(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_nick",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_nick.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_nick",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_nick")
+    route = SlimeVoiceRouteResult(
+        intent="profile_update",
+        tool_name="update_slime_profile",
+        arguments={"patch": {"persona": {"user_nickname": "boss"}}},
+        requires_confirmation=False,
+    )
+    _tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="call me boss")
+    assert fe.get("type") == "confirm"
+    pending = fe.get("payload", {}).get("patch", {})
+    assert pending.get("persona", {}).get("user_nickname") == "boss"
+
+
 def test_calendar_draft_is_not_final_event(tmp_path) -> None:
     from foresight_x.config import Settings
     from foresight_x.voice.slime_tools import tool_create_calendar_draft

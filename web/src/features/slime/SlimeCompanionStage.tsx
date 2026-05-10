@@ -208,9 +208,15 @@ export function SlimeCompanionStage({
   }, []);
 
   return (
-    <div ref={stageRef} className={cn('relative h-full min-h-[280px] w-full overflow-visible', className)}>
+    <div
+      ref={stageRef}
+      className={cn(
+        'pointer-events-none relative h-full min-h-[280px] w-full overflow-visible',
+        className,
+      )}
+    >
       <motion.div
-        className="absolute left-1/2 top-[36%] -translate-x-1/2 -translate-y-1/2"
+        className="pointer-events-auto absolute left-1/2 top-[36%] -translate-x-1/2 -translate-y-1/2"
         style={{ x: roamX, y: roamY }}
       >
         <motion.div

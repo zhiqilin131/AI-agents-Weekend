@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 DiaryTone = Literal["reflective", "focused", "uncertain", "excited", "stressed", "neutral", "mixed"]
 
@@ -159,7 +159,7 @@ class DiaryMonthSummaryItem(BaseModel):
 
 
 class DiaryLLMPlan(BaseModel):
-    """Structured output from the diary generator LLM."""
+    """Structured output from the diary narrative stage LLM."""
 
     title: str = ""
     summary: str = ""
@@ -167,3 +167,45 @@ class DiaryLLMPlan(BaseModel):
     themes: list[str] = Field(default_factory=list)
     tone: str = "neutral"
     action_items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DiarySignalBundle(BaseModel):
+    """Stage-1 distillation: high-signal themes only (no raw transcript)."""
+
+    major_themes: list[str] = Field(default_factory=list)
+    important_moments: list[str] = Field(default_factory=list)
+    decisions_discussed: list[str] = Field(default_factory=list)
+    actions_created: list[str] = Field(default_factory=list)
+    people_mentioned: list[str] = Field(default_factory=list)
+    recurring_patterns: list[str] = Field(default_factory=list)
+    discarded_noise: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _cap_lists(self) -> DiarySignalBundle:
+        def clean(xs: list[str], n: int) -> list[str]:
+            return [str(x).strip() for x in xs if str(x).strip()][:n]
+
+        self.major_themes = clean(self.major_themes, 3)
+        self.important_moments = clean(self.important_moments, 4)
+        self.decisions_discussed = clean(self.decisions_discussed, 3)
+        self.actions_created = clean(self.actions_created, 3)
+        self.people_mentioned = clean(self.people_mentioned, 3)
+        self.recurring_patterns = clean(self.recurring_patterns, 3)
+        self.discarded_noise = [str(x).strip() for x in self.discarded_noise if str(x).strip()][:24]
+        return self
+
+
+class CleanDiaryBundleMeta(BaseModel):
+    """Metadata from noise filtering / deduplication."""
+
+    discarded_previews: list[str] = Field(default_factory=list)
+    duplicate_collapsed: int = 0
+    noise_filtered: int = 0
+    offensive_redacted: int = 0
+
+
+class DiaryQualityResult(BaseModel):
+    ok: bool = False
+    issues: list[str] = Field(default_factory=list)
+    word_count: int = 0
+    paragraph_count: int = 0

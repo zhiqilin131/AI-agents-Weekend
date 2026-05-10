@@ -19,11 +19,19 @@ _ROUTER_SLIME_KEYS = frozenset({"name", "color_theme", "shape"})
 
 
 def _routing_context_json(ctx: SlimeVoiceContext) -> str:
-    """Omit persona/voice text from tool-router context — routing stays objective."""
+    """Omit most persona/voice text from tool-router context — keep fields that disambiguate name vs user address."""
     d = ctx.model_dump(mode="json")
     sp = d.get("slime_profile")
     if isinstance(sp, dict):
-        d["slime_profile"] = {k: v for k, v in sp.items() if k in _ROUTER_SLIME_KEYS}
+        slim: dict[str, Any] = {k: v for k, v in sp.items() if k in _ROUTER_SLIME_KEYS}
+        persona = sp.get("persona")
+        if isinstance(persona, dict):
+            nick = persona.get("user_nickname")
+            if nick is None:
+                nick = persona.get("userNickname")
+            if nick is not None and str(nick).strip():
+                slim["user_nickname_saved"] = str(nick).strip()[:48]
+        d["slime_profile"] = slim
     return json.dumps(d, ensure_ascii=False)[:12000]
 
 
@@ -68,7 +76,12 @@ Allowed tools:
 3) create_calendar_draft — arguments: {{"title": "<string>", "duration_minutes": <number|null>, "date_hint": "<string|null>", "time_hint": "<string|null>", "description": "<string|null>"}}
 4) schedule_decision_plan — arguments: {{"decision_id": "<string|null>"}} — schedule next_actions from a decision report into a draft calendar (decision_id from context if user says "this report").
 5) open_decision_report_flow — arguments: {{"decision_prompt": "<string>"}}
-6) update_slime_profile — arguments: {{"patch": {{ ... partial slime fields: name, color_theme, personality, shape, accessory, motion, custom_colors }}}}
+6) update_slime_profile — arguments: {{"patch": {{ ... partial slime fields: name, color_theme, personality, shape, accessory, motion, custom_colors, persona (optional dict) }}}}
+   - patch.name = **only** this Slime character's display name (what the companion is called).
+   - patch.persona.user_nickname = **only** how this Slime should address/refer to the **human user** (optional nickname/honorific).
+   - Example rename Slime: {{"patch": {{"name": "Blob"}}}}
+   - Example change how Slime talks to the user: {{"patch": {{"persona": {{"user_nickname": "boss"}}}}}}
+   Context slime_profile may include user_nickname_saved = current saved user address form; patch.name must never duplicate that intent.
 7) open_shadow_chat — arguments: {{"prefill_message": "<string or null>"}}
 8) no_op — arguments: {{"reason": "<string>"}} — use for chit-chat, unsafe, or unknown commands. **Always set assistant_hint** to a short, friendly line you would say out loud (1–2 sentences), e.g. greetings get a warm reply.
 
@@ -79,7 +92,8 @@ Rules:
 - Memory: use search_memory with a concrete query; scope "all" when user asks generally about what they said.
 - Calendar: create_calendar_draft for new blocks ("add 30 minutes Saturday morning", "gym tomorrow at 9", "review next Friday"). Include time_hint when user says morning/afternoon/evening or a clock time. The app will ask for confirmation before saving.
 - schedule_decision_plan when user wants to put the **decision report execution plan** on the calendar ("schedule my report plan", "put next steps on the calendar"). Pass decision_id when known from context.
-- Profile appearance/name: update_slime_profile with requires_confirmation=true unless the user was very explicit and the change is minor (still confirm for renames and custom colors).
+- Profile updates: update_slime_profile. Use patch.persona.user_nickname when the user changes what **they** want to be called (e.g. "call me …", "refer to me as …", "叫我…", "称呼我…", "别叫我 master 了"). Use patch.name **only** when they name/rename **the Slime** ("your name is …", "I'll call you Blob", "你就叫…"). Never put the user's requested form of address into patch.name.
+- Confirm appearance/safety: requires_confirmation=true unless the user was very explicit and the change is minor (still confirm for Slime renames, user_nickname changes, and custom colors).
 - Do not claim to have executed actions; tools + frontend will do that.
 - Keep assistant_hint a short optional line for tone (may be ignored).
 

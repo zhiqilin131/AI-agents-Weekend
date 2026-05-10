@@ -6,7 +6,7 @@ import { Ghost, Home } from 'lucide-react';
 import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionReportStreamingPanel';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
 import { SlimeCompanionStage } from '../features/slime/SlimeCompanionStage';
 import { SlimePersonalizationForm } from '../features/slime/SlimePersonalizationForm';
 import type { SlimeDecisionSuggestion } from '../features/slime/SlimeVoiceAgent';
@@ -349,9 +349,6 @@ export default function SlimeCompanionPage() {
         >
           <SheetHeader className="border-b border-white/50 pb-3">
             <SheetTitle className="text-violet-950">Slime studio</SheetTitle>
-            <SheetDescription className="text-gray-600">
-              Same profile as reports and Shadow. Save syncs to your account slime.
-            </SheetDescription>
           </SheetHeader>
           <div className="px-4 pb-8 pt-2">
             <SlimePersonalizationForm

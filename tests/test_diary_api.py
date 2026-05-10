@@ -49,6 +49,16 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+def test_diary_generate_heuristic_when_no_api_key(client: TestClient, tmp_path: Path) -> None:
+    """Without OPENAI_API_KEY, diary should still be a short sketch—not an empty error card."""
+    _write_thread(tmp_path, "demo_user", "api-heur")
+    g = client.post("/api/diary/generate", json={"date": "2026-05-09", "timezone": "UTC", "force": True})
+    assert g.status_code == 200
+    entry = g.json()["entry"]
+    assert "When the diary pen paused" not in entry["title"]
+    assert len(entry.get("summary") or "") > 60
+
+
 def test_diary_sources_and_generate_roundtrip(client: TestClient, tmp_path: Path) -> None:
     _write_thread(tmp_path, "demo_user", "api-thr")
     r = client.get("/api/diary/sources/2026-05-09", params={"timezone": "UTC"})
@@ -104,6 +114,16 @@ def test_diary_save_insight_writes_profile_memory(client: TestClient, tmp_path: 
 
     diary = client.get("/api/diary/entries/2026-05-09").json()
     assert diary["memory_status"] == "saved_selected_insights"
+
+
+def test_diary_regenerate_cleaner_roundtrip(client: TestClient, tmp_path: Path) -> None:
+    _write_thread(tmp_path, "demo_user", "api-thr-r")
+    client.post("/api/diary/generate", json={"date": "2026-05-09", "timezone": "UTC", "force": True})
+    r = client.post("/api/diary/regenerate-cleaner", json={"date": "2026-05-09", "timezone": "UTC"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("empty") is False
+    assert body["entry"]["date"] == "2026-05-09"
 
 
 def test_diary_not_in_memory_retrieval_module() -> None:

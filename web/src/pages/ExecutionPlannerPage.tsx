@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { CalendarDays, Download, Home, MessageSquare, RotateCcw, Sparkles } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Download, Home, MessageSquare, RotateCcw, Sparkles } from 'lucide-react';
 import { addDays, addMinutes, differenceInMinutes, format, isSameDay, parseISO, setHours, setMinutes, startOfDay, startOfWeek } from 'date-fns';
 import { apiUrl } from '../utils/apiOrigin';
 import { MainNavButtons } from '../app/components/MainNavButtons';
+import {
+  AgilityPreview as AgilityPreviewSidebar,
+  type AgilityPreviewData,
+} from '../app/components/AgilityPreview';
 import { buildLocalAgilityPreview, mapPreviewStepsToTasks, type AgilityPreview } from '../utils/agilityPreview';
 import { CalendarUpload } from '../app/components/CalendarUpload';
 import {
@@ -388,8 +392,10 @@ export default function ExecutionPlannerPage() {
     const windowEnd = VIEW_DAY_END_HOUR * 60;
     return events
       .map((ev) => {
-        const s = parseISO(ev.start);
-        const e = parseISO(ev.end);
+        const startIso = draftPlacement?.id === ev.id ? draftPlacement.start : ev.start;
+        const endIso = draftPlacement?.id === ev.id ? draftPlacement.end : ev.end;
+        const s = parseISO(startIso);
+        const e = parseISO(endIso);
         const dayIdx = days.findIndex((d) => isSameDay(d, s));
         if (dayIdx < 0) return null;
         let startMin = s.getHours() * 60 + s.getMinutes();
@@ -401,6 +407,8 @@ export default function ExecutionPlannerPage() {
         if (clippedEnd <= clippedStart) return null;
         return {
           ...ev,
+          start: startIso,
+          end: endIso,
           dayIdx,
           topPct: ((clippedStart - windowStart) / totalMin) * 100,
           heightPct: ((Math.max(SLOT_MINUTES, clippedEnd - clippedStart)) / totalMin) * 100,
@@ -409,7 +417,7 @@ export default function ExecutionPlannerPage() {
         };
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x));
-  }, [days, events]);
+  }, [days, draftPlacement, events]);
 
   const positionedEventsRef = useRef(positionedEvents);
   positionedEventsRef.current = positionedEvents;
@@ -783,7 +791,9 @@ export default function ExecutionPlannerPage() {
               <h1 className="text-3xl text-gray-900" style={{ fontWeight: 700 }}>
                 Execution Calendar
               </h1>
-              <p className="text-sm text-gray-500">Upload ICS, plan tasks, and refine with the schedule coach.</p>
+              <p className="text-sm text-gray-500">
+                Upload ICS, plan tasks, and refine with the schedule coach. Drag AI blocks · ⌘/Ctrl multi-select · drag on grid to box-select.
+              </p>
             </div>
           </div>
           <nav className="flex flex-wrap items-center gap-2" aria-label="Page actions">
@@ -845,8 +855,203 @@ export default function ExecutionPlannerPage() {
           </div>
         ) : null}
 
-        <div className="mx-auto grid max-w-xl grid-cols-1 gap-4">
-          <aside className="min-w-0 space-y-4">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_minmax(260px,300px)] xl:items-start">
+          <div className="min-w-0 space-y-0">
+            <div className={`overflow-hidden ${shellCard} p-3 sm:p-4`}>
+              <div className="flex flex-wrap items-center gap-2 border-b border-indigo-100/50 pb-3">
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-full border border-white/90 bg-white/90 p-2 text-indigo-700 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
+                  onClick={() => setWeekStart((w) => addDays(w, -7))}
+                  aria-label="Previous week"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-white/90 bg-white/90 px-4 py-2 text-xs font-semibold text-indigo-900 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
+                  onClick={() => setWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-full border border-white/90 bg-white/90 p-2 text-indigo-700 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
+                  onClick={() => setWeekStart((w) => addDays(w, 7))}
+                  aria-label="Next week"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+                <span className="text-xs tabular-nums text-gray-600">
+                  {format(weekStart, 'MMM d')} – {format(addDays(weekStart, 6), 'MMM d')}
+                </span>
+                <span className="rounded-full bg-violet-100/80 px-2 py-0.5 text-[11px] font-medium text-violet-900">
+                  {visibleWeekCount} events
+                </span>
+              </div>
+
+              <div className="overflow-x-auto pt-3">
+                <div className="min-w-[980px]">
+                  <div
+                    className="mb-1 grid overflow-hidden rounded-2xl border border-indigo-100/60 bg-gradient-to-b from-white/90 to-violet-50/40"
+                    style={{ gridTemplateColumns: '56px repeat(7, minmax(0,1fr))' }}
+                  >
+                    <div />
+                    {days.map((d) => (
+                      <div
+                        key={d.toISOString()}
+                        className={`px-1.5 py-1.5 text-center text-[11px] font-semibold ${
+                          isSameDay(d, today) ? 'bg-violet-200/50 text-violet-950' : 'text-gray-700'
+                        }`}
+                      >
+                        <span
+                          className={`block text-[9px] font-medium uppercase tracking-wide ${isSameDay(d, today) ? 'text-violet-800' : 'text-gray-500'}`}
+                        >
+                          {format(d, 'EEE')}
+                        </span>
+                        <span className="text-xs tabular-nums">{format(d, 'd')}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid" style={{ gridTemplateColumns: '56px 1fr' }}>
+                    <div
+                      className="relative rounded-l-2xl border-y border-l border-indigo-100/50 bg-gradient-to-b from-white/70 to-violet-50/30"
+                      style={{ height: `${SLOT_COUNT * SLOT_HEIGHT_PX}px` }}
+                    >
+                      {Array.from({ length: SLOT_COUNT + 1 }, (_, idx) => {
+                        const minutes = idx * SLOT_MINUTES;
+                        const hour = VIEW_DAY_START_HOUR + Math.floor(minutes / 60);
+                        const minute = minutes % 60;
+                        const showLabel = minute === 0;
+                        return (
+                          <div
+                            key={`tick-${idx}`}
+                            className={`absolute left-0 right-0 pl-1 text-[9px] tabular-nums ${showLabel ? 'text-gray-400' : 'pointer-events-none text-transparent select-none'}`}
+                            style={{ top: `${idx * SLOT_HEIGHT_PX - 6}px` }}
+                          >
+                            {`${String(hour).padStart(2, '0')}:00`}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div ref={calendarBodyRef} className="relative rounded-r-2xl border border-indigo-100/50 bg-white/50">
+                      {marqueeBox && marqueeBox.width > 2 && marqueeBox.height > 2 ? (
+                        <div
+                          className="pointer-events-none absolute z-[25] rounded-md border-2 border-violet-500/80 bg-violet-400/20"
+                          style={{
+                            left: marqueeBox.left,
+                            top: marqueeBox.top,
+                            width: marqueeBox.width,
+                            height: marqueeBox.height,
+                          }}
+                          aria-hidden
+                        />
+                      ) : null}
+                      <div
+                        className="grid overflow-hidden rounded-r-2xl"
+                        style={{ gridTemplateColumns: 'repeat(7, minmax(0,1fr))' }}
+                      >
+                        {days.map((day, dayIdx) => (
+                          <div
+                            key={`day-col-${day.toISOString()}`}
+                            role="presentation"
+                            onMouseDown={startMarqueeSelect}
+                            className={`relative border-l border-indigo-100/40 first:border-l-0 ${
+                              isSameDay(day, today) ? 'bg-violet-50/45' : 'bg-white/40'
+                            }`}
+                            style={{
+                              height: `${SLOT_COUNT * SLOT_HEIGHT_PX}px`,
+                              backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${SLOT_HEIGHT_PX - 1}px, rgba(196,181,253,0.35) ${SLOT_HEIGHT_PX - 1}px, rgba(196,181,253,0.35) ${SLOT_HEIGHT_PX}px)`,
+                            }}
+                          >
+                            {positionedEvents
+                              .filter((ev) => ev.dayIdx === dayIdx)
+                              .map((ev) => {
+                                const isSelected = selectedAiEventIds.includes(ev.id);
+                                const source = ev.source;
+                                const conflictFlash = draftPlacement?.id === ev.id && draftPlacement.conflict;
+                                return (
+                                  <div
+                                    key={ev.id}
+                                    data-calendar-event={source === 'ai' ? 'ai' : 'busy'}
+                                    onMouseDown={(event) => {
+                                      if (source !== 'ai') return;
+                                      event.stopPropagation();
+                                      dragStateRef.current = {
+                                        eventId: ev.id,
+                                        mode: 'move',
+                                        x: event.clientX,
+                                        y: event.clientY,
+                                        start: ev.start,
+                                        end: ev.end,
+                                      };
+                                      setCalendarWarning(null);
+                                    }}
+                                    onClick={(event) => {
+                                      if (source !== 'ai') {
+                                        setSelectedAiEventIds([]);
+                                        return;
+                                      }
+                                      event.stopPropagation();
+                                      if (event.metaKey || event.ctrlKey) {
+                                        setSelectedAiEventIds((prev) =>
+                                          prev.includes(ev.id) ? prev.filter((id) => id !== ev.id) : [...prev, ev.id],
+                                        );
+                                      } else {
+                                        setSelectedAiEventIds([ev.id]);
+                                      }
+                                    }}
+                                    title={`${ev.title}\n${ev.startLabel}–${ev.endLabel}`}
+                                    className={`absolute left-0.5 right-0.5 z-30 overflow-hidden rounded-lg border px-1 py-0.5 text-left leading-tight shadow-sm ${
+                                      source === 'uploaded'
+                                        ? 'border-purple-200/80 bg-white/90 text-gray-800 backdrop-blur-sm'
+                                        : conflictFlash
+                                          ? 'cursor-grab border-rose-500 bg-rose-500/90 text-white shadow-md'
+                                          : isSelected
+                                            ? 'cursor-grab border-violet-700 bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-500/20'
+                                            : 'cursor-grab border-indigo-400/60 bg-gradient-to-r from-indigo-500 to-violet-500 text-white shadow-indigo-500/15'
+                                    }`}
+                                    style={{ top: `${ev.topPct}%`, height: `${Math.max(4, ev.heightPct)}%` }}
+                                  >
+                                    <div className="truncate text-[10px] font-semibold">{ev.title}</div>
+                                    {source === 'ai' ? (
+                                      <div
+                                        onMouseDown={(event) => {
+                                          event.stopPropagation();
+                                          dragStateRef.current = {
+                                            eventId: ev.id,
+                                            mode: 'resize',
+                                            x: event.clientX,
+                                            y: event.clientY,
+                                            start: ev.start,
+                                            end: ev.end,
+                                          };
+                                          setCalendarWarning(null);
+                                        }}
+                                        className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize bg-white/30"
+                                        title="Drag to resize duration"
+                                      />
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside className="min-w-0 space-y-4 xl:sticky xl:top-6 xl:self-start">
+            {preview ? (
+              <div className={shellCard}>
+                <AgilityPreviewSidebar preview={preview as unknown as AgilityPreviewData} variant="sidebar" />
+              </div>
+            ) : null}
+
             <section className={`${shellCard} space-y-3 p-4`}>
               <div className="flex flex-wrap items-center gap-2">
                 <CalendarUpload onUpload={onUploadIcs} uploadedCount={events.filter((x) => x.source === 'uploaded').length} />

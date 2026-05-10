@@ -91,6 +91,7 @@ export function DiaryTrackViewport({
 }: DiaryTrackViewportProps) {
   const gradId = useId().replace(/:/g, '');
   const glowId = useId().replace(/:/g, '');
+  const focusGradId = `fg-${gradId}`;
   const stripRef = useRef<HTMLDivElement | null>(null);
   const stripX = useMotionValue(0);
   const [measuredW, setMeasuredW] = useState(viewportWidth || 360);
@@ -164,35 +165,71 @@ export function DiaryTrackViewport({
               <stop offset="50%" stopColor="rgba(196, 181, 253, 0.95)" />
               <stop offset="100%" stopColor="rgba(167, 139, 250, 0.05)" />
             </linearGradient>
+            <linearGradient id={focusGradId} x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="rgba(129, 140, 248, 0.95)" />
+              <stop offset="45%" stopColor="rgba(56, 189, 248, 0.85)" />
+              <stop offset="100%" stopColor="rgba(167, 139, 250, 0.75)" />
+            </linearGradient>
           </defs>
+          {/* Soft trail under the route */}
           <path
+            d={pathD}
+            fill="none"
+            stroke="rgba(139, 92, 246, 0.18)"
+            strokeWidth={18}
+            strokeLinecap="round"
+            opacity={0.95}
+          />
+          {/* Upcoming / faint portion */}
+          <path
+            d={pathD}
+            fill="none"
+            stroke="rgba(148, 163, 184, 0.35)"
+            strokeWidth={4}
+            strokeLinecap="round"
+            strokeDasharray="4 18"
+            opacity={0.65}
+          />
+          <motion.path
             data-testid="diary-journey-path"
             d={pathD}
             fill="none"
             stroke={`url(#${gradId})`}
-            strokeWidth={3}
+            strokeWidth={4}
             strokeLinecap="round"
-            strokeDasharray="5 12"
-            opacity={0.92}
+            strokeDasharray="7 16"
+            opacity={0.98}
+            initial={{ strokeDashoffset: 0 }}
+            animate={
+              reducedMotion
+                ? { strokeDashoffset: 0 }
+                : { strokeDashoffset: [0, -140] }
+            }
+            transition={
+              reducedMotion
+                ? { duration: 0 }
+                : { duration: 18, repeat: Infinity, ease: 'linear' }
+            }
           />
-          {jumpPhase === 'jumping' && segmentPath ? (
+          {(jumpPhase === 'jumping' || jumpPhase === 'preparing_jump') && segmentPath ? (
             <path
               data-testid="diary-journey-path-jump-glow"
               d={segmentPath}
               fill="none"
               stroke={`url(#${glowId})`}
-              strokeWidth={7}
+              strokeWidth={10}
               strokeLinecap="round"
-              opacity={0.85}
+              opacity={0.92}
             />
           ) : null}
           {selIx >= 1 ? (
             <path
               d={pathFromPoints(points.slice(0, selIx + 1))}
               fill="none"
-              stroke="rgba(167, 139, 250, 0.55)"
-              strokeWidth={5}
+              stroke={`url(#${focusGradId})`}
+              strokeWidth={7}
               strokeLinecap="round"
+              opacity={0.88}
             />
           ) : null}
         </svg>
@@ -205,7 +242,7 @@ export function DiaryTrackViewport({
           return (
             <div
               key={d.date}
-              className={edge ? 'opacity-55' : ''}
+              className={edge ? 'opacity-[0.78]' : ''}
               style={{
                 position: 'absolute',
                 left: p.x,

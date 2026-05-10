@@ -131,6 +131,30 @@ export function DiarySlimeWalker({
 
       onPhaseChange?.('idle');
       lastFeetRef.current = end;
+
+      // Landed on a new day: small vertical hop then body wiggle (skip on first paint / snap moves).
+      if (start && !reducedMotion) {
+        await animate(my, [end.y, end.y - 18, end.y - 6, end.y], {
+          duration: 0.5,
+          times: [0, 0.28, 0.58, 1],
+          ease: ['easeOut', 'easeInOut', 'easeOut'],
+        });
+        if (cancelled) return;
+        await Promise.all([
+          animate(rz, [0, -11, 11, -8, 8, -5, 5, 0], {
+            duration: 0.52,
+            ease: 'easeInOut',
+          }),
+          animate(sy, [1, 1.06, 1.04, 1], { duration: 0.52, times: [0, 0.25, 0.55, 1], ease: 'easeInOut' }),
+        ]);
+        if (cancelled) return;
+      }
+
+      mx.set(end.x);
+      my.set(end.y);
+      sx.set(1);
+      sy.set(1);
+      rz.set(0);
     };
 
     void run();

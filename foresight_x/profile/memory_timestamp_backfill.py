@@ -31,7 +31,15 @@ def _parse_iso(raw: str) -> datetime | None:
 
 
 def backfill_memory_fact_timestamps(profile: UserProfile, *, profile_path_fs: Path | None = None) -> tuple[UserProfile, bool]:
-    """Fill missing ``created_at`` from qualifiers/source_timestamp, valid_from, or profile file mtime."""
+    """Fill missing ``created_at`` for diary-by-day and auditing.
+
+    ``created_at`` means **when this fact was recorded** (or tied to a trusted message time),
+    not the historical date mentioned inside the fact text and not ``valid_from`` semantics
+    (validity / biography dates like \"started job in 2023\").
+
+    Preference order: explicit ``created_at`` → trusted ``source_timestamp`` (imports / message-linked only)
+    → profile file mtime → UTC now.
+    """
     mtime_iso = ""
     if profile_path_fs and profile_path_fs.is_file():
         try:
@@ -48,10 +56,16 @@ def backfill_memory_fact_timestamps(profile: UserProfile, *, profile_path_fs: Pa
             out.append(f)
             continue
         q = dict(f.qualifiers or {})
-        src_ts = q.get("source_timestamp") or q.get("sourceTimestamp")
-        dt = _parse_iso(str(src_ts or ""))
-        if dt is None and (f.valid_from or "").strip():
-            dt = _parse_iso(f.valid_from)
+        raw_ts = q.get("source_timestamp") or q.get("sourceTimestamp")
+        src_ts = str(raw_ts or "").strip()
+        trust_ts = False
+        if src_ts:
+            src = (f.source or "").strip().lower()
+            if src == "import":
+                trust_ts = True
+            elif q.get("timestamp_from_message") or q.get("thread_message_created_at"):
+                trust_ts = True
+        dt = _parse_iso(src_ts) if trust_ts else None
         inferred = False
         if dt is None:
             dt = _parse_iso(mtime_iso) if mtime_iso else _parse_iso(_utc_now())

@@ -252,9 +252,6 @@ export function SlimePersonalizationForm({
 
       <div className="rounded-xl border border-violet-200/60 bg-gradient-to-b from-white/90 to-violet-50/40 p-3 shadow-sm">
         <p className="text-[11px] font-bold uppercase tracking-wide text-violet-800">How should your Slime talk?</p>
-        <p className="mt-0.5 text-[10px] text-gray-600">
-          Voice replies, chat, memory answers, and the report bubble follow this style — not just the look.
-        </p>
 
         <div className="mt-2">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-700/90">Personality preset</p>

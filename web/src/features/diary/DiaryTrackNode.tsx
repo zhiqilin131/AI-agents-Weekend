@@ -27,10 +27,10 @@ export function DiaryTrackNode({
 }: DiaryTrackNodeProps) {
   const toneHue =
     tone === 'stressed'
-      ? 'from-rose-400/60 to-orange-300/40'
+      ? 'from-rose-200 to-orange-100'
       : tone === 'excited'
-        ? 'from-amber-300/70 to-lime-300/40'
-        : 'from-violet-400/55 to-cyan-300/45';
+        ? 'from-amber-100 to-lime-50'
+        : 'from-violet-100 to-cyan-50';
 
   return (
     <button
@@ -42,25 +42,28 @@ export function DiaryTrackNode({
       className={cn(
         'relative flex flex-col items-center outline-none transition-transform focus-visible:ring-2 focus-visible:ring-violet-400/70',
         selected ? 'z-20 scale-110' : 'z-10',
-        hasEntry ? '' : 'opacity-55',
+        hasEntry ? '' : 'opacity-[0.82]',
       )}
       aria-current={selected ? 'date' : undefined}
       aria-label={`${label}${hasEntry ? ', diary entry' : ', no entry'}`}
     >
       <span
         className={cn(
-          'relative flex h-9 w-9 items-center justify-center rounded-full border text-[11px] font-semibold shadow-md backdrop-blur-md sm:h-10 sm:w-10 sm:text-xs',
+          'relative z-[1] flex h-9 w-9 items-center justify-center rounded-full border text-[11px] font-semibold shadow-md backdrop-blur-sm sm:h-10 sm:w-10 sm:text-xs',
           hasEntry
-            ? 'border-white/80 bg-gradient-to-br text-slate-900 shadow-violet-300/35 ' + toneHue
-            : 'border-slate-200/90 bg-white/70 text-slate-500',
+            ? 'border-violet-200/90 bg-gradient-to-br text-slate-900 shadow-violet-400/25 ring-1 ring-white/80 ' + toneHue
+            : 'border-slate-300/90 bg-white text-slate-700',
           selected && 'ring-2 ring-violet-400/90 ring-offset-2 ring-offset-transparent',
           prepareJump && selected && 'ring-violet-300 shadow-[0_0_22px_rgba(167,139,250,0.65)]',
         )}
       >
-        {label}
         {hasEntry ? (
-          <span className="absolute inset-0 animate-pulse rounded-full bg-white/25 opacity-40 [animation-duration:2.8s]" />
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-[-3px] z-0 rounded-full bg-violet-400/12 [animation-duration:2.6s] animate-pulse"
+          />
         ) : null}
+        <span className="relative z-[2] drop-shadow-[0_1px_0_rgba(255,255,255,0.85)]">{label}</span>
       </span>
       {!reducedMotion && landingRipple ? (
         <motion.span

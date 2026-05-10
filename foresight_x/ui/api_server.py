@@ -525,6 +525,7 @@ def root() -> dict[str, object]:
             "/api/diary/entries",
             "/api/diary/entries/{date}",
             "/api/diary/generate",
+            "/api/diary/regenerate-cleaner",
             "/api/diary/sources/{date}",
             "/api/diary/entries/{entry_id}/save-insight",
         ],
@@ -3095,6 +3096,12 @@ class DiaryGenerateBody(BaseModel):
     timezone: str = Field(default="UTC", max_length=80)
 
 
+class DiaryRegenerateCleanBody(BaseModel):
+    date: str = Field(min_length=10, max_length=10)
+    timezone: str = Field(default="UTC", max_length=80)
+    confirm_replace: bool = False
+
+
 class DiarySaveInsightBody(BaseModel):
     insight_text: str = Field(min_length=1, max_length=500)
     confirmed: bool = False
@@ -3174,6 +3181,52 @@ def diary_generate(body: DiaryGenerateBody) -> dict:
     existing = load_entry(settings, uid, body.date.strip())
     if existing is not None and not body.force:
         return {"ok": True, "cached": True, "entry": existing.model_dump(mode="json")}
+
+    entry = generate_diary_entry(uid, bundle, settings=settings)
+    if entry is None:
+        return {
+            "ok": True,
+            "empty": True,
+            "message": "no_meaningful_activity",
+            "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
+        }
+
+    created_new = existing is None
+    if existing is not None:
+        entry = entry.model_copy(
+            update={
+                "id": existing.id,
+                "created_at": existing.created_at,
+                "user_edited": existing.user_edited,
+                "memory_status": existing.memory_status,
+            }
+        )
+    entry = attach_links(entry, bundle)
+    save_entry(settings, uid, stamp_times(entry, created=created_new))
+    loaded = load_entry(settings, uid, body.date.strip())
+    return {"ok": True, "empty": False, "entry": (loaded or entry).model_dump(mode="json")}
+
+
+@app.post("/api/diary/regenerate-cleaner")
+def diary_regenerate_cleaner(body: DiaryRegenerateCleanBody) -> dict:
+    """Re-run noise filter + two-stage diary writer; replace stored entry unless user_edited blocks."""
+    if not _RE_DATE.match((body.date or "").strip()):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    tz = (body.timezone or "UTC").strip() or "UTC"
+    existing = load_entry(settings, uid, body.date.strip())
+    if existing is not None and existing.user_edited and not body.confirm_replace:
+        raise HTTPException(status_code=409, detail="user_edited_confirmation_required")
+
+    bundle = collect_diary_sources_for_date(uid, body.date.strip(), tz, settings=settings)
+    if not bundle_has_activity(bundle):
+        return {
+            "ok": True,
+            "empty": True,
+            "message": "no_meaningful_activity",
+            "source_diagnostics": bundle.diagnostics.model_dump(mode="json"),
+        }
 
     entry = generate_diary_entry(uid, bundle, settings=settings)
     if entry is None:

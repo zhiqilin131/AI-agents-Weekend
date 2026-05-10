@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from pydantic import ValidationError
@@ -25,8 +26,22 @@ from foresight_x.schemas import (
 )
 from foresight_x.voice.slime_memory_synthesis import MemoryEvidenceItem, evidence_items_from_hits, synthesize_memory_answer
 from foresight_x.voice.slime_identity import EffectiveSlimePersona, get_effective_slime_persona
+from foresight_x.voice.slime_persona_prompt import merge_persona_patch, merge_slime_persona_defaults
 from foresight_x.voice.slime_voice_router import SlimeVoiceContext, SlimeVoiceRouteResult
 from foresight_x.voice.slime_voice_synthesis import synthesize_persona_spoken_reply
+
+
+def _voice_profile_patch_json(patch: dict[str, Any]) -> dict[str, Any]:
+    """JSON-serialize values for voice-command HTTP responses (tool_result / frontend_action)."""
+    out: dict[str, Any] = {}
+    for k, v in patch.items():
+        if hasattr(v, "model_dump"):
+            out[k] = v.model_dump(mode="json")
+        elif isinstance(v, Enum):
+            out[k] = v.value
+        else:
+            out[k] = v
+    return out
 
 
 def _slime_voice_persona_bundle(settings: Settings) -> tuple[EffectiveSlimePersona, SlimePersona | None]:
@@ -403,8 +418,12 @@ def tool_update_slime_profile(
     if not isinstance(raw_patch, dict):
         return {"ok": False, "error": "invalid_patch"}, {"type": "none"}
 
+    existing = load_user_profile(settings)
+    base_prof = existing.slime_profile or SlimeProfile(name="Mochi", updated_at="")
+
     # Build validated partial patch
     patch_in: dict[str, Any] = {}
+    nickname_patch_requested = False
     if "name" in raw_patch:
         name = str(raw_patch.get("name") or "").strip()
         if name:
@@ -433,22 +452,37 @@ def tool_update_slime_profile(
             except ValueError:
                 return {"ok": False, "error": f"invalid_{key}"}, {"type": "none"}
 
+    raw_persona = raw_patch.get("persona")
+    if isinstance(raw_persona, dict) and raw_persona:
+        cur_persona = merge_slime_persona_defaults(base_prof.persona)
+        try:
+            patch_in["persona"] = merge_persona_patch(cur_persona, raw_persona)
+        except ValidationError:
+            return {"ok": False, "error": "invalid_persona_patch"}, {"type": "none"}
+        if any(k in raw_persona for k in ("user_nickname", "userNickname")):
+            nickname_patch_requested = True
+
     if not patch_in:
         return {"ok": False, "error": "empty_patch"}, {"type": "none"}
 
-    needs_confirm = route.requires_confirmation or "name" in patch_in or "custom_colors" in patch_in
+    needs_confirm = (
+        route.requires_confirmation
+        or "name" in patch_in
+        or "custom_colors" in patch_in
+        or nickname_patch_requested
+    )
     if needs_confirm:
-        return {"ok": False, "pending_patch": patch_in}, {
+        patch_json = _voice_profile_patch_json(patch_in)
+        return {"ok": False, "pending_patch": patch_json}, {
             "type": "confirm",
             "route": "",
             "payload": {
                 "title": "Update your Slime?",
-                "patch": {k: (v.model_dump(mode="json") if hasattr(v, "model_dump") else v) for k, v in patch_in.items()},
+                "patch": patch_json,
             },
         }
 
-    existing = load_user_profile(settings)
-    base = existing.slime_profile or SlimeProfile(name="Mochi", updated_at="")
+    base = base_prof
     merged = base.model_copy(update=patch_in)
     merged.updated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     updated_profile = existing.model_copy(update={"slime_profile": merged})

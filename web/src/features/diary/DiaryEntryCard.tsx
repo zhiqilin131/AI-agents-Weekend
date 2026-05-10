@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { DiarySourceLinks } from './DiarySourceLinks';
 import type { DiaryEntryDto } from './types';
 import { apiFetchErrorMessage, apiUrl } from '../../utils/apiOrigin';
 
@@ -10,7 +9,20 @@ type DiaryEntryCardProps = {
   onSavedInsight?: () => void;
   onGenerateFromDay?: () => void;
   generateBusy?: boolean;
+  onRegenerateCleaner?: () => void | Promise<void>;
+  regenerateBusy?: boolean;
 };
+
+function formatDiaryDate(iso: string): string {
+  const [y, mo, d] = iso.split('-').map(Number);
+  if (!y || !mo || !d) return iso;
+  return new Date(y, mo - 1, d).toLocaleDateString(undefined, {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}
 
 export function DiaryEntryCard({
   entry,
@@ -19,6 +31,8 @@ export function DiaryEntryCard({
   onSavedInsight,
   onGenerateFromDay,
   generateBusy,
+  onRegenerateCleaner,
+  regenerateBusy,
 }: DiaryEntryCardProps) {
   const [insight, setInsight] = useState('');
   const [confirm, setConfirm] = useState(false);
@@ -85,9 +99,11 @@ export function DiaryEntryCard({
     );
   }
 
+  const sc = entry.source_counts;
+
   return (
     <div className="rounded-3xl border border-violet-100/90 bg-gradient-to-br from-white/95 via-white/90 to-violet-50/50 p-6 shadow-xl shadow-violet-200/30 backdrop-blur-md">
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-lg font-semibold tracking-tight text-slate-900">{entry.title || 'Diary'}</h2>
         {entry.tone ? (
           <span className="rounded-full bg-violet-100/90 px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-violet-800">
@@ -95,14 +111,24 @@ export function DiaryEntryCard({
           </span>
         ) : null}
       </div>
-      <p className="text-sm leading-relaxed text-slate-700">{entry.summary}</p>
+      <p className="mb-3 text-sm text-slate-500">{formatDiaryDate(entry.date)}</p>
+
+      <div className="text-sm leading-relaxed text-slate-700 whitespace-pre-line">{entry.summary}</div>
 
       {entry.highlights?.length ? (
-        <ul className="mt-4 list-disc space-y-1 pl-5 text-sm text-slate-600">
-          {entry.highlights.map((h) => (
-            <li key={h}>{h}</li>
-          ))}
-        </ul>
+        <div className="mt-4">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Highlights</p>
+          <div className="flex flex-wrap gap-2">
+            {entry.highlights.map((h) => (
+              <span
+                key={h}
+                className="rounded-full border border-violet-200/90 bg-white/90 px-3 py-1 text-xs font-medium text-violet-900 shadow-sm"
+              >
+                {h}
+              </span>
+            ))}
+          </div>
+        </div>
       ) : null}
 
       {entry.themes?.length ? (
@@ -112,9 +138,31 @@ export function DiaryEntryCard({
         </p>
       ) : null}
 
-      <div className="mt-5 border-t border-violet-100/80 pt-4">
-        <DiarySourceLinks entry={entry} />
-      </div>
+      <details className="mt-5 rounded-xl border border-slate-200/80 bg-white/50 px-3 py-2 text-sm text-slate-700">
+        <summary className="cursor-pointer select-none font-medium text-slate-600">Sources</summary>
+        <ul className="mt-2 space-y-1 text-xs text-slate-600">
+          <li>{sc.chat_messages} chat messages</li>
+          <li>{sc.voice_turns} voice turns</li>
+          <li>{sc.reports} decision reports</li>
+          <li>{sc.calendar_items} calendar items</li>
+          <li>{sc.memory_refs} memory references</li>
+          <li>{sc.imported_items} imported notes</li>
+        </ul>
+      </details>
+
+      {onRegenerateCleaner ? (
+        <div className="mt-4">
+          <button
+            type="button"
+            disabled={regenerateBusy || generateBusy}
+            data-testid="diary-regenerate-cleaner"
+            onClick={() => void onRegenerateCleaner()}
+            className="rounded-full border border-violet-300 bg-white px-4 py-2 text-xs font-semibold text-violet-800 shadow-sm hover:bg-violet-50 disabled:opacity-50"
+          >
+            {regenerateBusy ? 'Regenerating…' : 'Regenerate in cleaner style'}
+          </button>
+        </div>
+      ) : null}
 
       <div className="mt-5 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4">
         <p className="text-xs font-semibold text-slate-600">Save insight as memory</p>

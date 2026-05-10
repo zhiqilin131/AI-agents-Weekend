@@ -69,7 +69,10 @@ class ProfileMemoryFact(BaseModel):
     category: MemoryFactCategory = MemoryFactCategory.OTHER
     text: str = Field(min_length=1, description="Human-readable line for UI and prompts (always set).")
     source: MemoryFactSource = "shadow"
-    created_at: str = Field(default="", description="ISO-8601 UTC when known.")
+    created_at: str = Field(
+        default="",
+        description="ISO-8601 UTC when this fact was stored (wall/interaction time). Not narrative dates inside the text.",
+    )
     updated_at: str = Field(default="", description="ISO-8601 UTC when fact text/metadata last changed.")
     # Typed layer (optional; empty predicate => legacy category+text only)
     subject_ref: str = Field(
@@ -85,7 +88,13 @@ class ProfileMemoryFact(BaseModel):
         description="Object of the relation (entity label or literal).",
     )
     qualifiers: dict[str, Any] = Field(default_factory=dict, description="Optional key-value qualifiers.")
-    valid_from: str = Field(default="", description="ISO-8601 UTC start of validity; empty = unknown.")
+    valid_from: str = Field(
+        default="",
+        description=(
+            "ISO-8601 UTC semantic start of validity (biography / validity interval); "
+            "Diary does not group memories by this field—use created_at for the user's interaction day."
+        ),
+    )
     valid_to: str = Field(default="", description="ISO-8601 UTC end of validity; empty = still valid if active.")
     status: MemoryFactStatus = "active"
     replaced_by_id: str = Field(default="", description="Newer fact that supersedes this row when deprecated.")
