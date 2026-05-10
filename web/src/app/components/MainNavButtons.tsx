@@ -1,9 +1,11 @@
 import type { ComponentType, SVGProps } from 'react';
 import { useNavigate } from 'react-router';
-import { BookOpen, CalendarDays, Ghost, History, MessagesSquare } from 'lucide-react';
+import { BookOpen, CalendarDays, Ghost, History, LogOut, MessagesSquare } from 'lucide-react';
 import { SlimeAdvisor } from './report/SlimeAdvisor';
 import { PersonaSwitcher } from './PersonaSwitcher';
 import { cn } from './ui/utils';
+import { useAuth } from '../../auth/AuthContext';
+import { supabaseGateEnabled } from '../../auth/RequireAuthLayout';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../../hooks/useSlimeProfile';
 
 type NavIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
@@ -86,6 +88,7 @@ export function MainNavButtons({
   className?: string;
 }) {
   const navigate = useNavigate();
+  const { session, signOut } = useAuth();
   const compact = variant === 'compact';
   const btnClass = compact ? btnClassCompact : btnClassDefault;
 
@@ -122,6 +125,18 @@ export function MainNavButtons({
               <NavIconSlot Icon={Ghost} compact={compact} colorClass="text-fuchsia-600" />
               {compact ? 'Buddy' : 'Slime buddy'}
             </button>
+            {supabaseGateEnabled() && session ? (
+              <button
+                type="button"
+                onClick={() => void signOut().then(() => navigate('/login'))}
+                className={btnClass}
+                style={btnStyle}
+                title="Sign out"
+              >
+                <NavIconSlot Icon={LogOut} compact={compact} colorClass="text-slate-500" />
+                {compact ? 'Out' : 'Sign out'}
+              </button>
+            ) : null}
           </div>
         </div>
       </div>

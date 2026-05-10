@@ -1,4 +1,4 @@
-import { apiUrl } from './apiOrigin';
+import { apiFetch } from './apiFetch';
 
 export type CalendarAgentDraft = {
   draft_id: string;
@@ -13,7 +13,7 @@ export type CalendarAgentDraft = {
 };
 
 export async function fetchCalendarDraftFromReport(decisionId: string, threadId?: string | null): Promise<CalendarAgentDraft> {
-  const res = await fetch(apiUrl('/api/calendar-agent/from-report'), {
+  const res = await apiFetch('/api/calendar-agent/from-report', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ decision_id: decisionId, thread_id: threadId ?? null }),
@@ -28,7 +28,7 @@ export async function confirmCalendarDraft(
   draftId: string,
   opts?: { selected_event_ids?: string[]; edits?: Array<Record<string, unknown>> },
 ): Promise<Array<Record<string, unknown>>> {
-  const res = await fetch(apiUrl('/api/calendar-agent/confirm'), {
+  const res = await apiFetch('/api/calendar-agent/confirm', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -46,7 +46,7 @@ export async function fetchCalendarAlternatives(
   draftId: string,
   preference: 'earlier' | 'less_intense' | 'later' | 'focus_time',
 ): Promise<Array<Record<string, unknown>>> {
-  const res = await fetch(apiUrl('/api/calendar-agent/alternatives'), {
+  const res = await apiFetch('/api/calendar-agent/alternatives', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ draft_id: draftId, preference }),

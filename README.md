@@ -50,7 +50,7 @@ cd web && npm install && npm run dev:all
 
 Open **`http://127.0.0.1:5173`**. The dev client uses **`http://127.0.0.1:8765`** for the API (`web/.env.development`).
 
-**Routes (hash router):** `/` Home, `/buddy` Slime Buddy, `/reflect` Shadow Chat, `/profile`, `/execution`, etc.
+**Routes (hash router):** `/` Home, `/buddy` Slime Buddy, `/reflect` Shadow Chat, `/profile`, `/execution`, `/login`, `/register`, etc.
 
 Split terminals (optional):
 
@@ -68,6 +68,22 @@ Split terminals (optional):
 | **Recent events** | Non-web snippets only. |
 
 Stale seeds after code changes: delete `data/chroma` (or the world collection) and re-ingest / re-run.
+
+## Auth (Supabase email + password)
+
+Optional for local dev: leave `VITE_SUPABASE_URL` unset and the app behaves as before (persona switcher + file-backed `FORESIGHT_USER_ID`).
+
+**Supabase project:** enable the **Email** auth provider; configure whether new users must confirm email. Ensure RLS policies on tables such as `threads` use `auth.uid()` as needed.
+
+**Frontend (`web/.env` or hosting env):**
+
+- `VITE_SUPABASE_URL` — project URL
+- `VITE_SUPABASE_ANON_KEY` — anon (public) key
+- `VITE_REQUIRE_AUTH` — set to `false` only for local/testing when you have Supabase env but want to skip the login gate; production should omit this or use `true`
+
+**Backend:** `SUPABASE_URL` must match (for JWKS verification). Set `REQUIRE_AUTH=true` in production so `/api/*` requires `Authorization: Bearer <access_token>` (except `/api/health`). Deploy backend first with `REQUIRE_AUTH` off, ship frontend with Supabase keys, then turn `REQUIRE_AUTH` on to avoid a window of 401s.
+
+See `web/.env.example`.
 
 ## Docs
 

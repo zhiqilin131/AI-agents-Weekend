@@ -1,4 +1,4 @@
-import { apiUrl } from './apiOrigin';
+import { apiFetch } from './apiFetch';
 import {
   EXECUTION_EVENTS_STORAGE_KEY,
   EXECUTION_SCHEDULE_COACH_OPTIONS_KEY,
@@ -171,7 +171,7 @@ export async function refineScheduleWithFeedback(params: {
   const tt = (params.targetTaskIds ?? []).filter(Boolean);
   if (tt.length > 0) body.target_task_ids = tt;
 
-  const res = await fetch(apiUrl('/api/calendar/refine-schedule'), {
+  const res = await apiFetch('/api/calendar/refine-schedule', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

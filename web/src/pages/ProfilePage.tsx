@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
-import { apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
 import { cn } from '../app/components/ui/utils';
 
 function linesToList(text: string): string[] {
@@ -86,7 +86,7 @@ export default function ProfilePage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch(apiUrl('/api/profile'));
+      const res = await apiFetch('/api/profile');
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as {
         user_priorities?: string[];
@@ -140,7 +140,7 @@ export default function ProfilePage() {
         constraints: linesToList(constraints),
         values: linesToList(values),
       };
-      const res = await fetch(apiUrl('/api/profile'), {
+      const res = await apiFetch('/api/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -162,7 +162,7 @@ export default function ProfilePage() {
     setDeletingId(id);
     setError(null);
     try {
-      const res = await fetch(apiUrl(`/api/profile/priority-line/${encodeURIComponent(id)}`), { method: 'DELETE' });
+      const res = await apiFetch(`/api/profile/priority-line/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
       setMessage('Removed.');
       void load();
@@ -178,7 +178,7 @@ export default function ProfilePage() {
     setDeletingId(id);
     setError(null);
     try {
-      const res = await fetch(apiUrl(`/api/profile/memory-fact/${encodeURIComponent(id)}`), { method: 'DELETE' });
+      const res = await apiFetch(`/api/profile/memory-fact/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
       setMessage('Memory fact removed.');
       void load();

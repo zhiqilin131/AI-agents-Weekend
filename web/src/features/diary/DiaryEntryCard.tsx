@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { DiaryEntryDto } from './types';
-import { apiFetchErrorMessage, apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
+import { apiFetchErrorMessage } from '../../utils/apiOrigin';
 
 type DiaryEntryCardProps = {
   entry: DiaryEntryDto | null;
@@ -53,7 +54,7 @@ export function DiaryEntryCard({
     }
     setBusy(true);
     try {
-      const r = await fetch(apiUrl(`/api/diary/entries/${encodeURIComponent(entry.id)}/save-insight`), {
+      const r = await apiFetch(`/api/diary/entries/${encodeURIComponent(entry.id)}/save-insight`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ insight_text: text, confirmed: true }),

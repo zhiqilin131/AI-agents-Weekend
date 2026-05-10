@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { SlimePersona, SlimeProfile, SlimeSelfModelView } from '../app/model';
 import { DEFAULT_SLIME_PERSONA } from '../features/slime/slimePersonaPresets';
-import { apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
 
 /** PATCH body: use `null` to clear optional fields on the server. */
 export type SlimeProfileApiPatch = Partial<Omit<SlimeProfile, 'customColors' | 'voice' | 'persona'>> & {
@@ -139,7 +139,7 @@ function notify(profile: SlimeProfile) {
 async function fetchSlimeProfile(): Promise<SlimeProfile> {
   if (cached) return cached;
   if (inflight) return inflight;
-  inflight = fetch(apiUrl('/api/profile/slime'), { cache: 'no-store' })
+  inflight = apiFetch('/api/profile/slime', { cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load slime profile'))))
     .then((data) => {
       cached = toCamelProfile(data);
@@ -161,7 +161,7 @@ export async function refetchSlimeProfileGlobal(): Promise<SlimeProfile> {
   cached = null;
   inflight = null;
   try {
-    const r = await fetch(apiUrl('/api/profile/slime'), { cache: 'no-store' });
+    const r = await apiFetch('/api/profile/slime', { cache: 'no-store' });
     if (!r.ok) throw new Error('Failed to load slime profile');
     const p = toCamelProfile(await r.json());
     cached = p;
@@ -208,7 +208,7 @@ export function useSlimeProfile() {
 
   const updateSlimeProfile = useCallback(async (patch: SlimeProfileApiPatch): Promise<SlimeProfile> => {
     setError(null);
-    const res = await fetch(apiUrl('/api/profile/slime'), {
+    const res = await apiFetch('/api/profile/slime', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -244,7 +244,7 @@ export function useSlimeProfile() {
     cached = null;
     inflight = null;
     try {
-      const r = await fetch(apiUrl('/api/profile/slime'), { cache: 'no-store' });
+      const r = await apiFetch('/api/profile/slime', { cache: 'no-store' });
       if (!r.ok) throw new Error('Failed to load slime profile');
       const p = toCamelProfile(await r.json());
       cached = p;

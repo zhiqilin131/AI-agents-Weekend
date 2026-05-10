@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
 import { OutcomeHarness } from '../app/components/OutcomeHarness';
 import { SavedOutcomeModal } from '../app/components/SavedOutcomeModal';
-import { apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
 
 interface TraceRow {
   decision_id: string;
@@ -24,7 +24,7 @@ export default function HistoryPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch(apiUrl('/api/traces'));
+      const res = await apiFetch('/api/traces');
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as TraceRow[];
       setRows(data);
@@ -44,7 +44,7 @@ export default function HistoryPage() {
     setBusy(id);
     setError(null);
     try {
-      const res = await fetch(apiUrl(`/api/traces/${encodeURIComponent(id)}`), { method: 'DELETE' });
+      const res = await apiFetch(`/api/traces/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
       await load();
     } catch (e) {

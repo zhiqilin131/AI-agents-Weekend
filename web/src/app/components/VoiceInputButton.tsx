@@ -1,6 +1,6 @@
 import { Mic, Square, Upload } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
 
 type SpeechRecCtor = new () => {
   lang: string;
@@ -90,7 +90,7 @@ export function VoiceInputButton({ onTranscript, disabled, compact }: VoiceInput
     const fd = new FormData();
     fd.append('file', file, file.name);
     try {
-      const res = await fetch(apiUrl('/api/transcribe'), { method: 'POST', body: fd });
+      const res = await apiFetch('/api/transcribe', { method: 'POST', body: fd });
       if (!res.ok) {
         const t = await res.text();
         throw new Error(t || res.statusText);

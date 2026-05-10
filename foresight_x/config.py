@@ -57,6 +57,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("supabase_service_role_key", "SUPABASE_SERVICE_ROLE_KEY"),
     )
     supabase_anon_key: str = Field(default="", validation_alias=AliasChoices("supabase_anon_key", "SUPABASE_ANON_KEY"))
+    #: When True, API routes under ``/api`` require a valid ``Authorization: Bearer`` Supabase JWT (except health/docs).
+    require_auth: bool = Field(default=False, validation_alias=AliasChoices("require_auth", "REQUIRE_AUTH"))
     redis_url: str = Field(default="", validation_alias=AliasChoices("redis_url", "REDIS_URL"))
     allowed_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",

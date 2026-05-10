@@ -14,7 +14,8 @@ import { DiaryTrackViewport, diarySlotAnchorForDate } from '../features/diary/Di
 import { DiarySlimeWalker } from '../features/diary/DiarySlimeWalker';
 import type { DiaryEntryDto, DiaryJumpPhase, DiaryMonthDay } from '../features/diary/types';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../hooks/useSlimeProfile';
-import { apiFetchErrorMessage, apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
+import { apiFetchErrorMessage } from '../utils/apiOrigin';
 
 function usePrefersReducedMotion(): boolean {
   const [rm, setRm] = useState(false);
@@ -72,8 +73,8 @@ export default function DiaryPage() {
       fetchedMonthsRef.current.add(monthYm);
       setListErr(null);
       try {
-        const r = await fetch(
-          apiUrl(`/api/diary/entries?month=${encodeURIComponent(monthYm)}&timezone=${encodeURIComponent(tz)}`),
+        const r = await apiFetch(
+          `/api/diary/entries?month=${encodeURIComponent(monthYm)}&timezone=${encodeURIComponent(tz)}`,
         );
         if (!r.ok) throw new Error(await r.text());
         const j = (await r.json()) as { days: DiaryMonthDay[] };
@@ -126,7 +127,7 @@ export default function DiaryPage() {
     setLoadingEntry(true);
     setEntryErr(null);
     try {
-      const r = await fetch(apiUrl(`/api/diary/entries/${encodeURIComponent(date)}`));
+      const r = await apiFetch(`/api/diary/entries/${encodeURIComponent(date)}`);
       if (r.status === 404) {
         setEntry(null);
         return;
@@ -195,7 +196,7 @@ export default function DiaryPage() {
     setRegenBusy(true);
     setEntryErr(null);
     try {
-      const r = await fetch(apiUrl('/api/diary/regenerate-cleaner'), {
+      const r = await apiFetch('/api/diary/regenerate-cleaner', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -234,7 +235,7 @@ export default function DiaryPage() {
     setGenBusy(true);
     setEntryErr(null);
     try {
-      const r = await fetch(apiUrl('/api/diary/generate'), {
+      const r = await apiFetch('/api/diary/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: selectedDate, timezone: tz, force: true }),

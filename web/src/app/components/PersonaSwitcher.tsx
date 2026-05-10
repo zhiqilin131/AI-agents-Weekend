@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { apiFetchErrorMessage, apiUrl } from '../../utils/apiOrigin';
+import { useAuth } from '../../auth/AuthContext';
+import { apiFetchErrorMessage } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
 import { refetchSlimeProfileGlobal } from '../../hooks/useSlimeProfile';
 
 type PersonaItem = {
@@ -37,6 +39,7 @@ function defaultPos(collapsed: boolean) {
 }
 
 export function PersonaSwitcher({ compact: _compact = false }: { compact?: boolean }) {
+  const { session } = useAuth();
   const [items, setItems] = useState<PersonaItem[]>([]);
   const [current, setCurrent] = useState('');
   const [newId, setNewId] = useState('');
@@ -71,7 +74,7 @@ export function PersonaSwitcher({ compact: _compact = false }: { compact?: boole
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl('/api/personas'));
+      const res = await apiFetch('/api/personas');
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as PersonaListResp;
       setItems(Array.isArray(data.users) ? data.users : []);
@@ -82,8 +85,9 @@ export function PersonaSwitcher({ compact: _compact = false }: { compact?: boole
   }, []);
 
   useEffect(() => {
+    if (session) return;
     void load();
-  }, [load]);
+  }, [load, session]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -145,7 +149,7 @@ export function PersonaSwitcher({ compact: _compact = false }: { compact?: boole
     setErr(null);
     setMsg(null);
     try {
-      const res = await fetch(apiUrl('/api/personas/switch'), {
+      const res = await apiFetch('/api/personas/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: uid }),
@@ -169,7 +173,7 @@ export function PersonaSwitcher({ compact: _compact = false }: { compact?: boole
     setErr(null);
     setMsg(null);
     try {
-      const res = await fetch(apiUrl('/api/personas'), {
+      const res = await apiFetch('/api/personas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: uid }),
@@ -193,7 +197,7 @@ export function PersonaSwitcher({ compact: _compact = false }: { compact?: boole
     setErr(null);
     setMsg(null);
     try {
-      const res = await fetch(apiUrl(`/api/personas/${encodeURIComponent(current)}`), { method: 'DELETE' });
+      const res = await apiFetch(`/api/personas/${encodeURIComponent(current)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
       await load();
       void refetchSlimeProfileGlobal();
@@ -207,6 +211,8 @@ export function PersonaSwitcher({ compact: _compact = false }: { compact?: boole
 
   const left = pos?.x ?? defaultPos(collapsed).x;
   const top = pos?.y ?? defaultPos(collapsed).y;
+
+  if (session) return null;
 
   return (
     <div

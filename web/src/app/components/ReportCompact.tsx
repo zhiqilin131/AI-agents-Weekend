@@ -23,7 +23,7 @@ import { SimulatedFuturesPanel } from './SimulatedFuturesPanel';
 import { TradeoffsRadarChart } from './TradeoffsRadarChart';
 import { TypewriterText } from './TypewriterText';
 import { cn } from './ui/utils';
-import { apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
 import { fetchCalendarDraftFromReport } from '../../utils/calendarAgentApi';
 import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from '../../utils/executionStorageKeys';
 import type { TraceUserStateLite } from '../../utils/evidenceDetailFromTrace';
@@ -167,7 +167,7 @@ export function ReportCompact({
     if (isStreaming) return;
     let cancelled = false;
     setResourceDropsLoading(true);
-    void fetch(apiUrl(`/api/traces/${encodeURIComponent(decisionId)}/resource-drops`))
+    void apiFetch(`/api/traces/${encodeURIComponent(decisionId)}/resource-drops`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('resource_drops'))))
       .then((data: { resource_drops?: ResourceDrop[] }) => {
         if (!cancelled) setResourceDrops(Array.isArray(data.resource_drops) ? data.resource_drops : []);
@@ -199,7 +199,7 @@ export function ReportCompact({
     setCoachBusy(true);
     setCoachError(null);
     try {
-      const res = await fetch(apiUrl('/api/option-chat'), {
+      const res = await apiFetch('/api/option-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

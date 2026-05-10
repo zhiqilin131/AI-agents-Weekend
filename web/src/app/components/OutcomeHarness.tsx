@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
 
 interface OutcomeHarnessProps {
   decisionId: string;
@@ -27,7 +27,7 @@ export function OutcomeHarness({ decisionId, onClose, onSaved }: OutcomeHarnessP
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const res = await fetch(apiUrl('/api/record-outcome'), {
+      const res = await apiFetch('/api/record-outcome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

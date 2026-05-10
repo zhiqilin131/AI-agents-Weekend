@@ -1,7 +1,7 @@
 import { Loader2, Mic, Square, Upload } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
-import { apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
 import { unlockSlimeAudioContext } from '../../utils/slimeAudioContext';
 import { cn } from './ui/utils';
 
@@ -19,7 +19,7 @@ async function transcribeBlob(blob: Blob): Promise<string> {
   const fd = new FormData();
   const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('wav') ? 'wav' : 'webm';
   fd.append('file', blob, `voice.${ext}`);
-  const res = await fetch(apiUrl('/api/transcribe'), { method: 'POST', body: fd });
+  const res = await apiFetch('/api/transcribe', { method: 'POST', body: fd });
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || res.statusText);
@@ -54,7 +54,7 @@ export function VoiceRecorderTranscribeButton({
       try {
         const fd = new FormData();
         fd.append('file', file, file.name);
-        const res = await fetch(apiUrl('/api/transcribe'), { method: 'POST', body: fd });
+        const res = await apiFetch('/api/transcribe', { method: 'POST', body: fd });
         if (!res.ok) {
           const t = await res.text();
           throw new Error(t || res.statusText);

@@ -8,7 +8,7 @@ import { ReportPanel } from '../app/components/ReportPanel';
 import { OutcomeHarness } from '../app/components/OutcomeHarness';
 import { mapTraceToReport } from '../utils/mapTrace';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
-import { apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
 import { parseSseBlocks } from '../utils/parseSse';
 import type { AppState, DecisionReport } from '../app/model';
 import { HomeRoamingSlime } from '../app/components/home/HomeRoamingSlime';
@@ -108,7 +108,7 @@ export default function HomePage() {
     setLiveTrace(null);
     void (async () => {
       try {
-        const res = await fetch(apiUrl(`/api/traces/${encodeURIComponent(routeTraceId)}`));
+        const res = await apiFetch(`/api/traces/${encodeURIComponent(routeTraceId)}`);
         if (!res.ok) throw new Error(await res.text());
         const trace = (await res.json()) as Record<string, unknown>;
         if (cancelled) return;
@@ -143,7 +143,7 @@ export default function HomePage() {
 
   const loadTier3Profile = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl('/api/profile/tier3'));
+      const res = await apiFetch('/api/profile/tier3');
       if (!res.ok) return;
       const data = (await res.json()) as Tier3ProfileView;
       if (data && typeof data === 'object') setTier3Profile(data);
@@ -183,7 +183,7 @@ export default function HomePage() {
           body.preserve_raw_input = true;
         }
 
-        const res = await fetch(apiUrl('/api/run/stream'), {
+        const res = await apiFetch('/api/run/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -283,7 +283,7 @@ export default function HomePage() {
     setClarifyGateHint(null);
     setClarifyChecking(true);
     try {
-      const cr = await fetch(apiUrl('/api/clarify'), {
+      const cr = await apiFetch('/api/clarify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ raw_input: decisionInput }),
@@ -363,7 +363,7 @@ export default function HomePage() {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(apiUrl(`/api/commits/${encodeURIComponent(decisionId)}`));
+        const res = await apiFetch(`/api/commits/${encodeURIComponent(decisionId)}`);
         if (cancelled) return;
         if (res.status === 404) {
           setCommitInfo(null);
@@ -387,13 +387,13 @@ export default function HomePage() {
       setCommitBusy(true);
       setCommitError(null);
       try {
-        const res = await fetch(apiUrl('/api/commit-decision'), {
+        const res = await apiFetch('/api/commit-decision', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ decision_id: decisionId, chosen_option_id: chosenOptionId }),
         });
         if (!res.ok) throw new Error(await res.text());
-        const gr = await fetch(apiUrl(`/api/commits/${encodeURIComponent(decisionId)}`));
+        const gr = await apiFetch(`/api/commits/${encodeURIComponent(decisionId)}`);
         if (gr.ok) setCommitInfo((await gr.json()) as CommitInfo);
       } catch (e) {
         setCommitError(e instanceof Error ? e.message : 'Commit failed');

@@ -10,7 +10,8 @@ import { primeSpeechSynthesisFromGesture, useSpeechSynthesis } from '../../app/h
 import { playMp3BlobWithWebAudio, unlockSlimeAudioContext } from '../../utils/slimeAudioContext';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import type { SlimeProfile } from '../../app/model';
-import { apiFetchErrorMessage, apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
+import { apiFetchErrorMessage } from '../../utils/apiOrigin';
 import { confirmCalendarDraft } from '../../utils/calendarAgentApi';
 import { EXECUTION_EVENTS_STORAGE_KEY, SLIME_VOICE_CALENDAR_RESOLVED_KEY } from '../../utils/executionStorageKeys';
 import {
@@ -320,7 +321,7 @@ export function SlimeVoiceAgent({
 
       void (async () => {
         try {
-          const r = await fetch(apiUrl('/api/slime/tts'), {
+          const r = await apiFetch('/api/slime/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text }),
@@ -434,7 +435,7 @@ export function SlimeVoiceAgent({
         return;
       }
       if (!pendingCalendar) return;
-      const res = await fetch(apiUrl('/api/slime/confirm-calendar-block'), {
+      const res = await apiFetch('/api/slime/confirm-calendar-block', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -498,7 +499,7 @@ export function SlimeVoiceAgent({
       }
       setVoiceState('thinking');
       try {
-        const res = await fetch(apiUrl('/api/slime/voice-command'), { method: 'POST', body: fd });
+        const res = await apiFetch('/api/slime/voice-command', { method: 'POST', body: fd });
         if (!res.ok) {
           const t = await res.text();
           throw new Error(httpErrorBodyToMessage(t, res.statusText));

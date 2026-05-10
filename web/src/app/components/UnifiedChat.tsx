@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
 import { ChatMessageList } from './ChatMessageList';
 import { ChatInput } from './ChatInput';
 import { DecisionReportPanel } from './DecisionReportPanel';
@@ -38,7 +38,7 @@ export function UnifiedChat() {
     if (payload.user_action === 'generate_decision_report') {
       primeSpeechSynthesisFromGesture();
     }
-    const res = await fetch(apiUrl('/api/chat/unified'), {
+    const res = await apiFetch('/api/chat/unified', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ thread_id: threadId, mode, ...payload }),

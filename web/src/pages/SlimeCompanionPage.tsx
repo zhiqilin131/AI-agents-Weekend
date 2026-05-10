@@ -15,7 +15,7 @@ import { MemoryEvidenceParticles } from '../app/components/profile/MemoryEvidenc
 import type { MemoryEvidenceItem } from '../app/components/profile/memoryEvidenceTypes';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../hooks/useSlimeProfile';
 import { useDecisionReportStream } from '../hooks/useDecisionReportStream';
-import { apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
 import { primeSpeechSynthesisFromGesture } from '../app/hooks/useSpeechSynthesis';
 
 const BUDDY_THREAD_STORAGE_KEY = 'slimeBuddyShadowThreadId';
@@ -296,7 +296,7 @@ export default function SlimeCompanionPage() {
           const tid = buddyThreadId;
           if (tid) {
             try {
-              await fetch(apiUrl(`/api/shadow-chat/threads/${encodeURIComponent(tid)}/report-context`), {
+              await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(tid)}/report-context`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ decision_id: decisionId, mode: 'revision' }),

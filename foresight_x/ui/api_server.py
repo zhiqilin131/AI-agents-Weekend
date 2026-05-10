@@ -21,7 +21,7 @@ from concurrent.futures import TimeoutError as FuturesTimeout
 import time
 
 import chromadb
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -110,7 +110,13 @@ from foresight_x.chat import (
     save_thread,
 )
 from foresight_x.chat.thread_store import append_clarification_event
-from foresight_x.auth import get_current_user
+from foresight_x.auth import (
+    decode_supabase_access_token,
+    get_current_user,
+    get_supabase_user_for_request,
+    supabase_user_ctx_reset,
+    supabase_user_ctx_set,
+)
 from foresight_x.db.supabase_client import get_supabase_for_user
 from foresight_x.decision_algorithms import (
     build_agility_preview,
@@ -257,10 +263,24 @@ def _save_registry(reg: PersonaRegistry, settings=None) -> Path:
     return p
 
 
+def _auth_exempt_path(path: str) -> bool:
+    """Paths that skip REQUIRE_AUTH enforcement (CORS preflight handled earlier)."""
+    p = path.rstrip("/") or "/"
+    if p in ("/", "/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"):
+        return True
+    if p == "/api/health":
+        return True
+    return False
+
+
 def _active_user_id(settings=None) -> str:
-    reg = _ensure_registry(settings)
+    s = settings or load_settings()
+    ctx_user = get_supabase_user_for_request()
+    if ctx_user and (ctx_user.get("id") or "").strip():
+        return str(ctx_user["id"]).strip()
+    reg = _ensure_registry(s)
     uid = (reg.current_user_id or "").strip()
-    return uid or _default_user_id(settings)
+    return uid or _default_user_id(s)
 
 
 def _settings_for_active_user():
@@ -361,6 +381,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def supabase_jwt_context_middleware(request: Request, call_next):
+    """Attach validated Supabase user to context; optionally enforce REQUIRE_AUTH on /api routes."""
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    path = request.url.path
+    settings = load_settings()
+    auth_header = request.headers.get("authorization") or ""
+    token: str | None = None
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip() or None
+
+    user: dict[str, str | None] | None = None
+    if token:
+        try:
+            user = decode_supabase_access_token(token)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+
+    if settings.require_auth and path.startswith("/api") and not _auth_exempt_path(path):
+        if user is None:
+            return JSONResponse(status_code=401, content={"detail": "Missing bearer token"})
+
+    ctx_tok = supabase_user_ctx_set(user)
+    try:
+        return await call_next(request)
+    finally:
+        supabase_user_ctx_reset(ctx_tok)
 
 
 class RunRequest(BaseModel):
@@ -581,6 +633,10 @@ def add_external_event(body: ExternalEventRequest) -> dict:
 
 @app.get("/api/personas")
 def list_personas() -> dict:
+    ctx = get_supabase_user_for_request()
+    if ctx and (ctx.get("id") or "").strip():
+        uid = str(ctx["id"]).strip()
+        return {"current_user_id": uid, "users": [{"user_id": uid, "created_at": ""}]}
     with _PERSONA_LOCK:
         reg = _ensure_registry()
     return reg.model_dump(mode="json")
@@ -588,6 +644,8 @@ def list_personas() -> dict:
 
 @app.post("/api/personas")
 def create_persona(body: PersonaCreateRequest) -> dict:
+    if get_supabase_user_for_request():
+        raise HTTPException(status_code=403, detail="persona_management_disabled_when_authenticated")
     uid = _validate_user_id_or_400(body.user_id)
     with _PERSONA_LOCK:
         reg = _ensure_registry()
@@ -606,6 +664,8 @@ def create_persona(body: PersonaCreateRequest) -> dict:
 
 @app.post("/api/personas/switch")
 def switch_persona(body: PersonaSwitchRequest) -> dict:
+    if get_supabase_user_for_request():
+        raise HTTPException(status_code=403, detail="persona_management_disabled_when_authenticated")
     uid = _validate_user_id_or_400(body.user_id)
     with _PERSONA_LOCK:
         reg = _ensure_registry()
@@ -618,6 +678,8 @@ def switch_persona(body: PersonaSwitchRequest) -> dict:
 
 @app.delete("/api/personas/{user_id}")
 def delete_persona(user_id: str) -> dict:
+    if get_supabase_user_for_request():
+        raise HTTPException(status_code=403, detail="persona_management_disabled_when_authenticated")
     uid = _validate_user_id_or_400(user_id)
     with _PERSONA_LOCK:
         reg = _ensure_registry()

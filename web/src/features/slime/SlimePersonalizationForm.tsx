@@ -6,7 +6,7 @@ import { Label } from '../../app/components/ui/label';
 import { Textarea } from '../../app/components/ui/textarea';
 import { cn } from '../../app/components/ui/utils';
 import type { SlimeCompanionRelationship, SlimeProfile } from '../../app/model';
-import { apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
 import {
   ACCESSORY_OPTIONS,
   COLOR_OPTIONS,
@@ -66,7 +66,7 @@ export function SlimePersonalizationForm({
     setPreviewBusy(true);
     setPreviewLine(null);
     try {
-      const r = await fetch(apiUrl('/api/profile/slime-persona/preview'), {
+      const r = await apiFetch('/api/profile/slime-persona/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiUrl } from '../../utils/apiOrigin';
+import { apiFetch } from '../../utils/apiFetch';
 import { OutcomeSummaryVisual } from './OutcomeSummaryVisual';
 
 type OutcomePayload = {
@@ -28,7 +28,7 @@ export function SavedOutcomeModal({ decisionId, onClose }: SavedOutcomeModalProp
     setOutcome(null);
     void (async () => {
       try {
-        const res = await fetch(apiUrl(`/api/outcomes/${encodeURIComponent(decisionId)}`));
+        const res = await apiFetch(`/api/outcomes/${encodeURIComponent(decisionId)}`);
         if (cancelled) return;
         if (res.status === 404) {
           setMissing(true);

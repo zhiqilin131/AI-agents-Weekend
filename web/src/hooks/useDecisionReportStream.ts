@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
 import { parseSseBlocks } from '../utils/parseSse';
 
@@ -80,8 +80,8 @@ export function useDecisionReportStream() {
     };
 
     try {
-      const res = await fetch(
-        apiUrl(`/api/shadow-chat/threads/${encodeURIComponent(params.threadId)}/decision-report/stream`),
+      const res = await apiFetch(
+        `/api/shadow-chat/threads/${encodeURIComponent(params.threadId)}/decision-report/stream`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -152,7 +152,7 @@ export function useDecisionReportStream() {
     setPartialTrace(null);
     setIsStreaming(false);
     try {
-      const res = await fetch(apiUrl(`/api/traces/${encodeURIComponent(decisionId)}`));
+      const res = await apiFetch(`/api/traces/${encodeURIComponent(decisionId)}`);
       if (!res.ok) {
         const t = await res.text();
         throw new Error(t || res.statusText);

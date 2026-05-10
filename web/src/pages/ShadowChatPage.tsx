@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
 import { VoiceRecorderTranscribeButton } from '../app/components/VoiceRecorderTranscribeButton';
-import { apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
 
 type Role = 'user' | 'assistant';
 
@@ -51,7 +51,7 @@ export default function ShadowChatPage() {
     setSending(true);
     setReadingMemory(true);
     try {
-      const res = await fetch(apiUrl('/api/shadow/chat'), {
+      const res = await apiFetch('/api/shadow/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

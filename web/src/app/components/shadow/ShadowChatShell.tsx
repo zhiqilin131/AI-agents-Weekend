@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router';
 import { MainNavButtons } from '../MainNavButtons';
 import type { ClarifyQuestion } from '../ClarifyDialog';
 import { ClarificationCard, type ClarificationGateMeta } from './ClarificationCard';
-import { apiUrl } from '../../../utils/apiOrigin';
+import { apiFetch } from '../../../utils/apiFetch';
 import { parseSseBlocks } from '../../../utils/parseSse';
 import { refetchSlimeProfileGlobal } from '../../../hooks/useSlimeProfile';
 import { useDecisionReportStream } from '../../../hooks/useDecisionReportStream';
@@ -82,14 +82,14 @@ export function ShadowChatShell({
     });
 
   const refreshThreads = async () => {
-    const res = await fetch(apiUrl('/api/shadow-chat/threads'));
+    const res = await apiFetch('/api/shadow-chat/threads');
     if (!res.ok) return;
     const data = (await res.json()) as { threads: ShadowThread[] };
     setThreads(data.threads || []);
   };
 
   const loadThread = async (id: string, opts?: { preservePendingSuggestion?: boolean }) => {
-    const res = await fetch(apiUrl(`/api/shadow-chat/threads/${encodeURIComponent(id)}`));
+    const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`);
     if (!res.ok) return;
     const data = (await res.json()) as { thread: ShadowThread };
     setActiveThreadId(data.thread.thread_id);
@@ -107,7 +107,7 @@ export function ShadowChatShell({
   };
 
   const newChat = async () => {
-    const res = await fetch(apiUrl('/api/shadow-chat/threads'), {
+    const res = await apiFetch('/api/shadow-chat/threads', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -171,7 +171,7 @@ export function ShadowChatShell({
 
   const pinRevisionContext = useCallback(async (decisionId: string) => {
     if (!activeThreadId) return;
-    await fetch(apiUrl(`/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/report-context`), {
+    await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/report-context`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decision_id: decisionId, mode: 'revision' }),
@@ -247,7 +247,7 @@ export function ShadowChatShell({
 
       let res: Response;
       try {
-        res = await fetch(apiUrl(`/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/stream`), {
+        res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -459,7 +459,7 @@ export function ShadowChatShell({
           body.thread_id = activeThreadId;
           body.recent_messages = messages.slice(-8).map((m) => ({ role: m.role, content: m.content }));
         }
-        const cr = await fetch(apiUrl('/api/clarify'), {
+        const cr = await apiFetch('/api/clarify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -551,7 +551,7 @@ export function ShadowChatShell({
               onNewChat={() => void newChat()}
               onSelectThread={(id) => void loadThread(id)}
               onDeleteThread={async (id) => {
-                await fetch(apiUrl(`/api/shadow-chat/threads/${encodeURIComponent(id)}`), { method: 'DELETE' });
+                await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`, { method: 'DELETE' });
                 setActiveThreadId(null);
                 await refreshThreads();
               }}
@@ -658,10 +658,8 @@ export function ShadowChatShell({
                       setPendingClarifyAction(null);
                       if (activeThreadId && dim) {
                         try {
-                          await fetch(
-                            apiUrl(
-                              `/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/clarification-skip`,
-                            ),
+                          await apiFetch(
+                            `/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/clarification-skip`,
                             {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },

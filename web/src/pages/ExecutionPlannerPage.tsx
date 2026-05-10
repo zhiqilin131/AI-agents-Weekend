@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { CalendarDays, ChevronLeft, ChevronRight, Download, Home, MessageSquare, RotateCcw, Sparkles } from 'lucide-react';
 import { addDays, addMinutes, differenceInMinutes, format, isSameDay, parseISO, setHours, setMinutes, startOfDay, startOfWeek } from 'date-fns';
-import { apiUrl } from '../utils/apiOrigin';
+import { apiFetch } from '../utils/apiFetch';
 import { MainNavButtons } from '../app/components/MainNavButtons';
 import {
   AgilityPreview as AgilityPreviewSidebar,
@@ -129,7 +129,7 @@ export default function ExecutionPlannerPage() {
     setError(null);
     void (async () => {
       try {
-        const res = await fetch(apiUrl(`/api/traces/${encodeURIComponent(decisionId)}`));
+        const res = await apiFetch(`/api/traces/${encodeURIComponent(decisionId)}`);
         if (!res.ok) throw new Error(await res.text());
         const t = (await res.json()) as TraceShape;
         if (cancelled) return;
@@ -145,7 +145,7 @@ export default function ExecutionPlannerPage() {
         });
         try {
           if (chosenId) {
-            const pRes = await fetch(apiUrl('/api/decision/agility-preview'), {
+            const pRes = await apiFetch('/api/decision/agility-preview', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ trace_id: t.decision_id, selected_option_id: chosenId }),
@@ -290,7 +290,7 @@ export default function ExecutionPlannerPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(apiUrl('/api/calendar/events'));
+        const res = await apiFetch('/api/calendar/events');
         if (!res.ok || cancelled) return;
         const data = (await res.json()) as { events?: Array<Record<string, unknown>> };
         const list = data.events;
@@ -345,7 +345,7 @@ export default function ExecutionPlannerPage() {
         locked: Boolean(x.locked),
         conflict: false,
       }));
-      void fetch(apiUrl('/api/calendar/events'), {
+      void apiFetch('/api/calendar/events', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ events: payload }),
@@ -558,7 +558,7 @@ export default function ExecutionPlannerPage() {
     const visibleWeekStart = setMinutes(setHours(startOfDay(weekStart), SCHEDULER_DAY_START_HOUR), 0);
     void (async () => {
       try {
-        const res = await fetch(apiUrl('/api/decision/schedule'), {
+        const res = await apiFetch('/api/decision/schedule', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
