@@ -3,6 +3,9 @@ import { HomeRoamingSlime } from '../home/HomeRoamingSlime';
 
 const BRAND_SUBTITLE = 'Evidence-grounded decision agent';
 
+/** Shown on auth gate pages (login / register). */
+const APP_VERSION_DISPLAY = 'V1.0.0';
+
 export function AuthShell({
   children,
   showRoamingSlime = true,
@@ -23,6 +26,14 @@ export function AuthShell({
       </div>
 
       {showRoamingSlime ? <HomeRoamingSlime variant="auth" /> : null}
+
+      <p
+        className="pointer-events-none fixed bottom-3 left-3 z-[50] text-[0.95rem] leading-none text-violet-950/40 sm:bottom-4 sm:left-4 sm:text-[1.05rem]"
+        style={{ fontFamily: "'Great Vibes', cursive" }}
+        aria-label={`Version ${APP_VERSION_DISPLAY}`}
+      >
+        {APP_VERSION_DISPLAY}
+      </p>
     </div>
   );
 }
