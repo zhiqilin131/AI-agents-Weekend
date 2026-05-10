@@ -248,7 +248,7 @@ export default function ProfilePage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-3 py-4 md:px-6 md:py-6">
+    <div className="relative min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-3 py-4 pb-24 md:px-6 md:py-6 md:pb-28">
       <div className="mx-auto max-w-[1300px]">
         <PageBackButton />
         <div className="mt-1 mb-3 md:flex md:items-end md:justify-between md:gap-4">
@@ -277,13 +277,6 @@ export default function ProfilePage() {
                   <span className="text-gray-600">Signed in as</span> {session.user.email}
                 </p>
               ) : null}
-              <button
-                type="button"
-                onClick={() => void signOut().then(() => navigate('/login', { replace: true }))}
-                className="rounded-full border border-gray-300 bg-white/90 px-4 py-2 text-xs font-semibold text-gray-800 shadow-sm transition hover:border-violet-300 hover:bg-violet-50 md:text-sm"
-              >
-                退出登录 · Sign out
-              </button>
             </div>
           ) : null}
         </div>
@@ -616,6 +609,22 @@ export default function ProfilePage() {
           </main>
         </div>
       </div>
+
+      {isSupabaseEnvConfigured() && session ? (
+        <button
+          type="button"
+          onClick={() => void signOut().then(() => navigate('/login', { replace: true }))}
+          className={cn(
+            'fixed bottom-5 right-4 z-[60] rounded-full border border-rose-300/55 bg-rose-500/[0.16] px-5 py-2.5',
+            'text-sm font-semibold text-rose-950 shadow-[0_10px_36px_rgba(225,29,72,0.18)] backdrop-blur-md',
+            'transition-colors hover:border-rose-400/65 hover:bg-rose-500/[0.26]',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/45 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
+            'sm:bottom-6 sm:right-6',
+          )}
+        >
+          Sign out
+        </button>
+      ) : null}
     </div>
   );
 }
