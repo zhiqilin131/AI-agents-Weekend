@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 import asyncio
 import tempfile
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import io
 import logging
@@ -37,6 +37,7 @@ from foresight_x.resources.resource_drops import (
 )
 from foresight_x.harness.decision_commit import load_commit, save_commit
 from foresight_x.harness.evaluation_log import append_evaluation_log, build_evaluation_record
+from foresight_x.harness.decision_followup import mark_followups_completed_for_decision
 from foresight_x.harness.trace_index import delete_trace, list_traces
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.orchestration.pipeline import PipelineContext, iter_pipeline_events, run_pipeline
@@ -65,6 +66,7 @@ from foresight_x.diary.store import load_entry, load_entry_by_id, list_month_sum
 from foresight_x.schemas import (
     DecisionCommit,
     DecisionOutcome,
+    DecisionTrace,
     MemoryFactCategory,
     ProfileLine,
     ProfileMemoryFact,
@@ -159,6 +161,26 @@ _log = logging.getLogger(__name__)
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _try_create_decision_followup(
+    settings,
+    trace: Any,
+    thread_id: str | None = None,
+) -> None:
+    try:
+        from foresight_x.harness.decision_followup import create_decision_followup_if_needed
+
+        tr = DecisionTrace.model_validate(trace) if isinstance(trace, dict) else trace
+        create_decision_followup_if_needed(
+            settings.foresight_user_id,
+            tr.decision_id,
+            tr,
+            thread_id=thread_id,
+            settings=settings,
+        )
+    except Exception:
+        _log.exception("create_decision_followup_if_needed failed")
 
 
 def _trace_artifact_summary(trace: dict | None) -> str:
@@ -369,6 +391,21 @@ def _resolved_slime_profile(profile: UserProfile) -> SlimeProfile:
     return base.model_copy(update={"persona": merged_persona})
 
 
+async def _followup_maintenance_loop(interval_sec: int) -> None:
+    from foresight_x.harness.decision_followup import run_followup_maintenance_for_data_dir
+
+    while True:
+        await asyncio.sleep(interval_sec)
+        try:
+            meta = run_followup_maintenance_for_data_dir(load_settings())
+            if meta.get("followup_notify_files_updated"):
+                _log.info("followup_maintenance: %s", meta)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("followup_maintenance_failed")
+
+
 @asynccontextmanager
 async def _app_lifespan(_: FastAPI):
     if os.getenv("ASR_WARMUP_ON_START", "").strip().lower() in ("1", "true", "yes"):
@@ -378,7 +415,16 @@ async def _app_lifespan(_: FastAPI):
             warmup_asr_model()
         except Exception as e:
             _log.warning("ASR warmup skipped: %s", e)
+    s0 = load_settings()
+    interval = int(getattr(s0, "followup_maintenance_interval_sec", 0) or 0)
+    task: asyncio.Task | None = None
+    if interval > 0:
+        task = asyncio.create_task(_followup_maintenance_loop(interval))
     yield
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(title="Foresight-X API", version="0.1.0", lifespan=_app_lifespan)
@@ -515,6 +561,7 @@ def root() -> dict[str, object]:
             "/api/run",
             "/api/run/stream",
             "/api/profile",
+            "/api/profile/timezone",
             "/api/profile/slime",
             "/api/slime/voice-command",
             "/api/slime/tts",
@@ -527,6 +574,14 @@ def root() -> dict[str, object]:
             "/api/traces/{decision_id}",
             "/api/traces/{decision_id}/resource-drops",
             "/api/record-outcome",
+            "/api/followups/due",
+            "/api/followups/{followup_id}/shown",
+            "/api/followups/{followup_id}/dismiss",
+            "/api/followups/{followup_id}/snooze",
+            "/api/followups/{followup_id}/still-pending",
+            "/api/followups/{followup_id}/outcome",
+            "/api/decisions/{decision_id}/followups",
+            "/api/decisions/{decision_id}/reflective-outcome",
             "/api/commit-decision",
             "/api/commits/{decision_id}",
             "/api/outcomes/{decision_id}",
@@ -739,6 +794,7 @@ def run_decision(body: RunRequest) -> RunResponse:
         preserve_raw_input=body.preserve_raw_input,
         clarification_profile_merge_done_externally=merge_done,
     )
+    _try_create_decision_followup(settings, trace, None)
     trace_path = settings.traces_dir / f"{trace.decision_id}.json"
     return RunResponse(
         trace=trace.model_dump(mode="json"),
@@ -782,6 +838,7 @@ def run_decision_stream(body: RunRequest) -> StreamingResponse:
                     tid = ev["trace"].get("decision_id")
                     if isinstance(tid, str) and tid:
                         ev = {**ev, "trace_path": str(settings.traces_dir / f"{tid}.json")}
+                    _try_create_decision_followup(settings, ev["trace"], None)
                 yield _sse_chunk(ev)
         except Exception as e:
             # Without this, uvicorn closes the socket mid-chunk → browser ERR_INCOMPLETE_CHUNKED_ENCODING / "network error".
@@ -835,6 +892,7 @@ def put_profile(body: UserProfile) -> dict:
     merged_lines = user_lines + clar_lines + system_lines
     u = [x.text for x in merged_lines if x.origin == "user"]
     i = [x.text for x in system_lines]
+    merged_tz = (body.timezone or "").strip() or (existing.timezone or "UTC").strip() or "UTC"
     merged = existing.model_copy(
         update={
             "priority_lines": merged_lines,
@@ -844,10 +902,24 @@ def put_profile(body: UserProfile) -> dict:
             "about_me": body.about_me,
             "constraints": list(body.constraints),
             "values": list(body.values),
+            "timezone": merged_tz[:80],
         }
     )
     path = save_user_profile(merged, settings=settings)
     return {"ok": True, "path": str(path)}
+
+
+class ProfileTimezonePatch(BaseModel):
+    timezone: str = Field(min_length=1, max_length=80)
+
+
+@app.patch("/api/profile/timezone")
+def patch_profile_timezone(body: ProfileTimezonePatch) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    existing = load_user_profile(settings)
+    tz = body.timezone.strip()[:80] or "UTC"
+    save_user_profile(existing.model_copy(update={"timezone": tz}), settings=settings)
+    return {"ok": True, "timezone": tz}
 
 
 @app.get("/api/profile/slime")
@@ -1112,6 +1184,8 @@ def shadow_clarification_skip(thread_id: str, body: ClarifySkipRequest) -> dict:
 
 @app.get("/api/traces")
 def get_traces() -> list[dict]:
+    from foresight_x.harness.decision_followup import history_followup_augment
+
     settings = _settings_for_active_user()
     items = list_traces(settings=settings)
     # Keep newly created personas clean: hide legacy traces with unknown owner.
@@ -1124,9 +1198,16 @@ def get_traces() -> list[dict]:
                 continue
             owner = _trace_user_id(tr)
             if owner == settings.foresight_user_id:
-                out.append(t.model_dump(mode="json"))
+                row = t.model_dump(mode="json")
+                row.update(history_followup_augment(settings.foresight_user_id, t.decision_id, settings=settings))
+                out.append(row)
         return out
-    return [t.model_dump(mode="json") for t in items]
+    out_demo: list[dict] = []
+    for t in items:
+        row = t.model_dump(mode="json")
+        row.update(history_followup_augment(settings.foresight_user_id, t.decision_id, settings=settings))
+        out_demo.append(row)
+    return out_demo
 
 
 @app.get("/api/outcomes/{decision_id}")
@@ -1145,6 +1226,246 @@ def get_outcome(decision_id: str) -> dict:
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="no_outcome") from None
     return o.model_dump(mode="json")
+
+
+class FollowupDismissBody(BaseModel):
+    reason: Literal["dismissed", "closed", "swiped"] = "dismissed"
+
+
+class FollowupSnoozeBody(BaseModel):
+    until: str | None = None
+    preset: Literal["tomorrow", "3_days", "next_week"] | None = "tomorrow"
+
+
+class FollowupOutcomeApiRequest(BaseModel):
+    chosen_option: str | None = None
+    outcome_status: Literal["went_well", "mixed", "did_not_work", "still_pending", "changed_mind"]
+    outcome_text: str | None = None
+    satisfaction: int | None = Field(default=None, ge=1, le=5)
+    save_lesson_to_memory: bool = False
+
+
+def _load_followup_owned(settings, followup_id: str):
+    from foresight_x.harness.decision_followup import load_all_followups
+
+    for f in load_all_followups(settings.foresight_user_id, settings=settings):
+        if f.id == followup_id:
+            return f
+    raise HTTPException(status_code=404, detail="followup_not_found")
+
+
+def _effective_followup_tz(settings, query_tz: str | None) -> str:
+    q = (query_tz or "").strip()
+    if q:
+        return q[:80]
+    p = load_user_profile(settings)
+    return ((p.timezone or "UTC").strip() or "UTC")[:80]
+
+
+def _maybe_append_outcome_lesson_fact(settings, body: FollowupOutcomeApiRequest) -> None:
+    if not body.save_lesson_to_memory:
+        return
+    lesson = (body.outcome_text or "").strip()
+    if not lesson:
+        return
+    lesson = lesson[:500]
+    fact = ProfileMemoryFact(
+        text=f"Lesson from decision outcome: {lesson}",
+        category=MemoryFactCategory.GOALS,
+        source="user",
+        evidence=lesson[:800],
+    )
+    profile = load_user_profile(settings)
+    updated_profile = append_profile_memory_records(profile, [fact])
+    save_user_profile(updated_profile, settings=settings)
+
+
+def _persist_reflective_decision_outcome(
+    settings,
+    decision_id: str,
+    body: FollowupOutcomeApiRequest,
+    *,
+    outcome_source: Literal["followup_nudge", "manual_history"],
+    followup_id: str | None,
+) -> dict[str, Any]:
+    from foresight_x.harness.decision_followup import (
+        apply_followup_outcome,
+        build_decision_outcome_from_reflective,
+        mark_followups_completed_for_decision,
+    )
+
+    try:
+        trace = load_decision_trace(decision_id, settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="trace_not_found") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail="trace_not_found")
+    outcome = build_decision_outcome_from_reflective(
+        decision_id,
+        body.chosen_option,
+        body.outcome_status,
+        body.outcome_text,
+        body.satisfaction,
+        source=outcome_source,
+    )
+    path = save_decision_outcome(outcome, settings=settings)
+    if followup_id:
+        apply_followup_outcome(
+            settings.foresight_user_id,
+            followup_id,
+            outcome_status=body.outcome_status,
+            save_lesson_to_memory=body.save_lesson_to_memory,
+            settings=settings,
+        )
+    else:
+        mark_followups_completed_for_decision(settings.foresight_user_id, decision_id, settings=settings)
+    apply_outcome_to_memory(decision_id, outcome, settings=settings)
+    _maybe_append_outcome_lesson_fact(settings, body)
+    eval_appended = False
+    try:
+        commit = load_commit(decision_id, settings=settings)
+        row = build_evaluation_record(trace, outcome, commit=commit)
+        append_evaluation_log(row, settings=settings)
+        eval_appended = True
+    except Exception as exc:
+        _log.warning("evaluation_log append failed for reflective outcome %s: %s", decision_id, exc)
+    return {
+        "ok": True,
+        "outcome_path": str(path),
+        "evaluation_log_appended": eval_appended,
+        "decision_id": decision_id,
+    }
+
+
+@app.get("/api/followups/due")
+def followups_due(timezone: str | None = None) -> dict[str, Any]:
+    from foresight_x.harness.decision_followup import (
+        build_toast_payload,
+        filter_for_toast_delivery,
+        get_due_followups,
+    )
+
+    settings = _settings_for_active_user()
+    tz = _effective_followup_tz(settings, timezone)
+    uid = settings.foresight_user_id
+    raw = get_due_followups(uid, tz_name=tz, settings=settings)
+    filtered = filter_for_toast_delivery(uid, raw, tz_name=tz, settings=settings)
+    profile = load_user_profile(settings)
+    slime_name = "Mochi"
+    if profile.slime_profile and (profile.slime_profile.name or "").strip():
+        slime_name = profile.slime_profile.name.strip()
+    payloads: list[dict[str, Any]] = []
+    for fu in filtered:
+        try:
+            tr = load_decision_trace(fu.decision_id, settings=settings)
+            ts = tr.timestamp
+        except FileNotFoundError:
+            ts = fu.created_at
+        payloads.append(
+            build_toast_payload(fu, trace_timestamp=ts, slime_name=slime_name, tz_name=tz).model_dump(mode="json")
+        )
+    return {"followups": payloads}
+
+
+@app.post("/api/followups/{followup_id}/shown")
+def followup_shown(followup_id: str, timezone: str | None = None) -> dict[str, bool]:
+    from foresight_x.harness.decision_followup import mark_followup_shown, record_followup_displayed
+
+    settings = _settings_for_active_user()
+    _load_followup_owned(settings, followup_id)
+    mark_followup_shown(settings.foresight_user_id, followup_id, settings=settings)
+    tz = _effective_followup_tz(settings, timezone)
+    record_followup_displayed(
+        settings.foresight_user_id,
+        followup_id,
+        tz,
+        settings=settings,
+    )
+    return {"ok": True}
+
+
+@app.post("/api/followups/{followup_id}/dismiss")
+def followup_dismiss(followup_id: str, body: FollowupDismissBody) -> dict[str, Any]:
+    from foresight_x.harness.decision_followup import dismiss_followup
+
+    settings = _settings_for_active_user()
+    _load_followup_owned(settings, followup_id)
+    fu = dismiss_followup(settings.foresight_user_id, followup_id, reason=body.reason, settings=settings)
+    if fu is None:
+        raise HTTPException(status_code=404, detail="followup_not_found")
+    return {"ok": True, "followup": fu.model_dump(mode="json")}
+
+
+@app.post("/api/followups/{followup_id}/snooze")
+def followup_snooze(followup_id: str, body: FollowupSnoozeBody) -> dict[str, Any]:
+    from foresight_x.harness.decision_followup import snooze_followup
+
+    settings = _settings_for_active_user()
+    _load_followup_owned(settings, followup_id)
+    fu = snooze_followup(
+        settings.foresight_user_id,
+        followup_id,
+        until_iso=body.until,
+        preset=body.preset,
+        settings=settings,
+    )
+    if fu is None:
+        raise HTTPException(status_code=404, detail="followup_not_found")
+    return {"ok": True, "followup": fu.model_dump(mode="json")}
+
+
+@app.post("/api/followups/{followup_id}/still-pending")
+def followup_still_pending(followup_id: str) -> dict[str, Any]:
+    from foresight_x.harness.decision_followup import still_pending_followup
+
+    settings = _settings_for_active_user()
+    _load_followup_owned(settings, followup_id)
+    fu = still_pending_followup(settings.foresight_user_id, followup_id, settings=settings)
+    if fu is None:
+        raise HTTPException(status_code=404, detail="followup_not_found")
+    return {"ok": True, "followup": fu.model_dump(mode="json")}
+
+
+@app.post("/api/followups/{followup_id}/outcome")
+def followup_record_outcome_api(followup_id: str, body: FollowupOutcomeApiRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    fu = _load_followup_owned(settings, followup_id)
+    return _persist_reflective_decision_outcome(
+        settings,
+        fu.decision_id,
+        body,
+        outcome_source="followup_nudge",
+        followup_id=followup_id,
+    )
+
+
+@app.get("/api/decisions/{decision_id}/followups")
+def list_decision_followups(decision_id: str) -> dict[str, Any]:
+    from foresight_x.harness.decision_followup import get_followups_for_decision
+
+    settings = _settings_for_active_user()
+    try:
+        trace = load_decision_trace(decision_id, settings=settings)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="trace_not_found") from None
+    trace_user = _trace_user_id(trace)
+    if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
+        raise HTTPException(status_code=404, detail="trace_not_found")
+    fus = get_followups_for_decision(settings.foresight_user_id, decision_id, settings=settings)
+    return {"followups": [f.model_dump(mode="json") for f in fus]}
+
+
+@app.post("/api/decisions/{decision_id}/reflective-outcome")
+def decision_reflective_outcome(decision_id: str, body: FollowupOutcomeApiRequest) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    return _persist_reflective_decision_outcome(
+        settings,
+        decision_id,
+        body,
+        outcome_source="manual_history",
+        followup_id=None,
+    )
 
 
 class ShadowMessage(BaseModel):
@@ -1945,6 +2266,7 @@ def stream_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest)
                         "status": "complete",
                     },
                 )
+                _try_create_decision_followup(settings, trace, str(thread.get("thread_id") or tid or ""))
                 yield _sse_chunk({"type": "status", "status": "report_open", "label": "Decision report ready"})
                 yield _sse_chunk(
                     {
@@ -2257,6 +2579,8 @@ def stream_shadow_decision_report(thread_id: str, body: ShadowDecisionReportStre
                                 "status": "complete",
                             },
                         )
+                        if isinstance(trace, dict):
+                            _try_create_decision_followup(settings, trace, tid)
                     t1 = datetime.now(timezone.utc)
                     yield _sse_chunk(
                         {
@@ -3542,6 +3866,7 @@ def record_outcome(body: RecordOutcomeRequest) -> RecordOutcomeResponse:
     )
     path = save_decision_outcome(outcome, settings=settings)
     apply_outcome_to_memory(body.decision_id, outcome, settings=settings)
+    mark_followups_completed_for_decision(settings.foresight_user_id, body.decision_id, settings=settings)
     eval_appended = False
     try:
         commit = load_commit(body.decision_id, settings=settings)

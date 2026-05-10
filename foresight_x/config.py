@@ -114,6 +114,15 @@ class Settings(BaseSettings):
         le=1.0,
         validation_alias=AliasChoices("graph_min_influence_score", "GRAPH_MIN_INFLUENCE_SCORE"),
     )
+    #: If > 0, periodically prune follow-up notify state files (seconds between runs; 0 disables).
+    followup_maintenance_interval_sec: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices(
+            "followup_maintenance_interval_sec",
+            "FOLLOWUP_MAINTENANCE_INTERVAL_SEC",
+        ),
+    )
 
     @model_validator(mode="after")
     def _supabase_implies_jwt_tenancy(self) -> Self:
@@ -141,6 +150,10 @@ class Settings(BaseSettings):
     @property
     def outcomes_dir(self) -> Path:
         return self.foresight_data_dir / "outcomes"
+
+    @property
+    def followups_dir(self) -> Path:
+        return self.foresight_data_dir / "followups"
 
     @property
     def commits_dir(self) -> Path:

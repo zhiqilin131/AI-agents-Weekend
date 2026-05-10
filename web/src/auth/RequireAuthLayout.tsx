@@ -1,4 +1,5 @@
 import { Navigate, Outlet } from 'react-router';
+import { FollowupNotificationManager } from '../app/components/followup/FollowupNotificationManager';
 import { useAuth } from './AuthContext';
 
 /** True when Vite env has Supabase client credentials (login UI can work). */
@@ -16,7 +17,12 @@ export function RequireAuthLayout() {
   const { session, loading } = useAuth();
 
   if (!isSupabaseEnvConfigured()) {
-    return <Outlet />;
+    return (
+      <>
+        <FollowupNotificationManager />
+        <Outlet />
+      </>
+    );
   }
 
   if (loading) {
@@ -31,5 +37,10 @@ export function RequireAuthLayout() {
     return <Navigate to="/login" replace />;
   }
 
-  return <Outlet />;
+  return (
+    <>
+      <FollowupNotificationManager />
+      <Outlet />
+    </>
+  );
 }

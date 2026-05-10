@@ -74,6 +74,7 @@ export default function ProfilePage() {
   const [aboutMe, setAboutMe] = useState('');
   const [constraints, setConstraints] = useState('');
   const [values, setValues] = useState('');
+  const [timezone, setTimezone] = useState('UTC');
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -100,6 +101,7 @@ export default function ProfilePage() {
         about_me: string;
         constraints: string[];
         values: string[];
+        timezone?: string;
       };
       const pl = data.priority_lines;
       if (Array.isArray(pl) && pl.length > 0) {
@@ -123,6 +125,7 @@ export default function ProfilePage() {
       setAboutMe(data.about_me ?? '');
       setConstraints(listToLines(data.constraints ?? []));
       setValues(listToLines(data.values ?? []));
+      setTimezone((data.timezone || 'UTC').trim() || 'UTC');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load profile');
     }
@@ -142,6 +145,7 @@ export default function ProfilePage() {
         about_me: aboutMe.trim(),
         constraints: linesToList(constraints),
         values: linesToList(values),
+        timezone: timezone.trim() || 'UTC',
       };
       const res = await apiFetch('/api/profile', {
         method: 'PUT',
@@ -570,6 +574,36 @@ export default function ProfilePage() {
             </div>
             {openSections.context ? (
               <>
+            <div>
+            <label className="mb-1 block text-xs text-gray-700 md:text-sm" style={{ fontWeight: 500 }}>
+              Timezone (IANA)
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value)}
+                className="min-w-[12rem] flex-1 rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 text-sm"
+                placeholder="America/Los_Angeles"
+                maxLength={80}
+              />
+              <button
+                type="button"
+                className="rounded-full border border-indigo-200 px-3 py-1.5 text-xs text-indigo-900 hover:bg-indigo-50"
+                onClick={() => {
+                  try {
+                    setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+                  } catch {
+                    setTimezone('UTC');
+                  }
+                }}
+              >
+                Use this device
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-gray-500">
+              Used for decision follow-up quiet hours when the app does not pass a timezone query.
+            </p>
+            </div>
             <div>
             <label className="mb-1 block text-xs text-gray-700 md:text-sm" style={{ fontWeight: 500 }}>
               About me

@@ -460,6 +460,11 @@ class UserProfile(BaseModel):
         default=None,
         description="Optional visual/tone preferences for the UI slime advisor.",
     )
+    timezone: str = Field(
+        default="UTC",
+        max_length=80,
+        description="IANA timezone for reminders and quiet hours (e.g. America/Los_Angeles).",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -808,6 +813,90 @@ class DecisionOutcome(BaseModel):
     user_reported_quality: int = Field(ge=1, le=5)
     reversed_later: bool
     timestamp: str
+    # Optional extended fields (follow-up / reflection UI); omitted in legacy files.
+    chosen_option_label: str = Field(default="", description="Human label for adopted option when known.")
+    reflective_outcome_status: str = Field(
+        default="",
+        description="follow-up vocabulary: went_well | mixed | did_not_work | still_pending | changed_mind | unknown",
+    )
+    reflective_outcome_text: str = Field(default="", description="Free text from lightweight outcome capture.")
+    lessons: list[str] = Field(default_factory=list)
+    outcome_source: str = Field(default="", description="followup_nudge | manual_history | slime_chat")
+    satisfaction: int | None = Field(default=None, ge=1, le=5)
+
+
+DecisionFollowupDecisionType = Literal[
+    "time_sensitive",
+    "career",
+    "relationship",
+    "academic",
+    "planning",
+    "low_stakes",
+    "unknown",
+]
+
+DecisionFollowupPriority = Literal["low", "medium", "high"]
+
+DecisionFollowupStatus = Literal["scheduled", "due", "snoozed", "dismissed", "completed", "cancelled"]
+
+ReflectiveOutcomeStatus = Literal[
+    "went_well",
+    "mixed",
+    "did_not_work",
+    "still_pending",
+    "changed_mind",
+    "unknown",
+]
+
+DecisionOutcomeSource = Literal["followup_nudge", "manual_history", "slime_chat"]
+
+
+class FollowupSchedule(BaseModel):
+    offsets_days: list[int] = Field(default_factory=list)
+    completed_offsets_days: list[int] = Field(default_factory=list)
+
+
+class DecisionFollowup(BaseModel):
+    id: str
+    user_id: str
+    decision_id: str
+    thread_id: str = ""
+    decision_title: str = ""
+    decision_prompt: str = ""
+    decision_type: DecisionFollowupDecisionType = "unknown"
+    priority: DecisionFollowupPriority = "medium"
+    status: DecisionFollowupStatus = "scheduled"
+    created_at: str = ""
+    next_due_at: str | None = None
+    schedule: FollowupSchedule = Field(default_factory=FollowupSchedule)
+    dismissed_count: int = 0
+    snoozed_until: str | None = None
+    outcome_recorded: bool = False
+    last_shown_at: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class FollowupEligibility(BaseModel):
+    should_create: bool
+    priority: DecisionFollowupPriority
+    decision_type: str
+    reason: str
+    schedule_offsets_days: list[int] = Field(default_factory=list)
+
+
+class DecisionFollowupToastPayload(BaseModel):
+    """API shape for the glass toast (computed copy + ids)."""
+
+    id: str
+    decision_id: str
+    thread_id: str = ""
+    decision_title: str
+    decision_prompt: str
+    decision_type: DecisionFollowupDecisionType = "unknown"
+    title: str
+    body: str
+    relative_phrase: str = ""
+    created_at_trace: str = ""
 
 
 class HarnessReport(BaseModel):
@@ -827,6 +916,12 @@ class TraceListItem(BaseModel):
     preview: str
     has_outcome: bool = False
     has_commit: bool = False
+    followup_status: str = Field(default="", description="scheduled | snoozed | dismissed | completed | '' if none")
+    followup_next_checkin: str | None = Field(default=None, description="ISO UTC next nudge time when scheduled/snoozed.")
+    followup_outcome_label: str = Field(
+        default="",
+        description="Short label from reflective outcome when recorded via follow-up.",
+    )
 
 
 class DecisionCommit(BaseModel):

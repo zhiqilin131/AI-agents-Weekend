@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
-import { OutcomeHarness } from '../app/components/OutcomeHarness';
+import { OutcomeReviewCard } from '../app/components/followup/OutcomeReviewCard';
+import type { FollowupToastPayload } from '../app/components/followup/DecisionFollowupToast';
 import { SavedOutcomeModal } from '../app/components/SavedOutcomeModal';
 import { apiFetch } from '../utils/apiFetch';
 
@@ -12,13 +13,26 @@ interface TraceRow {
   preview: string;
   has_outcome?: boolean;
   has_commit?: boolean;
+  followup_status?: string;
+  followup_next_checkin?: string | null;
+  followup_outcome_label?: string;
+}
+
+function formatCheckin(iso: string | null | undefined): string {
+  if (!iso || !String(iso).trim()) return '';
+  const d = Date.parse(String(iso));
+  if (Number.isNaN(d)) return String(iso).slice(0, 16);
+  return new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export default function HistoryPage() {
   const [rows, setRows] = useState<TraceRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [outcomeForId, setOutcomeForId] = useState<string | null>(null);
+  const [reflectiveFor, setReflectiveFor] = useState<{
+    decisionId: string;
+    payload: FollowupToastPayload;
+  } | null>(null);
   const [savedOutcomeForId, setSavedOutcomeForId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -92,6 +106,21 @@ export default function HistoryPage() {
                       Outcome pending
                     </span>
                   )}
+                  {r.followup_status === 'dismissed' ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/80" style={{ fontWeight: 600 }}>
+                      Follow-up dismissed
+                    </span>
+                  ) : null}
+                  {r.followup_status && ['scheduled', 'snoozed', 'due'].includes(r.followup_status) ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-900 border border-sky-200/80" style={{ fontWeight: 600 }}>
+                      Check-in scheduled
+                    </span>
+                  ) : null}
+                  {r.followup_outcome_label ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-fuchsia-50 text-fuchsia-900 border border-fuchsia-200/70" style={{ fontWeight: 600 }}>
+                      {r.followup_outcome_label}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="text-sm text-gray-800 group-hover:text-purple-800 transition-colors">
                   {r.preview || '(empty)'}
@@ -99,6 +128,11 @@ export default function HistoryPage() {
                 <div className="text-xs text-gray-500 mt-1">
                   {r.timestamp} · {r.decision_type}
                 </div>
+                {r.followup_next_checkin && ['scheduled', 'snoozed', 'due'].includes(r.followup_status || '') ? (
+                  <div className="text-[11px] text-violet-700/90 mt-1">
+                    Next check-in: {formatCheckin(r.followup_next_checkin)}
+                  </div>
+                ) : null}
               </Link>
               <div className="flex flex-wrap gap-2 shrink-0">
                 <button
@@ -110,7 +144,19 @@ export default function HistoryPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOutcomeForId(r.decision_id)}
+                  onClick={() =>
+                    setReflectiveFor({
+                      decisionId: r.decision_id,
+                      payload: {
+                        id: '',
+                        decision_id: r.decision_id,
+                        decision_title: r.preview || r.decision_id,
+                        decision_prompt: (r.preview || '').slice(0, 280),
+                        title: 'Decision check-in',
+                        body: 'Want to close the loop on this decision?',
+                      },
+                    })
+                  }
                   className="px-4 py-2 text-sm rounded-full border border-purple-200 text-purple-900 hover:bg-purple-50"
                 >
                   Record outcome
@@ -129,16 +175,18 @@ export default function HistoryPage() {
         </ul>
       </div>
 
-      {outcomeForId && (
-        <OutcomeHarness
-          decisionId={outcomeForId}
-          onClose={() => setOutcomeForId(null)}
+      {reflectiveFor ? (
+        <OutcomeReviewCard
+          payload={reflectiveFor.payload}
+          followupId={null}
+          decisionId={reflectiveFor.decisionId}
+          onClose={() => setReflectiveFor(null)}
           onSaved={() => {
-            setOutcomeForId(null);
+            setReflectiveFor(null);
             void load();
           }}
         />
-      )}
+      ) : null}
 
       {savedOutcomeForId && (
         <SavedOutcomeModal decisionId={savedOutcomeForId} onClose={() => setSavedOutcomeForId(null)} />

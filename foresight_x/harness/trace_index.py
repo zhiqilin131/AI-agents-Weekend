@@ -8,6 +8,7 @@ from pathlib import Path
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.harness.decision_commit import delete_commit
+from foresight_x.harness.decision_followup import delete_followups_for_decision
 from foresight_x.schemas import TraceListItem
 
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
@@ -78,4 +79,5 @@ def delete_trace(decision_id: str, *, settings: Settings | None = None) -> tuple
         outcome_path.unlink()
         od = True
     cd = delete_commit(decision_id, settings=s)
+    delete_followups_for_decision(s.foresight_user_id, decision_id, settings=s)
     return td, od, cd
