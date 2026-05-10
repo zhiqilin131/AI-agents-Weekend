@@ -31,6 +31,9 @@ web = [
     "python-multipart>=0.0.20,<1",
     "faster-whisper>=1.1,<2",
     "openai>=1.55,<2",
+    # api_server → auth (JWT verification); import runs even when auth is optional at runtime
+    "pyjwt[crypto]>=2.10,<3",
+    "httpx>=0.27,<1",
 ]
 decision = [
     "ortools>=9.10,<10",
