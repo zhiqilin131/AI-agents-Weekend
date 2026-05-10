@@ -1,8 +1,11 @@
 """Runtime configuration from environment."""
 
-from pathlib import Path
+from __future__ import annotations
 
-from pydantic import AliasChoices, Field
+from pathlib import Path
+from typing import Self
+
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,6 +62,15 @@ class Settings(BaseSettings):
     supabase_anon_key: str = Field(default="", validation_alias=AliasChoices("supabase_anon_key", "SUPABASE_ANON_KEY"))
     #: When True, API routes under ``/api`` require a valid ``Authorization: Bearer`` Supabase JWT (except health/docs).
     require_auth: bool = Field(default=False, validation_alias=AliasChoices("require_auth", "REQUIRE_AUTH"))
+    #: If True, keep legacy behaviour: when ``SUPABASE_URL`` is set, still allow unauthenticated ``/api`` calls that
+    #: use the shared on-disk **persona** id (unsafe for multi-user). Default False: Supabase URL implies JWT-only tenancy.
+    allow_persona_fallback_with_supabase: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "allow_persona_fallback_with_supabase",
+            "ALLOW_PERSONA_FALLBACK_WITH_SUPABASE",
+        ),
+    )
     redis_url: str = Field(default="", validation_alias=AliasChoices("redis_url", "REDIS_URL"))
     allowed_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
@@ -102,6 +114,13 @@ class Settings(BaseSettings):
         le=1.0,
         validation_alias=AliasChoices("graph_min_influence_score", "GRAPH_MIN_INFLUENCE_SCORE"),
     )
+
+    @model_validator(mode="after")
+    def _supabase_implies_jwt_tenancy(self) -> Self:
+        """Chroma, traces, profile, chat_threads, graph — all keyed by ``foresight_user_id`` from JWT ``sub``."""
+        if (self.supabase_url or "").strip() and not self.allow_persona_fallback_with_supabase:
+            object.__setattr__(self, "require_auth", True)
+        return self
 
     @property
     def memory_dir(self) -> Path:

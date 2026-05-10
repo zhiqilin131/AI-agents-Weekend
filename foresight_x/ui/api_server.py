@@ -279,6 +279,9 @@ def _active_user_id(settings=None) -> str:
     ctx_user = get_supabase_user_for_request()
     if ctx_user and (ctx_user.get("id") or "").strip():
         return str(ctx_user["id"]).strip()
+    if (s.supabase_url or "").strip() and not s.allow_persona_fallback_with_supabase:
+        # Align with enforced REQUIRE_AUTH when Supabase is configured — never mix tenants on persona id.
+        raise HTTPException(status_code=401, detail="missing_or_invalid_supabase_session")
     reg = _ensure_registry(s)
     uid = (reg.current_user_id or "").strip()
     return uid or _default_user_id(s)

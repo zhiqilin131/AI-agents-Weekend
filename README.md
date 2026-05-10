@@ -82,9 +82,9 @@ Optional for local dev: leave `VITE_SUPABASE_URL` unset and the app behaves as b
 
 If both are set, the SPA requires sign-in before Chat, Profile, etc. Omit either variable for local persona-only mode without a login screen.
 
-**Backend:** `SUPABASE_URL` must match (for JWKS verification). Set `REQUIRE_AUTH=true` in production so `/api/*` requires `Authorization: Bearer <access_token>` (except `/api/health`). Deploy backend first with `REQUIRE_AUTH` off, ship frontend with Supabase keys, then turn `REQUIRE_AUTH` on to avoid a window of 401s.
+**Backend:** `SUPABASE_URL` must match the same project (JWKS verification). **When `SUPABASE_URL` is non-empty, `REQUIRE_AUTH` is forced on** unless you explicitly set `ALLOW_PERSONA_FALLBACK_WITH_SUPABASE=true` (unsafe: one shared on-disk “persona” for every caller). With the default, every `/api/*` call must include `Authorization: Bearer <access_token>` (except `/api/health` and docs). The JWT **`sub`** becomes `foresight_user_id` for that request, so **chat threads, Chroma memory, profiles, traces, graph, diary**, etc. stay isolated per login. Switching accounts in the browser therefore only shows that account’s data.
 
-See `web/.env.example`.
+See `web/.env.example` and repo `.env.example`.
 
 ## Docs
 
