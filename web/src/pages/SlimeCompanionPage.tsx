@@ -117,9 +117,19 @@ export default function SlimeCompanionPage() {
     }
   };
 
+  /** Keep studio draft in sync with server when the sheet is closed — never stomp unsaved edits while open. */
   useEffect(() => {
+    if (panelOpen) return;
     setSlimeDraft(slimeProfile);
-  }, [slimeProfile]);
+  }, [slimeProfile, panelOpen]);
+
+  const wasPanelOpenRef = useRef(false);
+  useEffect(() => {
+    if (panelOpen && !wasPanelOpenRef.current) {
+      setSlimeDraft(slimeProfile);
+    }
+    wasPanelOpenRef.current = panelOpen;
+  }, [panelOpen, slimeProfile]);
 
   useEffect(() => {
     if (searchParams.get('personalize') !== '1') return;

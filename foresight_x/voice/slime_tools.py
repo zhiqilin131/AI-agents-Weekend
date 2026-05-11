@@ -518,9 +518,10 @@ def tool_update_slime_profile(
     if not patch_in:
         return {"ok": False, "error": "empty_patch"}, {"type": "none"}
 
+    name_needs_confirm = "name" in patch_in and not route.auto_apply_voice_rename
     needs_confirm = (
         route.requires_confirmation
-        or "name" in patch_in
+        or name_needs_confirm
         or "custom_colors" in patch_in
         or nickname_patch_requested
     )

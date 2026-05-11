@@ -75,6 +75,19 @@ def contains_blocked_identity_theme(text: str) -> bool:
     return False
 
 
+def _slime_display_name_letterish_ratio(name: str) -> float:
+    """Letters, numbers, spaces, and common display-name punctuation (hyphen, apostrophe, period)."""
+    if not name:
+        return 0.0
+    ok = 0
+    for c in name:
+        if c.isalnum() or c.isspace():
+            ok += 1
+        elif c in "-_'’.":
+            ok += 1
+    return ok / max(len(name), 1)
+
+
 def is_safe_slime_display_name(raw: str) -> bool:
     name = (raw or "").strip()
     if not name or len(name) > 24:
@@ -88,8 +101,7 @@ def is_safe_slime_display_name(raw: str) -> bool:
         return False
     if "<script" in low or "</script>" in low:
         return False
-    printable_ratio = sum(1 for c in name if c.isalnum() or c.isspace()) / max(len(name), 1)
-    if printable_ratio < 0.45:
+    if _slime_display_name_letterish_ratio(name) < 0.4:
         return False
     return True
 

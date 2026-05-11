@@ -17,7 +17,7 @@ from foresight_x.config import Settings
 from foresight_x.ui.api_server import _run_slime_voice_pipeline
 from foresight_x.voice.asr import TranscriptionResult, transcribe_audio
 from foresight_x.voice.slime_tools import execute_slime_tool, tool_navigate
-from foresight_x.voice.slime_voice_router import SlimeVoiceContext, SlimeVoiceRouteResult
+from foresight_x.voice.slime_voice_router import SlimeVoiceContext, SlimeVoiceRouteResult, route_slime_voice_command
 
 
 def test_asr_dispatch_faster_whisper(monkeypatch, tmp_path: Path) -> None:
@@ -261,6 +261,62 @@ def test_profile_update_requires_confirmation() -> None:
     )
     _tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="rename")
     assert fe.get("type") == "confirm"
+
+
+def test_route_slime_voice_your_name_is_without_openai_key() -> None:
+    settings = Settings(openai_api_key="")
+    ctx = SlimeVoiceContext(user_id="demo_user")
+    r = route_slime_voice_command("Okay, your name is Luna now.", ctx, settings=settings)
+    assert r.tool_name == "update_slime_profile"
+    assert r.arguments["patch"]["name"] == "Luna"
+    assert r.requires_confirmation is False
+    assert r.auto_apply_voice_rename is True
+
+
+def test_deterministic_voice_rename_persists_without_confirm(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_voice_rename",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_rename.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_voice_rename",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_voice_rename")
+    route = route_slime_voice_command("Your name is Pebble.", ctx, settings=settings)
+    assert route.auto_apply_voice_rename is True
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="Your name is Pebble.")
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
+    from foresight_x.profile.store import load_user_profile
+
+    loaded = load_user_profile(settings)
+    assert loaded.slime_profile is not None
+    assert loaded.slime_profile.name == "Pebble"
+
+
+def test_route_slime_voice_rename_skips_when_call_me_present() -> None:
+    settings = Settings(openai_api_key="")
+    ctx = SlimeVoiceContext(user_id="demo_user")
+    r = route_slime_voice_command("Call me Sam and also your name is Blob", ctx, settings=settings)
+    assert r.tool_name == "no_op"
+
+
+def test_is_safe_hyphenated_apostrophe_slime_display_name() -> None:
+    from foresight_x.voice.slime_text_safety import is_safe_slime_display_name
+
+    assert is_safe_slime_display_name("Anne-Marie")
+    assert is_safe_slime_display_name("O'Brien")
 
 
 def test_profile_update_voice_only_merges_partial(tmp_path: Path) -> None:

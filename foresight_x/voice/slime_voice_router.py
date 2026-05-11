@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, Literal
 
@@ -12,12 +13,79 @@ from pydantic import BaseModel, Field
 from foresight_x.config import Settings
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.structured_predict import structured_predict
+from foresight_x.voice.slime_text_safety import is_safe_slime_display_name
 
 _log = logging.getLogger(__name__)
 
 _ROUTER_SLIME_KEYS = frozenset({"name", "color_theme", "shape"})
 
 _QUICK_COLOR_THEME_TOKENS = frozenset({"aurora", "violet", "mint", "sunset", "lime", "silver"})
+
+_RENAME_VOICE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\b(?:from\s+now\s+on\s+)?your\s+name\s+is\s+(.+)$"),
+    re.compile(r"(?i)^(?:i'?ll|i\s+will)\s+call\s+you\s+(.+)$"),
+    re.compile(r"(?i)^let'?s\s+call\s+you\s+(.+)$"),
+    re.compile(r"(?i)^rename\s+(?:yourself|you)\s+to\s+(.+)$"),
+    re.compile(r"(?i)^you(?:'re|\s+are)\s+(?:now\s+)?called\s+(.+)$"),
+    re.compile(r"(?i)^i\s+(?:want\s+to\s+)?name\s+you\s+(.+)$"),
+    # Chinese: explicit rename phrasing only (avoid matching 你叫什么).
+    re.compile(r"^(?:以后\s*)?你就叫\s*(.+)$"),
+    re.compile(r"^我叫你\s*(.+)$"),
+)
+
+
+def _clean_extracted_slime_voice_name(fragment: str) -> str:
+    s = (fragment or "").strip()
+    s = s.strip(" '\"「」『』\"'“”‘’")
+    low = s.lower()
+    for stop in (
+        " from now",
+        " starting",
+        " okay",
+        " ok",
+        " thanks",
+        " thank you",
+        " please",
+        " now",
+        " today",
+    ):
+        i = low.find(stop)
+        if i > 0:
+            s = s[:i].strip()
+            low = s.lower()
+    s = s.strip(".,;:!?…。！？")
+    return s[:24].strip()
+
+
+def _try_slime_rename_voice_patch(transcript: str) -> dict[str, Any] | None:
+    """
+    Deterministic slime rename so Buddy works without the LLM router and common phrases still apply.
+    Skips user-nickname phrases (call me … / 叫我…).
+    """
+    raw = (transcript or "").strip()
+    if not raw or len(raw) > 200:
+        return None
+    low = raw.lower()
+    if any(
+        b in low
+        for b in (
+            "call me ",
+            "refer to me as",
+            "叫我",
+            "称呼我",
+            "my name is",
+        )
+    ):
+        return None
+    for rx in _RENAME_VOICE_PATTERNS:
+        m = rx.search(raw.strip())
+        if not m:
+            continue
+        name = _clean_extracted_slime_voice_name(m.group(1))
+        if not name or not is_safe_slime_display_name(name):
+            continue
+        return {"patch": {"name": name}}
+    return None
 
 
 def _quick_slime_color_theme_patch(transcript: str) -> dict[str, Any] | None:
@@ -127,6 +195,8 @@ class SlimeVoiceRouteResult(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     requires_confirmation: bool = False
     assistant_hint: str | None = None
+    #: Heuristic ASR slime rename (``_try_slime_rename_voice_patch``) — safe to persist without a second tap.
+    auto_apply_voice_rename: bool = False
 
 
 class _LLMRoute(BaseModel):
@@ -207,6 +277,17 @@ def route_slime_voice_command(
     *,
     settings: Settings,
 ) -> SlimeVoiceRouteResult:
+    rename = _try_slime_rename_voice_patch(transcript.strip())
+    if rename is not None:
+        return SlimeVoiceRouteResult(
+            intent="profile_update",
+            tool_name="update_slime_profile",
+            arguments=rename,
+            requires_confirmation=False,
+            assistant_hint=None,
+            auto_apply_voice_rename=True,
+        )
+
     quick = _quick_slime_color_theme_patch(transcript.strip())
     if quick is not None:
         return SlimeVoiceRouteResult(
