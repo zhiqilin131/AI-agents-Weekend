@@ -412,14 +412,35 @@ def _auth_exempt_path(path: str) -> bool:
 def _active_user_id(settings=None) -> str:
     s = settings or load_settings()
     ctx_user = get_supabase_user_for_request()
-    if ctx_user and (ctx_user.get("id") or "").strip():
-        return str(ctx_user["id"]).strip()
+    ctx_user_id = str((ctx_user or {}).get("id") or "").strip() if isinstance(ctx_user, dict) else ""
+    if ctx_user_id:
+        uid = ctx_user_id
+        _log.warning(
+            "active_user_id path=jwt ctx_user=%s ctx_user_id=%s uid=%s",
+            ctx_user,
+            ctx_user_id,
+            uid,
+        )
+        return uid
     if (s.supabase_url or "").strip() and not s.allow_persona_fallback_with_supabase:
         # Align with enforced REQUIRE_AUTH when Supabase is configured — never mix tenants on persona id.
+        _log.warning(
+            "active_user_id path=missing_session ctx_user=%s ctx_user_id=%s uid=%s",
+            ctx_user,
+            ctx_user_id,
+            "",
+        )
         raise HTTPException(status_code=401, detail="missing_or_invalid_supabase_session")
     reg = _ensure_registry(s)
     uid = (reg.current_user_id or "").strip()
-    return uid or _default_user_id(s)
+    final_uid = uid or _default_user_id(s)
+    _log.warning(
+        "active_user_id path=fallback ctx_user=%s ctx_user_id=%s uid=%s",
+        ctx_user,
+        ctx_user_id,
+        final_uid,
+    )
+    return final_uid
 
 
 def _settings_for_active_user():
@@ -2219,6 +2240,10 @@ def shadow_chat_threads() -> dict:
 def create_shadow_chat_thread(body: ShadowThreadCreateRequest | None = None) -> dict:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
+    _log.warning(
+        "create_shadow_chat_thread settings.foresight_user_id=%s",
+        settings.foresight_user_id,
+    )
     t = create_thread(user_id=uid, title=(body.title if body else None))
     return {"thread": t}
 
