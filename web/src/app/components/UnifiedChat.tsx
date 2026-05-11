@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { ModelSelector } from '../../features/models/ModelSelector';
+import { useSlimeModelCatalog } from '../../features/models/useSlimeModelCatalog';
 import { apiFetch } from '../../utils/apiFetch';
 import { ChatMessageList } from './ChatMessageList';
 import { ChatInput } from './ChatInput';
@@ -21,6 +23,14 @@ type Suggestion = {
 };
 
 export function UnifiedChat() {
+  const slimeModels = useSlimeModelCatalog();
+  const [modelOptionId, setModelOptionId] = useState('');
+  useEffect(() => {
+    if (slimeModels.ready && slimeModels.defaultModel && !modelOptionId) {
+      setModelOptionId(slimeModels.defaultModel);
+    }
+  }, [slimeModels.ready, slimeModels.defaultModel, modelOptionId]);
+
   const [threadId, setThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [mode, setMode] = useState('normal');
@@ -41,7 +51,12 @@ export function UnifiedChat() {
     const res = await apiFetch('/api/chat/unified', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ thread_id: threadId, mode, ...payload }),
+      body: JSON.stringify({
+        thread_id: threadId,
+        mode,
+        ...payload,
+        ...(modelOptionId ? { model_option_id: modelOptionId } : {}),
+      }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = (await res.json()) as {
@@ -93,6 +108,21 @@ export function UnifiedChat() {
               onContinue={() => setSuggestion(null)}
               onDismiss={() => void callUnified({ user_action: 'dismiss_suggestion' })}
             />
+            <div className="px-1">
+              <ModelSelector
+                feature="shadow_chat"
+                selectedModelId={modelOptionId || slimeModels.defaultModel}
+                onChange={setModelOptionId}
+                models={slimeModels.models}
+                selectorEnabled={slimeModels.selectorEnabled}
+                showCostPreview
+                variant="compact"
+                elevated={false}
+                label="Slime model"
+                hint="Unified chat uses your default tier until you change it here."
+                disabled={sending}
+              />
+            </div>
             <ChatInput disabled={sending} onSend={(t) => void sendMessage(t)} />
           </div>
         </div>

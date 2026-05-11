@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Literal
+from typing import Any, Literal, cast
 import json
 import uuid
 from datetime import datetime, timezone
@@ -21,7 +21,7 @@ from concurrent.futures import TimeoutError as FuturesTimeout
 import time
 
 import chromadb
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -120,7 +120,14 @@ from foresight_x.auth import (
     supabase_user_ctx_reset,
     supabase_user_ctx_set,
 )
+from foresight_x.llm.model_resolve import (
+    default_model_id_for_catalog,
+    get_model_option_for_request,
+    public_model_dict,
+)
+from foresight_x.llm.model_catalog import build_model_catalog
 from foresight_x.usage.credits import (
+    calculate_credit_cost,
     check_credits,
     consume_credits,
     credit_cost_for_feature,
@@ -205,12 +212,19 @@ def _credit_gate(
     feature: CreditFeature,
     *,
     request_id: str | None,
+    model_option_id: str | None = None,
+    profile: UserProfile | None = None,
+    need_tools: bool = True,
+    need_vision: bool = False,
     metadata: dict | None = None,
 ) -> tuple[CreditTransaction | None, JSONResponse | None]:
     """Returns (charge_tx_or_none_if_unlimited_or_disabled, error_402_or_none)."""
     uid = settings.foresight_user_id
     email = _credit_actor_email()
-    cost = credit_cost_for_feature(feature, settings=settings)
+    prof = profile if profile is not None else load_user_profile(settings)
+    detail = calculate_credit_cost(feature, model_option_id, settings=settings, profile=prof)
+    cost = int(detail.final_cost)
+    meta = {**(metadata or {}), **detail.model_dump(mode="json")}
     chk = check_credits(uid, feature, cost, user_email=email, settings=settings)
     if not chk.allowed:
         return None, _insufficient_credits_response(chk)
@@ -220,7 +234,7 @@ def _credit_gate(
             feature,
             cost,
             request_id,
-            metadata=metadata,
+            metadata=meta,
             user_email=email,
             settings=settings,
         )
@@ -240,6 +254,26 @@ def _credit_gate(
                 reason="insufficient_credits",
             )
         )
+
+
+def _resolved_chat_model(
+    settings,
+    feature: CreditFeature,
+    model_option_id: str | None,
+    *,
+    profile: UserProfile | None = None,
+    need_tools: bool = True,
+    need_vision: bool = False,
+) -> str:
+    prof = profile if profile is not None else load_user_profile(settings)
+    return get_model_option_for_request(
+        settings,
+        str(feature),
+        model_option_id,
+        profile=prof,
+        need_tools=need_tools,
+        need_vision=need_vision,
+    ).provider_model
 
 
 def _try_create_decision_followup(
@@ -554,6 +588,7 @@ async def supabase_jwt_context_middleware(request: Request, call_next):
 
 class RunRequest(BaseModel):
     raw_input: str = Field(min_length=1)
+    model_option_id: str | None = Field(default=None, max_length=64)
     #: Browser `new Date().toISOString()` — used to anchor action deadlines to the user's clock.
     client_now_iso: str | None = Field(default=None)
     #: Optional answers from the pre-run clarification modal (question_id → selected label).
@@ -572,6 +607,7 @@ class ExternalEventRequest(BaseModel):
 
 class ClarifyRequest(BaseModel):
     raw_input: str = Field(min_length=1)
+    model_option_id: str | None = Field(default=None, max_length=64)
     thread_id: str | None = Field(default=None)
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     # shadow_chat: skip clarify for jokes / obvious non-analytical lines (Decision mode unchanged).
@@ -594,6 +630,7 @@ class SlimeTtsBody(BaseModel):
     """Buddy auto-play: MP3 bytes for <audio> (avoids speechSynthesis gesture loss after async)."""
 
     text: str = Field(..., min_length=1, max_length=4096)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class UsageRedeemCodeBody(BaseModel):
@@ -890,10 +927,19 @@ def _client_anchor_iso(client_now_iso: str | None) -> str | None:
 def run_decision(body: RunRequest, request: Request):
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"run:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "decision_report", request_id=rid, metadata={"endpoint": "/api/run"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "decision_report",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/run"},
+    )
     if gate_err is not None:
         return gate_err
-    ctx, notes = _build_context(settings)
+    pm = _resolved_chat_model(settings, "decision_report", body.model_option_id, profile=prof)
+    ctx, notes = _build_context(settings, llm_model=pm)
     merge_done = False
     try:
         if body.clarification_answers:
@@ -935,10 +981,19 @@ def run_decision_stream(body: RunRequest, request: Request):
 
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"run_stream:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "decision_report", request_id=rid, metadata={"endpoint": "/api/run/stream"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "decision_report",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/run/stream"},
+    )
     if gate_err is not None:
         return gate_err
-    ctx, notes = _build_context(settings)
+    pm = _resolved_chat_model(settings, "decision_report", body.model_option_id, profile=prof)
+    ctx, notes = _build_context(settings, llm_model=pm)
 
     def gen():
         try:
@@ -995,6 +1050,69 @@ def get_profile() -> dict:
     return p
 
 
+@app.get("/api/models")
+def list_slime_model_options() -> dict[str, Any]:
+    """Enabled Slime model tiers (no API keys; ``provider_model`` is never exposed)."""
+    settings = _settings_for_active_user()
+    if not settings.enable_model_selector:
+        return {
+            "models": [],
+            "default_model": default_model_id_for_catalog(settings),
+            "selector_enabled": False,
+        }
+    models = [public_model_dict(m) for m in build_model_catalog(settings) if m.enabled]
+    return {
+        "models": models,
+        "default_model": default_model_id_for_catalog(settings),
+        "selector_enabled": True,
+    }
+
+
+@app.get("/api/models/cost-preview")
+def slime_model_cost_preview(
+    feature: str = Query(..., min_length=3, max_length=64),
+    model_id: str | None = Query(default=None, max_length=64),
+) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    allowed: set[str] = {
+        "shadow_chat",
+        "slime_chat",
+        "slime_voice",
+        "decision_report",
+        "diary_generate",
+        "memory_import",
+        "calendar_agent",
+        "resource_search",
+        "report_revision",
+        "task_decomposition",
+        "outcome_reflection",
+        "tts",
+        "asr",
+    }
+    if feature not in allowed:
+        raise HTTPException(status_code=400, detail="unknown_feature")
+    prof = load_user_profile(settings)
+    feat = cast(CreditFeature, feature)
+    detail = calculate_credit_cost(feat, model_id, settings=settings, profile=prof)
+    chk = check_credits(
+        settings.foresight_user_id,
+        feat,
+        detail.final_cost,
+        user_email=_credit_actor_email(),
+        settings=settings,
+    )
+    bal = get_credit_balance(settings.foresight_user_id, settings=settings) if chk.balance is None else chk.balance
+    return {
+        "feature": feature,
+        "model_id": detail.model_option_id,
+        "base_cost": detail.base_cost,
+        "model_multiplier": detail.model_multiplier,
+        "final_cost": detail.final_cost,
+        "balance": bal,
+        "allowed": chk.allowed,
+    }
+
+
 @app.put("/api/profile")
 def put_profile(body: UserProfile) -> dict:
     """Update user-editable profile fields; keeps system lines + clarification rows; replaces Profile-authored priorities."""
@@ -1025,6 +1143,7 @@ def put_profile(body: UserProfile) -> dict:
     u = [x.text for x in merged_lines if x.origin == "user"]
     i = [x.text for x in system_lines]
     merged_tz = (body.timezone or "").strip() or (existing.timezone or "UTC").strip() or "UTC"
+    dmid = (body.default_model_option_id or "").strip()[:64] or (existing.default_model_option_id or "").strip()[:64]
     merged = existing.model_copy(
         update={
             "priority_lines": merged_lines,
@@ -1035,6 +1154,7 @@ def put_profile(body: UserProfile) -> dict:
             "constraints": list(body.constraints),
             "values": list(body.values),
             "timezone": merged_tz[:80],
+            "default_model_option_id": dmid,
         }
     )
     path = save_user_profile(merged, settings=settings)
@@ -1043,6 +1163,22 @@ def put_profile(body: UserProfile) -> dict:
 
 class ProfileTimezonePatch(BaseModel):
     timezone: str = Field(min_length=1, max_length=80)
+
+
+class ProfileModelPreferencePatch(BaseModel):
+    default_model_option_id: str = Field(min_length=1, max_length=64)
+
+
+@app.patch("/api/profile/model-preferences")
+def patch_profile_model_preferences(body: ProfileModelPreferencePatch) -> dict[str, Any]:
+    settings = _settings_for_active_user()
+    mid = body.default_model_option_id.strip()[:64]
+    valid = {m.id for m in build_model_catalog(settings) if m.enabled}
+    if valid and mid not in valid:
+        raise HTTPException(status_code=400, detail="unknown_model_option_id")
+    existing = load_user_profile(settings)
+    save_user_profile(existing.model_copy(update={"default_model_option_id": mid}), settings=settings)
+    return {"ok": True, "default_model_option_id": mid}
 
 
 @app.patch("/api/profile/timezone")
@@ -1099,6 +1235,7 @@ class SlimePersonaPreviewBody(BaseModel):
     persona: dict[str, Any] = Field(default_factory=dict)
     sample_context: Literal["decision", "memory", "calendar", "casual"] = "casual"
     slime_name: str | None = Field(default=None, max_length=24)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class _SlimePersonaPreviewLLMOut(BaseModel):
@@ -1199,7 +1336,8 @@ def slime_persona_preview(body: dict[str, Any]) -> dict[str, Any]:
                 "Write ONE short reply the slime would say (1–2 sentences), matching the persona. "
                 "No markdown. Do not claim private memory facts unless hedging uncertainty."
             )
-            llm = build_openai_llm(settings, temperature=0.55)
+            pm = _resolved_chat_model(settings, "shadow_chat", parsed.model_option_id, profile=prof_prev)
+            llm = build_openai_llm(settings, temperature=0.55, model=pm)
             out = structured_predict(llm, _SlimePersonaPreviewLLMOut, prompt)
             if (out.preview_text or "").strip():
                 preview_text = out.preview_text.strip()[:500]
@@ -1248,11 +1386,19 @@ def clarify(body: ClarifyRequest, request: Request):
     """Return optional multiple-choice questions before running the full pipeline."""
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"clarify:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "shadow_chat", request_id=rid, metadata={"endpoint": "/api/clarify"})
+    profile = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "shadow_chat",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=profile,
+        metadata={"endpoint": "/api/clarify"},
+    )
     if gate_err is not None:
         return gate_err
-    ctx, _notes = _build_context(settings)
-    profile = load_user_profile(settings)
+    pm = _resolved_chat_model(settings, "shadow_chat", body.model_option_id, profile=profile)
+    ctx, _notes = _build_context(settings, llm_model=pm)
     recent = list(body.recent_messages or [])
     events: list[dict[str, Any]] = []
     thread: dict[str, Any] | None = None
@@ -1616,6 +1762,7 @@ class ShadowMessage(BaseModel):
 
 class ShadowChatRequest(BaseModel):
     messages: list[ShadowMessage] = Field(min_length=1)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class OptionChatRequest(BaseModel):
@@ -1623,6 +1770,7 @@ class OptionChatRequest(BaseModel):
     option_id: str = Field(min_length=1)
     question: str = Field(min_length=1)
     chat_history: list[dict[str, str]] = Field(default_factory=list)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class OptionChatReply(BaseModel):
@@ -1640,6 +1788,7 @@ class AgilityPreviewStep(BaseModel):
 class AgilityPreviewRequest(BaseModel):
     decision_id: str = Field(min_length=1)
     selected_option_id: str = Field(min_length=1)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class AgilityPreviewResponse(BaseModel):
@@ -1684,6 +1833,7 @@ class CalendarAgentParseRequest(BaseModel):
     decision_id: str | None = None
     current_event_id: str | None = None
     source: str = Field(default="shadow_chat", max_length=32)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class CalendarAgentDraftRequest(BaseModel):
@@ -1691,6 +1841,7 @@ class CalendarAgentDraftRequest(BaseModel):
     tasks: list[dict[str, Any]] | None = None
     existing_events: list[dict[str, Any]] | None = None
     timezone: str = Field(default="UTC", max_length=80)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class CalendarAgentConfirmRequest(BaseModel):
@@ -1702,11 +1853,13 @@ class CalendarAgentConfirmRequest(BaseModel):
 class CalendarAgentAlternativesRequest(BaseModel):
     draft_id: str = Field(min_length=1)
     preference: str = Field(min_length=1)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class CalendarFromReportRequest(BaseModel):
     decision_id: str = Field(min_length=1)
     thread_id: str | None = None
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class CalendarEventsReplaceRequest(BaseModel):
@@ -1727,6 +1880,7 @@ class UnifiedChatRequest(BaseModel):
     mode: str | None = None
     user_action: str = "send_message"
     recent_messages: list[dict] = Field(default_factory=list)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class ShadowThreadCreateRequest(BaseModel):
@@ -1743,6 +1897,7 @@ class ShadowThreadMessageRequest(BaseModel):
     client_turn_seq: int | None = None
     #: Idempotency / dedupe for Slime Credits charging when the client retries the same turn.
     credit_request_id: str | None = Field(default=None, max_length=200)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class ShadowDecisionReportStreamRequest(BaseModel):
@@ -1751,6 +1906,7 @@ class ShadowDecisionReportStreamRequest(BaseModel):
     clarification_answers: dict[str, str] | None = Field(default=None)
     save_clarification_to_profile: bool = Field(default=False)
     credit_request_id: str | None = Field(default=None, max_length=200)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class ShadowReportContextRequest(BaseModel):
@@ -1774,10 +1930,17 @@ def _simple_chat_reply(message: str) -> str:
 def unified_chat(body: UnifiedChatRequest, request: Request):
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
+    prof = load_user_profile(settings)
     if body.thread_id:
         thread = _load_thread_or_404(body.thread_id, uid=uid)
     else:
         thread = create_thread(user_id=uid)
+    ar_ctx_u = thread.get("active_report_context") or {}
+    rev_id_u: str | None = None
+    if isinstance(ar_ctx_u, dict) and str(ar_ctx_u.get("mode") or "") == "revision":
+        d_u = str(ar_ctx_u.get("decision_id") or "").strip()
+        if d_u:
+            rev_id_u = d_u
     mode = str(body.mode or thread.get("mode") or "normal")
     action = (body.user_action or "send_message").strip()
     message = (body.message or "").strip()
@@ -1799,6 +1962,8 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
     credit_feat: CreditFeature | None = None
     if action == "generate_decision_report":
         credit_feat = "decision_report"
+    elif message and rev_id_u:
+        credit_feat = "report_revision"
     elif message:
         credit_feat = "shadow_chat"
 
@@ -1810,10 +1975,17 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
             settings,
             credit_feat,
             request_id=rid,
+            model_option_id=body.model_option_id,
+            profile=prof,
             metadata={"endpoint": "/api/chat/unified", "user_action": action},
         )
         if gate_err is not None:
             return gate_err
+
+    decision_pm = _resolved_chat_model(settings, "decision_report", body.model_option_id, profile=prof)
+    revision_pm = _resolved_chat_model(settings, "report_revision", body.model_option_id, profile=prof)
+    chat_pm = _resolved_chat_model(settings, "shadow_chat", body.model_option_id, profile=prof)
+    turn_llm_pm = revision_pm if rev_id_u else chat_pm
 
     if message:
         append_message(thread, role="user", content=message, mode=mode)
@@ -1833,7 +2005,7 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
     try:
         assistant_text = ""
         if action == "generate_decision_report":
-            ctx, _ = _build_context(settings)
+            ctx, _ = _build_context(settings, llm_model=decision_pm)
             trace = run_pipeline(ctx, message or "Help me decide.", persist_trace=True)
             decision_trace = trace.model_dump(mode="json")
             mode = "decision_report"
@@ -1852,8 +2024,10 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
                     msgs,
                     settings=settings,
                     thread_id=str(thread.get("thread_id") or "") or None,
+                    report_revision_decision_id=rev_id_u,
                     working_summary=str(thread.get("working_summary") or ""),
                     temporary_context_prompt=format_temporary_context_prompt(thread),
+                    llm_model=turn_llm_pm,
                 )
                 assistant_text = out.reply.strip()
                 append_temporary_context_items(thread, out.thread_only_items)
@@ -1874,8 +2048,10 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
                     msgs,
                     settings=settings,
                     thread_id=str(thread.get("thread_id") or "") or None,
+                    report_revision_decision_id=rev_id_u,
                     working_summary=str(thread.get("working_summary") or ""),
                     temporary_context_prompt=format_temporary_context_prompt(thread),
+                    llm_model=turn_llm_pm,
                 )
                 assistant_text = out.reply.strip()
                 append_temporary_context_items(thread, out.thread_only_items)
@@ -1893,6 +2069,7 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
                     _out = run_shadow_turn(
                         [{"role": "user", "content": message}],
                         settings=settings,
+                        llm_model=turn_llm_pm,
                     )
                     rec = _out.profile_record_texts
                     if rec:
@@ -2081,16 +2258,41 @@ def set_shadow_report_context(thread_id: str, body: ShadowReportContextRequest) 
 
 
 @app.post("/api/shadow-chat/threads/{thread_id}/messages")
-def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -> dict:
+def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, request: Request) -> dict:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
     thread = _load_thread_or_404(thread_id, uid=uid)
+    ar_ctx0 = thread.get("active_report_context") or {}
+    rev_id_gate: str | None = None
+    if isinstance(ar_ctx0, dict) and str(ar_ctx0.get("mode") or "") == "revision":
+        d_gate = str(ar_ctx0.get("decision_id") or "").strip()
+        if d_gate:
+            rev_id_gate = d_gate
+    if str(body.user_action or "") == "generate_decision_report":
+        credit_feature: CreditFeature = "decision_report"
+    elif rev_id_gate:
+        credit_feature = "report_revision"
+    else:
+        credit_feature = "shadow_chat"
+    prof = load_user_profile(settings)
+    rid = _credit_header_request_id(request) or (body.credit_request_id or "").strip() or f"shadow_post:{thread_id}:{uuid.uuid4().hex}"
+    tx, gate_err = _credit_gate(
+        settings,
+        credit_feature,
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/shadow-chat/threads/messages", "thread_id": thread_id},
+    )
+    if gate_err is not None:
+        return gate_err
+    chat_pm = _resolved_chat_model(settings, credit_feature, body.model_option_id, profile=prof)
     mode = str(body.mode or thread.get("mode") or "normal")
     msg = body.message.strip()
     effective_msg = merge_clarification_answers(msg, body.clarification_answers)
     if body.clarification_answers:
         try:
-            ctx0, _ = _build_context(settings)
+            ctx0, _ = _build_context(settings, llm_model=chat_pm)
             persist_clarification_followup(
                 settings,
                 thread=thread,
@@ -2142,15 +2344,20 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
     profile_updates: list[str] = []
     thread_context_kept = False
     if body.user_action == "generate_decision_report":
-        ctx, _ = _build_context(settings)
-        trace = run_pipeline(
-            ctx,
-            effective_msg,
-            persist_trace=True,
-            clarification_answers=body.clarification_answers,
-            save_clarification_to_profile=body.save_clarification_to_profile,
-            clarification_profile_merge_done_externally=bool(body.clarification_answers),
-        )
+        try:
+            ctx, _ = _build_context(settings, llm_model=chat_pm)
+            trace = run_pipeline(
+                ctx,
+                effective_msg,
+                persist_trace=True,
+                clarification_answers=body.clarification_answers,
+                save_clarification_to_profile=body.save_clarification_to_profile,
+                clarification_profile_merge_done_externally=bool(body.clarification_answers),
+            )
+        except Exception:
+            if tx is not None:
+                refund_for_transaction(tx, "Shadow post decision report failed", settings=settings)
+            raise
         decision_trace = trace.model_dump(mode="json")
         thread["mode"] = "decision_report"
         tr_dump = trace.model_dump(mode="json")
@@ -2171,27 +2378,28 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest) -
         )
     else:
         msgs = _slice_shadow_messages(thread)
-        ar_ctx = thread.get("active_report_context") or {}
-        rev_id: str | None = None
-        if isinstance(ar_ctx, dict) and str(ar_ctx.get("mode") or "") == "revision":
-            d0 = str(ar_ctx.get("decision_id") or "").strip()
-            if d0:
-                rev_id = d0
+        rev_id = rev_id_gate
         buddy_kw = _maybe_slime_buddy_turn_params(
             settings,
             thread,
             intent_probe=intent_probe,
             chat_intent_label=intent.intent,
         )
-        out = run_shadow_turn(
-            msgs,
-            settings=settings,
-            thread_id=str(thread.get("thread_id") or "") or None,
-            report_revision_decision_id=rev_id,
-            working_summary=str(thread.get("working_summary") or ""),
-            temporary_context_prompt=format_temporary_context_prompt(thread),
-            **buddy_kw,
-        )
+        try:
+            out = run_shadow_turn(
+                msgs,
+                settings=settings,
+                thread_id=str(thread.get("thread_id") or "") or None,
+                report_revision_decision_id=rev_id,
+                working_summary=str(thread.get("working_summary") or ""),
+                temporary_context_prompt=format_temporary_context_prompt(thread),
+                llm_model=chat_pm,
+                **buddy_kw,
+            )
+        except Exception:
+            if tx is not None:
+                refund_for_transaction(tx, "Shadow post chat failed", settings=settings)
+            raise
         append_temporary_context_items(thread, out.thread_only_items)
         thread_context_kept = bool(out.thread_only_items)
         profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
@@ -2229,7 +2437,19 @@ def stream_shadow_chat_message(
 ):
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
-    _load_thread_or_404(thread_id, uid=uid)
+    thread_pre = _load_thread_or_404(thread_id, uid=uid)
+    ar_ctx_pre = thread_pre.get("active_report_context") or {}
+    rev_id_pre: str | None = None
+    if isinstance(ar_ctx_pre, dict) and str(ar_ctx_pre.get("mode") or "") == "revision":
+        d_pre = str(ar_ctx_pre.get("decision_id") or "").strip()
+        if d_pre:
+            rev_id_pre = d_pre
+    if str(body.user_action or "") == "generate_decision_report":
+        stream_credit_feature: CreditFeature = "decision_report"
+    elif rev_id_pre:
+        stream_credit_feature = "report_revision"
+    else:
+        stream_credit_feature = "shadow_chat"
     hdr = _credit_header_request_id(request)
     body_rid = (body.credit_request_id or "").strip() or None
     rid = hdr or body_rid or (
@@ -2237,14 +2457,20 @@ def stream_shadow_chat_message(
         if body.client_turn_seq is not None
         else f"shadow_stream:{thread_id}:{uuid.uuid4().hex}"
     )
+    prof = load_user_profile(settings)
     credit_tx, gate_err = _credit_gate(
         settings,
-        "shadow_chat",
+        stream_credit_feature,
         request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
         metadata={"endpoint": "shadow_stream", "thread_id": thread_id},
     )
     if gate_err is not None:
         return gate_err
+    chat_pm_outer = _resolved_chat_model(
+        settings, stream_credit_feature, body.model_option_id, profile=prof
+    )
 
     def _gen():
         tid = thread_id
@@ -2256,7 +2482,7 @@ def stream_shadow_chat_message(
             effective_message = merge_clarification_answers(message, body.clarification_answers)
             if body.clarification_answers:
                 try:
-                    ctx0, _ = _build_context(settings)
+                    ctx0, _ = _build_context(settings, llm_model=chat_pm_outer)
                     persist_clarification_followup(
                         settings,
                         thread=thread,
@@ -2332,7 +2558,7 @@ def stream_shadow_chat_message(
             user_row = append_message(thread, role="user", content=effective_message, mode=mode, intent=intent.intent)
             user_msg_id = str(user_row.get("id") or "")
 
-            ctx, _ = _build_context(settings)
+            ctx, _ = _build_context(settings, llm_model=chat_pm_outer)
             profile = load_user_profile(settings)
             events = list(thread.get("clarification_events") or [])
             recent_slice = [
@@ -2425,7 +2651,7 @@ def stream_shadow_chat_message(
             if body.user_action == "generate_decision_report":
                 if ex is not None:
                     ex.shutdown(wait=False, cancel_futures=True)
-                ctx, _ = _build_context(settings)
+                ctx, _ = _build_context(settings, llm_model=chat_pm_outer)
                 trace = run_pipeline(
                     ctx,
                     message,
@@ -2464,12 +2690,7 @@ def stream_shadow_chat_message(
                 return
 
             msgs = _slice_shadow_messages(thread)
-            ar_ctx = thread.get("active_report_context") or {}
-            rev_id: str | None = None
-            if isinstance(ar_ctx, dict) and str(ar_ctx.get("mode") or "") == "revision":
-                d0 = str(ar_ctx.get("decision_id") or "").strip()
-                if d0:
-                    rev_id = d0
+            rev_id = rev_id_pre
             buddy_kw = _maybe_slime_buddy_turn_params(
                 settings,
                 thread,
@@ -2484,6 +2705,7 @@ def stream_shadow_chat_message(
                 report_revision_decision_id=rev_id,
                 working_summary=str(thread.get("working_summary") or ""),
                 temporary_context_prompt=format_temporary_context_prompt(thread),
+                llm_model=chat_pm_outer,
                 **buddy_kw,
             )
             append_temporary_context_items(thread, out.thread_only_items)
@@ -2702,14 +2924,18 @@ def stream_shadow_decision_report(
     hdr = _credit_header_request_id(request)
     body_rid = (body.credit_request_id or "").strip() or None
     rid = hdr or body_rid or f"decision_report_stream:{thread_id}:{uuid.uuid4().hex}"
+    prof = load_user_profile(settings)
     credit_tx, gate_err = _credit_gate(
         settings,
         "decision_report",
         request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
         metadata={"endpoint": "decision_report_stream", "thread_id": thread_id},
     )
     if gate_err is not None:
         return gate_err
+    decision_pm = _resolved_chat_model(settings, "decision_report", body.model_option_id, profile=prof)
 
     def _gen():
         t0 = datetime.now(timezone.utc)
@@ -2717,7 +2943,7 @@ def stream_shadow_decision_report(
         try:
             thread = load_thread(thread_id, user_id=uid, allow_create=False)
             tid = str(thread.get("thread_id") or thread_id)
-            ctx, _ = _build_context(settings)
+            ctx, _ = _build_context(settings, llm_model=decision_pm)
             prompt = body.decision_prompt.strip()
             if body.clarification_answers:
                 persist_clarification_followup(
@@ -2826,6 +3052,7 @@ def stream_shadow_decision_report(
 
 class PersonalizationIngestRequest(BaseModel):
     text: str = Field(min_length=1)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 @app.post("/api/personalization/ingest", response_model=None)
@@ -2833,7 +3060,15 @@ def personalization_ingest(body: PersonalizationIngestRequest, request: Request)
     """Analyze pasted/exported chat or email text; merge behavioral insights into UserProfile (+ Tier 3)."""
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"personalization:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "memory_import", request_id=rid, metadata={"endpoint": "/api/personalization/ingest"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "memory_import",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/personalization/ingest"},
+    )
     if gate_err is not None:
         return gate_err
     if not (settings.openai_api_key or "").strip():
@@ -2841,7 +3076,9 @@ def personalization_ingest(body: PersonalizationIngestRequest, request: Request)
             refund_for_transaction(tx, "OpenAI not configured", settings=settings)
         raise HTTPException(status_code=503, detail="Personalization ingest requires OPENAI_API_KEY")
     try:
-        merged, ext, path = ingest_personalization_text(body.text.strip(), settings=settings)
+        merged, ext, path = ingest_personalization_text(
+            body.text.strip(), settings=settings, model_option_id=body.model_option_id
+        )
     except ValueError as e:
         if tx is not None:
             refund_for_transaction(tx, "Personalization validation error", settings=settings)
@@ -2868,7 +3105,15 @@ def shadow_chat(body: ShadowChatRequest, request: Request):
     """Dialogue with the user's shadow self (not a therapist); no decisions. Updates shadow-self notes."""
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"shadow_chat:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "shadow_chat", request_id=rid, metadata={"endpoint": "/api/shadow/chat"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "shadow_chat",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/shadow/chat"},
+    )
     if gate_err is not None:
         return gate_err
     if not (settings.openai_api_key or "").strip():
@@ -2877,7 +3122,8 @@ def shadow_chat(body: ShadowChatRequest, request: Request):
         raise HTTPException(status_code=503, detail="Shadow chat requires OPENAI_API_KEY")
     try:
         msgs = [m.model_dump() for m in body.messages]
-        out = run_shadow_turn(msgs, settings=settings)
+        chat_pm = _resolved_chat_model(settings, "shadow_chat", body.model_option_id, profile=prof)
+        out = run_shadow_turn(msgs, settings=settings, llm_model=chat_pm)
         reply = out.reply
         flag = out.suggest_decision_navigation
         state = out.state
@@ -2944,7 +3190,6 @@ def option_chat(body: OptionChatRequest, request: Request):
         history_lines.append(f"{label}: {content}")
     history_block = "\n".join(history_lines) if history_lines else "(none)"
 
-    llm = build_openai_llm(settings, temperature=0.42)
     prompt = (
         "You are an implementation copilot for a decision support app.\n"
         "Answer the user's follow-up about ONE selected option, grounded in this trace only.\n"
@@ -2964,9 +3209,19 @@ def option_chat(body: OptionChatRequest, request: Request):
         "Return JSON with one field: answer."
     )
     rid = _credit_header_request_id(request) or f"option_chat:{trace.decision_id}:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "shadow_chat", request_id=rid, metadata={"endpoint": "/api/option-chat"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "shadow_chat",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/option-chat"},
+    )
     if gate_err is not None:
         return gate_err
+    chat_pm = _resolved_chat_model(settings, "shadow_chat", body.model_option_id, profile=prof)
+    llm = build_openai_llm(settings, temperature=0.42, model=chat_pm)
     try:
         out = structured_predict(llm, OptionChatReply, prompt)
         if isinstance(out, OptionChatReply):
@@ -3014,7 +3269,7 @@ def _fallback_parse_ics(ics_text: str) -> list[dict]:
 
 
 @app.post("/api/agility-preview")
-def agility_preview(body: AgilityPreviewRequest) -> dict:
+def agility_preview(body: AgilityPreviewRequest, request: Request) -> dict:
     """Structured consequence-focused preview for execution planning (no probability language in schema)."""
     settings = _settings_for_active_user()
     try:
@@ -3065,7 +3320,20 @@ def agility_preview(body: AgilityPreviewRequest) -> dict:
         )
         return fallback.model_dump(mode="json")
 
-    llm = build_openai_llm(settings, temperature=0.45)
+    rid = _credit_header_request_id(request) or f"agility_preview:{body.decision_id.strip()}:{uuid.uuid4().hex}"
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "task_decomposition",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/agility-preview", "decision_id": body.decision_id.strip()},
+    )
+    if gate_err is not None:
+        return gate_err
+    pm = _resolved_chat_model(settings, "task_decomposition", body.model_option_id, profile=prof)
+    llm = build_openai_llm(settings, temperature=0.45, model=pm)
     prompt = (
         "You are an execution planning assistant.\n"
         "Return a structured agility preview after the user selected one option.\n"
@@ -3087,6 +3355,8 @@ def agility_preview(body: AgilityPreviewRequest) -> dict:
             return out.model_dump(mode="json")
         return AgilityPreviewResponse.model_validate(out).model_dump(mode="json")
     except Exception as e:
+        if tx is not None:
+            refund_for_transaction(tx, "Agility preview LLM failed", settings=settings)
         raise HTTPException(status_code=502, detail=f"agility_preview_failed: {e!s}") from e
 
 
@@ -3257,9 +3527,18 @@ def calendar_delete_event(event_id: str) -> dict[str, Any]:
 def calendar_agent_parse(body: CalendarAgentParseRequest, request: Request):
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"cal_parse:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "calendar_agent", request_id=rid, metadata={"endpoint": "/api/calendar-agent/parse"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "calendar_agent",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/calendar-agent/parse"},
+    )
     if gate_err is not None:
         return gate_err
+    cal_pm = _resolved_chat_model(settings, "calendar_agent", body.model_option_id, profile=prof)
     try:
         intent = parse_calendar_intent(
             body.text,
@@ -3270,6 +3549,7 @@ def calendar_agent_parse(body: CalendarAgentParseRequest, request: Request):
             },
             settings=settings,
             source=_agent_calendar_source(body.source),
+            llm_model=cal_pm,
         )
         return {"intent": intent.model_dump(mode="json")}
     except Exception:
@@ -3283,7 +3563,15 @@ def calendar_agent_draft(body: CalendarAgentDraftRequest, request: Request):
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
     rid = _credit_header_request_id(request) or f"cal_draft:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "calendar_agent", request_id=rid, metadata={"endpoint": "/api/calendar-agent/draft"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "calendar_agent",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/calendar-agent/draft"},
+    )
     if gate_err is not None:
         return gate_err
     try:
@@ -3340,10 +3628,13 @@ def calendar_agent_confirm(body: CalendarAgentConfirmRequest) -> dict[str, Any]:
 def calendar_agent_alternatives(body: CalendarAgentAlternativesRequest, request: Request):
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"cal_alt:{body.draft_id.strip()}"
+    prof = load_user_profile(settings)
     tx, gate_err = _credit_gate(
         settings,
         "calendar_agent",
         request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
         metadata={"endpoint": "/api/calendar-agent/alternatives"},
     )
     if gate_err is not None:
@@ -3373,10 +3664,13 @@ def calendar_agent_from_report(body: CalendarFromReportRequest, request: Request
     if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
         raise HTTPException(status_code=404, detail="trace_not_found")
     rid = _credit_header_request_id(request) or f"cal_from_report:{body.decision_id.strip()}"
+    prof = load_user_profile(settings)
     tx, gate_err = _credit_gate(
         settings,
         "calendar_agent",
         request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
         metadata={"endpoint": "/api/calendar-agent/from-report"},
     )
     if gate_err is not None:
@@ -3450,6 +3744,7 @@ def _run_slime_voice_pipeline(
     slime_profile_s: str | None,
     recent_ui_s: str | None,
     settings,
+    llm_model: str | None = None,
 ) -> dict[str, Any]:
     from foresight_x.chat.conversation_service import (
         ensure_slime_voice_thread,
@@ -3591,7 +3886,7 @@ def _run_slime_voice_pipeline(
         recent_ui_context=ruc,
     )
     t_route0 = time.perf_counter()
-    route = route_slime_voice_command(transcript, ctx, settings=settings)
+    route = route_slime_voice_command(transcript, ctx, settings=settings, llm_model=llm_model)
     route_ms = (time.perf_counter() - t_route0) * 1000
 
     tr_timing = tr.timing or {}
@@ -3676,6 +3971,7 @@ def _run_slime_voice_pipeline(
         source="slime_voice",
         modality="voice",
         clarification_answers=None,
+        llm_model=llm_model,
     )
     timing["tool_execute_ms"] = (time.perf_counter() - t_conv0) * 1000
     timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
@@ -3717,7 +4013,15 @@ def slime_tts(body: SlimeTtsBody, request: Request):
     """Text → MP3 via OpenAI TTS. Used by Slime Buddy for auto-play after voice-command (browser-friendly)."""
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"slime_tts:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "tts", request_id=rid, metadata={"endpoint": "/api/slime/tts"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "tts",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/slime/tts"},
+    )
     if gate_err is not None:
         return gate_err
     if not (settings.openai_api_key or "").strip():
@@ -3788,6 +4092,7 @@ async def slime_voice_command(
     thread_id: str | None = Form(None),
     slime_profile: str | None = Form(None),
     recent_ui_context: str | None = Form(None),
+    model_option_id: str | None = Form(default=None),
 ) -> JSONResponse:
     """Push-to-talk: local ASR (default faster-whisper) + GPT-4o-mini tool routing."""
     settings = _settings_for_active_user()
@@ -3795,9 +4100,18 @@ async def slime_voice_command(
     if not raw:
         raise HTTPException(status_code=400, detail="empty_audio")
     rid = _credit_header_request_id(request) or f"slime_voice:{uuid.uuid4().hex}"
-    tx, gate_err = _credit_gate(settings, "slime_voice", request_id=rid, metadata={"endpoint": "/api/slime/voice-command"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "slime_voice",
+        request_id=rid,
+        model_option_id=model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/slime/voice-command"},
+    )
     if gate_err is not None:
         return gate_err
+    voice_pm = _resolved_chat_model(settings, "slime_voice", model_option_id, profile=prof)
     try:
         body = await asyncio.to_thread(
             _run_slime_voice_pipeline,
@@ -3808,6 +4122,7 @@ async def slime_voice_command(
             slime_profile,
             recent_ui_context,
             settings,
+            voice_pm,
         )
     except ValueError as e:
         if tx is not None:
@@ -3837,7 +4152,11 @@ async def slime_voice_command(
 
 
 @app.get("/api/traces/{decision_id}/resource-drops", response_model=None)
-def get_trace_resource_drops(decision_id: str, request: Request):
+def get_trace_resource_drops(
+    decision_id: str,
+    request: Request,
+    model_option_id: str | None = Query(default=None, max_length=64),
+):
     """Post-hoc resource suggestions (does not block pipeline); Tavily optional."""
     settings = _settings_for_active_user()
     try:
@@ -3848,10 +4167,13 @@ def get_trace_resource_drops(decision_id: str, request: Request):
     if not _trace_visible_to_current(trace_user, settings.foresight_user_id):
         raise HTTPException(status_code=404, detail=f"Trace not found: {decision_id}")
     rid = _credit_header_request_id(request) or f"resource_drops:{decision_id}"
+    prof = load_user_profile(settings)
     tx, gate_err = _credit_gate(
         settings,
         "resource_search",
         request_id=rid,
+        model_option_id=model_option_id,
+        profile=prof,
         metadata={"endpoint": "/api/traces/resource-drops", "decision_id": decision_id},
     )
     if gate_err is not None:
@@ -3911,12 +4233,14 @@ class DiaryGenerateBody(BaseModel):
     date: str = Field(min_length=10, max_length=10)
     force: bool = False
     timezone: str = Field(default="UTC", max_length=80)
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class DiaryRegenerateCleanBody(BaseModel):
     date: str = Field(min_length=10, max_length=10)
     timezone: str = Field(default="UTC", max_length=80)
     confirm_replace: bool = False
+    model_option_id: str | None = Field(default=None, max_length=64)
 
 
 class DiarySaveInsightBody(BaseModel):
@@ -4000,11 +4324,20 @@ def diary_generate(body: DiaryGenerateBody, request: Request):
         return {"ok": True, "cached": True, "entry": existing.model_dump(mode="json")}
 
     rid = _credit_header_request_id(request) or f"diary_gen:{body.date.strip()}:{body.force}"
-    tx, gate_err = _credit_gate(settings, "diary_generate", request_id=rid, metadata={"endpoint": "/api/diary/generate"})
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "diary_generate",
+        request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/diary/generate"},
+    )
     if gate_err is not None:
         return gate_err
 
-    entry = generate_diary_entry(uid, bundle, settings=settings)
+    diary_pm = _resolved_chat_model(settings, "diary_generate", body.model_option_id, profile=prof)
+    entry = generate_diary_entry(uid, bundle, settings=settings, llm_model=diary_pm)
     if entry is None:
         if tx is not None:
             refund_for_transaction(tx, "Diary had nothing to synthesize", settings=settings)
@@ -4058,16 +4391,20 @@ def diary_regenerate_cleaner(body: DiaryRegenerateCleanBody, request: Request):
         }
 
     rid = _credit_header_request_id(request) or f"diary_regen:{body.date.strip()}"
+    prof = load_user_profile(settings)
     tx, gate_err = _credit_gate(
         settings,
         "diary_generate",
         request_id=rid,
+        model_option_id=body.model_option_id,
+        profile=prof,
         metadata={"endpoint": "/api/diary/regenerate-cleaner"},
     )
     if gate_err is not None:
         return gate_err
 
-    entry = generate_diary_entry(uid, bundle, settings=settings)
+    diary_pm = _resolved_chat_model(settings, "diary_generate", body.model_option_id, profile=prof)
+    entry = generate_diary_entry(uid, bundle, settings=settings, llm_model=diary_pm)
     if entry is None:
         if tx is not None:
             refund_for_transaction(tx, "Diary regenerate had nothing to synthesize", settings=settings)

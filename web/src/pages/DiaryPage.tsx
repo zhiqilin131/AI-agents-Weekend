@@ -14,6 +14,9 @@ import { DiaryTrackViewport, diarySlotAnchorForDate } from '../features/diary/Di
 import { DiarySlimeWalker } from '../features/diary/DiarySlimeWalker';
 import type { DiaryEntryDto, DiaryJumpPhase, DiaryMonthDay } from '../features/diary/types';
 import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
+import { ModelSelector } from '../features/models/ModelSelector';
+import { buildCheaperModelHint } from '../features/models/slimeModelsApi';
+import { useSlimeModelCatalog } from '../features/models/useSlimeModelCatalog';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../hooks/useSlimeProfile';
 import { apiFetch } from '../utils/apiFetch';
 import { apiFetchErrorMessage } from '../utils/apiOrigin';
@@ -33,6 +36,13 @@ function usePrefersReducedMotion(): boolean {
 
 export default function DiaryPage() {
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
+  const slimeModels = useSlimeModelCatalog();
+  const [diaryModelOptionId, setDiaryModelOptionId] = useState('');
+  useEffect(() => {
+    if (slimeModels.ready && slimeModels.defaultModel && !diaryModelOptionId) {
+      setDiaryModelOptionId(slimeModels.defaultModel);
+    }
+  }, [slimeModels.ready, slimeModels.defaultModel, diaryModelOptionId]);
   const { slimeProfile } = useSlimeProfile();
   const profile = slimeProfile ?? DEFAULT_SLIME_PROFILE;
   const reducedMotion = usePrefersReducedMotion();
@@ -210,6 +220,7 @@ export default function DiaryPage() {
           date: selectedDate,
           timezone: tz,
           confirm_replace: Boolean(entry.user_edited),
+          ...(diaryModelOptionId ? { model_option_id: diaryModelOptionId } : {}),
         }),
       });
       const j = (await r.json()) as {
@@ -218,6 +229,11 @@ export default function DiaryPage() {
         detail?: string;
       };
       if (r.status === 402) {
+        const mid = diaryModelOptionId || slimeModels.defaultModel || 'little';
+        const cheaperHint =
+          slimeModels.models.length > 0
+            ? await buildCheaperModelHint('diary_generate', mid, slimeModels.models)
+            : undefined;
         showInsufficient({
           required: Number((j as { required?: number }).required ?? 0),
           balance:
@@ -228,6 +244,7 @@ export default function DiaryPage() {
             typeof (j as { message?: string }).message === 'string'
               ? (j as { message: string }).message
               : 'You need more Slime Credits for this action.',
+          cheaperHint,
         });
         return;
       }
@@ -265,7 +282,12 @@ export default function DiaryPage() {
           'Content-Type': 'application/json',
           'X-Credit-Request-Id': diaryCredit,
         },
-        body: JSON.stringify({ date: selectedDate, timezone: tz, force: true }),
+        body: JSON.stringify({
+          date: selectedDate,
+          timezone: tz,
+          force: true,
+          ...(diaryModelOptionId ? { model_option_id: diaryModelOptionId } : {}),
+        }),
       });
       const j = (await r.json()) as {
         empty?: boolean;
@@ -278,11 +300,17 @@ export default function DiaryPage() {
         message?: string;
       };
       if (r.status === 402) {
+        const mid = diaryModelOptionId || slimeModels.defaultModel || 'little';
+        const cheaperHint =
+          slimeModels.models.length > 0
+            ? await buildCheaperModelHint('diary_generate', mid, slimeModels.models)
+            : undefined;
         showInsufficient({
           required: Number(j.required ?? 0),
           balance: typeof j.balance === 'number' ? j.balance : null,
           message:
             typeof j.message === 'string' ? j.message : 'You need more Slime Credits for this action.',
+          cheaperHint,
         });
         return;
       }
@@ -332,6 +360,20 @@ export default function DiaryPage() {
         </header>
 
         <div className="mb-4 flex flex-wrap items-center justify-center gap-2">
+          <div className="flex w-full max-w-md flex-col sm:w-auto sm:min-w-[280px]">
+            <ModelSelector
+              feature="diary_generate"
+              selectedModelId={diaryModelOptionId || slimeModels.defaultModel}
+              onChange={setDiaryModelOptionId}
+              models={slimeModels.models}
+              selectorEnabled={slimeModels.selectorEnabled}
+              showCostPreview
+              variant="compact"
+              label="Diary model"
+              hint="Defaults to the lowest tier; higher tiers cost more credits per generate/regenerate."
+              disabled={genBusy || regenBusy}
+            />
+          </div>
           <button
             type="button"
             className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm hover:border-violet-300"

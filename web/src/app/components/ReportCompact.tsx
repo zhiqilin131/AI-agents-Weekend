@@ -24,6 +24,8 @@ import { TradeoffsRadarChart } from './TradeoffsRadarChart';
 import { TypewriterText } from './TypewriterText';
 import { cn } from './ui/utils';
 import { apiFetch } from '../../utils/apiFetch';
+import { ModelSelector } from '../../features/models/ModelSelector';
+import { useSlimeModelCatalog } from '../../features/models/useSlimeModelCatalog';
 import { fetchCalendarDraftFromReport } from '../../utils/calendarAgentApi';
 import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from '../../utils/executionStorageKeys';
 import type { TraceUserStateLite } from '../../utils/evidenceDetailFromTrace';
@@ -131,6 +133,13 @@ export function ReportCompact({
   shadowThreadId = null,
 }: ReportCompactProps) {
   const navigate = useNavigate();
+  const slimeModels = useSlimeModelCatalog();
+  const [modelOptionId, setModelOptionId] = useState('');
+  useEffect(() => {
+    if (slimeModels.ready && slimeModels.defaultModel && !modelOptionId) {
+      setModelOptionId(slimeModels.defaultModel);
+    }
+  }, [slimeModels.ready, slimeModels.defaultModel, modelOptionId]);
   const futures = (fullTrace?.futures as TraceFuture[]) ?? [];
   const evidence = fullTrace?.evidence as TraceEvidence | undefined;
   const memoryTrace = fullTrace?.memory as TraceMemoryBlock | undefined;
@@ -167,7 +176,8 @@ export function ReportCompact({
     if (isStreaming) return;
     let cancelled = false;
     setResourceDropsLoading(true);
-    void apiFetch(`/api/traces/${encodeURIComponent(decisionId)}/resource-drops`)
+    const q = modelOptionId ? `?model_option_id=${encodeURIComponent(modelOptionId)}` : '';
+    void apiFetch(`/api/traces/${encodeURIComponent(decisionId)}/resource-drops${q}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('resource_drops'))))
       .then((data: { resource_drops?: ResourceDrop[] }) => {
         if (!cancelled) setResourceDrops(Array.isArray(data.resource_drops) ? data.resource_drops : []);
@@ -181,7 +191,7 @@ export function ReportCompact({
     return () => {
       cancelled = true;
     };
-  }, [decisionId, isStreaming]);
+  }, [decisionId, isStreaming, modelOptionId]);
 
   const suppressNextCalendar = useMemo(
     () => !resourceDropsLoading && resourceDrops.some((d) => d.id === RESOURCE_DROP_CALENDAR_ID),
@@ -207,6 +217,7 @@ export function ReportCompact({
           option_id: optionId,
           question,
           chat_history: history,
+          ...(modelOptionId ? { model_option_id: modelOptionId } : {}),
         }),
       });
       if (!res.ok) {
@@ -586,6 +597,21 @@ export function ReportCompact({
             </button>
           </div>
           <div className="p-4 space-y-3">
+            <div className="rounded-lg border border-gray-100 bg-white/80 px-2 py-2">
+              <ModelSelector
+                feature="shadow_chat"
+                selectedModelId={modelOptionId || slimeModels.defaultModel}
+                onChange={setModelOptionId}
+                models={slimeModels.models}
+                selectorEnabled={slimeModels.selectorEnabled}
+                showCostPreview={false}
+                variant="compact"
+                elevated={false}
+                label="Model (coach + resource links)"
+                hint="Option coach chat and resource fetches respect this tier."
+                disabled={coachBusy}
+              />
+            </div>
             <div className="max-h-52 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-2 space-y-2">
               {activeThread.length === 0 ? (
                 <p className="text-xs text-gray-500">

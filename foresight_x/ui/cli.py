@@ -16,14 +16,14 @@ from foresight_x.retrieval.world_cache import WorldKnowledge
 from foresight_x.schemas import DecisionTrace
 
 
-def _build_context(settings: Settings) -> tuple[PipelineContext, list[str]]:
+def _build_context(settings: Settings, *, llm_model: str | None = None) -> tuple[PipelineContext, list[str]]:
     notes: list[str] = []
     llm = None
     user_memory = None
     world = None
     if settings.openai_api_key:
         try:
-            llm = build_openai_llm(settings)
+            llm = build_openai_llm(settings, model=llm_model)
         except Exception as exc:
             notes.append(f"LLM unavailable: {exc}")
         try:

@@ -465,6 +465,12 @@ class UserProfile(BaseModel):
         max_length=80,
         description="IANA timezone for reminders and quiet hours (e.g. America/Los_Angeles).",
     )
+    #: Product model tier id (``little`` / ``swift`` / ``balanced`` / ``deep`` / …); server maps to ``OPENAI_MODEL_*``.
+    default_model_option_id: str = Field(
+        default="",
+        max_length=64,
+        description="User default Slime model option id for LLM-backed features.",
+    )
 
     @model_validator(mode="before")
     @classmethod

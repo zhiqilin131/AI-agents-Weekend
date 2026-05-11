@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from foresight_x.config import Settings, load_settings
+from foresight_x.llm.model_resolve import get_model_option_for_request
 from foresight_x.extraction.atomic_claims import run_atomic_claims
 from foresight_x.memory.profile_store import empty_profile, load_profile as load_tier3_profile, save_profile as save_tier3_profile
 from foresight_x.orchestration.llm_factory import build_openai_llm
@@ -138,7 +139,14 @@ def _dedupe_extend(existing: list[str], additions: list[str], *, max_items: int,
     return out
 
 
-def _merge_profiles(base: UserProfile, ext: PersonalizationExtract, *, stamp: str) -> UserProfile:
+def _merge_profiles(
+    base: UserProfile,
+    ext: PersonalizationExtract,
+    *,
+    stamp: str,
+    settings: Settings,
+    llm_cat: Any | None = None,
+) -> UserProfile:
     themes = _dedupe_extend(list(base.recurring_themes), ext.recurring_themes_add, max_items=36)
     values = _dedupe_extend(list(base.values), ext.values_add, max_items=24)
     goals = _dedupe_extend(list(base.current_goals), ext.current_goals_add, max_items=24)
@@ -203,6 +211,8 @@ def _merge_profiles(base: UserProfile, ext: PersonalizationExtract, *, stamp: st
                 evidence=ev[:280],
                 predicate=pred[:200],
                 subject_ref=subj,
+                llm=llm_cat,
+                settings=settings,
             )
             recs.append(
                 ProfileMemoryFact(
@@ -224,6 +234,8 @@ def _merge_profiles(base: UserProfile, ext: PersonalizationExtract, *, stamp: st
                 evidence=ev[:280],
                 predicate=pred[:200],
                 subject_ref=subj,
+                llm=llm_cat,
+                settings=settings,
             )
             recs.append(
                 ProfileMemoryFact(
@@ -241,7 +253,12 @@ def _merge_profiles(base: UserProfile, ext: PersonalizationExtract, *, stamp: st
     return prof
 
 
-def ingest_personalization_text(raw: str, *, settings: Settings | None = None) -> tuple[UserProfile, PersonalizationExtract, str]:
+def ingest_personalization_text(
+    raw: str,
+    *,
+    settings: Settings | None = None,
+    model_option_id: str | None = None,
+) -> tuple[UserProfile, PersonalizationExtract, str]:
     """Run LLM extraction, merge into disk profile + Tier-3 mirror, return merged profile and extract."""
     s = settings or load_settings()
     text = (raw or "").strip()
@@ -253,7 +270,11 @@ def ingest_personalization_text(raw: str, *, settings: Settings | None = None) -
     if not (s.openai_api_key or "").strip():
         raise RuntimeError("OPENAI_API_KEY is required for personalization ingest")
 
-    llm_claims = build_openai_llm(s, temperature=0.12)
+    base_prof = load_user_profile(settings=s)
+    chat_model = get_model_option_for_request(
+        s, "memory_import", model_option_id, profile=base_prof
+    ).provider_model
+    llm_claims = build_openai_llm(s, temperature=0.12, model=chat_model)
     claims = run_atomic_claims(text, llm_claims, max_claims=24)
     claims_block = (
         "\n".join(f"{i + 1}. {c}" for i, c in enumerate(claims))
@@ -261,13 +282,16 @@ def ingest_personalization_text(raw: str, *, settings: Settings | None = None) -
         else "(empty — derive memory_facts_add from TEXT using one proposition per memory row.)"
     )
 
-    llm = build_openai_llm(s, temperature=0.35)
+    llm = build_openai_llm(s, temperature=0.35, model=chat_model)
     prompt = INGEST_PROMPT.format(text=text, claims_block=claims_block)
     ext = structured_predict(llm, PersonalizationExtract, prompt)
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    base = load_user_profile(settings=s)
-    merged = _merge_profiles(base, ext, stamp=stamp)
+    base = base_prof
+    llm_cat = None
+    if s.memory_fact_category_llm_refine and (s.openai_api_key or "").strip():
+        llm_cat = build_openai_llm(s, temperature=0.0)
+    merged = _merge_profiles(base, ext, stamp=stamp, settings=s, llm_cat=llm_cat)
     merged = rebuild_priority_lines_from_flat(merged, system_channel="personalize")
 
     uid = (s.foresight_user_id or "demo_user").strip() or "demo_user"

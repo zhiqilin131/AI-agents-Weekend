@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '../../app/components/ui/button';
 import { Input } from '../../app/components/ui/input';
 import { Label } from '../../app/components/ui/label';
@@ -7,6 +7,8 @@ import { Textarea } from '../../app/components/ui/textarea';
 import { cn } from '../../app/components/ui/utils';
 import type { SlimeCompanionRelationship, SlimeProfile } from '../../app/model';
 import { apiFetch } from '../../utils/apiFetch';
+import { ModelSelector } from '../models/ModelSelector';
+import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
 import {
   ACCESSORY_OPTIONS,
   COLOR_OPTIONS,
@@ -49,9 +51,17 @@ export function SlimePersonalizationForm({
   idPrefix?: string;
 }) {
   const nameId = `${idPrefix}-name`;
+  const slimeModels = useSlimeModelCatalog();
+  const [previewModelOptionId, setPreviewModelOptionId] = useState('');
   const [previewCtx, setPreviewCtx] = useState<'decision' | 'memory' | 'calendar' | 'casual'>('casual');
   const [previewLine, setPreviewLine] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+
+  useEffect(() => {
+    if (slimeModels.ready && slimeModels.defaultModel && !previewModelOptionId) {
+      setPreviewModelOptionId(slimeModels.defaultModel);
+    }
+  }, [slimeModels.ready, slimeModels.defaultModel, previewModelOptionId]);
 
   const persona = slimeDraft.persona ?? DEFAULT_SLIME_PERSONA;
 
@@ -84,6 +94,7 @@ export function SlimePersonalizationForm({
           },
           sample_context: previewCtx,
           slime_name: slimeDraft.name,
+          ...(previewModelOptionId ? { model_option_id: previewModelOptionId } : {}),
         }),
       });
       if (!r.ok) throw new Error('preview failed');
@@ -475,6 +486,19 @@ export function SlimePersonalizationForm({
         </div>
 
         <div className="mt-3 flex flex-col gap-2 rounded-lg border border-violet-100/90 bg-white/70 p-2">
+          <ModelSelector
+            feature="shadow_chat"
+            selectedModelId={previewModelOptionId || slimeModels.defaultModel}
+            onChange={setPreviewModelOptionId}
+            models={slimeModels.models}
+            selectorEnabled={slimeModels.selectorEnabled}
+            showCostPreview
+            variant="compact"
+            elevated={false}
+            label="Preview model"
+            hint="LLM used only for this sample line (default: lowest tier)."
+            disabled={previewBusy}
+          />
           <div className="flex flex-wrap items-center gap-2">
             <Label className="text-[10px] text-gray-600">Preview sample</Label>
             <select

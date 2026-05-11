@@ -27,6 +27,8 @@ class Settings(BaseSettings):
         # Allow ``Settings(chroma_persist_dir=..., foresight_data_dir=...)``; without this,
         # validation_alias-only fields ignore constructor kwargs and fall back to .env/defaults.
         populate_by_name=True,
+        # Credit multiplier fields use ``model_*`` names; exclude default ``model_`` protected namespace.
+        protected_namespaces=(),
     )
 
     tavily_api_key: str = Field(default="", validation_alias=AliasChoices("tavily_api_key", "TAVILY_API_KEY"))
@@ -64,6 +66,103 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("openai_embedding_model", "OPENAI_EMBEDDING_MODEL"),
     )
     openai_api_base: str | None = Field(default=None, validation_alias=AliasChoices("openai_api_base", "OPENAI_API_BASE"))
+    #: GPT-5 / reasoning models use OpenAI ``/v1/responses`` via LlamaIndex ``OpenAIResponses`` (see ``llm_factory``).
+    openai_responses_reasoning_effort: str = Field(
+        default="low",
+        validation_alias=AliasChoices(
+            "openai_responses_reasoning_effort",
+            "OPENAI_RESPONSES_REASONING_EFFORT",
+        ),
+    )
+    openai_responses_max_output_tokens: int | None = Field(
+        default=16384,
+        ge=256,
+        le=200_000,
+        validation_alias=AliasChoices(
+            "openai_responses_max_output_tokens",
+            "OPENAI_RESPONSES_MAX_OUTPUT_TOKENS",
+        ),
+    )
+    openai_responses_context_window: int | None = Field(
+        default=1_048_576,
+        ge=4096,
+        le=2_000_000,
+        validation_alias=AliasChoices(
+            "openai_responses_context_window",
+            "OPENAI_RESPONSES_CONTEXT_WINDOW",
+        ),
+    )
+    #: Slime model tiers: same OpenAI API key; map product ``model_option_id`` → ``OPENAI_MODEL_*`` env.
+    enable_model_selector: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("enable_model_selector", "ENABLE_MODEL_SELECTOR"),
+    )
+    default_model_option: str = Field(
+        default="little",
+        validation_alias=AliasChoices("default_model_option", "DEFAULT_MODEL_OPTION"),
+    )
+    #: Ultra-cheap tier (“Little Slime”); same key as other Slime tiers.
+    openai_model_little: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("openai_model_little", "OPENAI_MODEL_LITTLE"),
+    )
+    openai_model_swift: str = Field(
+        default="gpt-4.1-nano",
+        validation_alias=AliasChoices("openai_model_swift", "OPENAI_MODEL_SWIFT"),
+    )
+    openai_model_balanced: str = Field(
+        default="gpt-4.1-mini",
+        validation_alias=AliasChoices("openai_model_balanced", "OPENAI_MODEL_BALANCED"),
+    )
+    openai_model_deep: str = Field(
+        default="gpt-4.1",
+        validation_alias=AliasChoices("openai_model_deep", "OPENAI_MODEL_DEEP"),
+    )
+    openai_model_research: str = Field(
+        default="",
+        validation_alias=AliasChoices("openai_model_research", "OPENAI_MODEL_RESEARCH"),
+    )
+    #: Easter-egg tier “5.5” (``slime_55``); hidden in the UI until legendary mode is toggled client-side.
+    openai_model_slime_55: str = Field(
+        default="gpt-4.1",
+        validation_alias=AliasChoices("openai_model_slime_55", "OPENAI_MODEL_SLIME_55"),
+    )
+    model_little_multiplier: float = Field(
+        default=0.35,
+        ge=0.1,
+        le=100.0,
+        validation_alias=AliasChoices("model_little_multiplier", "MODEL_LITTLE_MULTIPLIER"),
+    )
+    model_swift_multiplier: float = Field(
+        default=2.25,
+        ge=0.1,
+        le=100.0,
+        validation_alias=AliasChoices("model_swift_multiplier", "MODEL_SWIFT_MULTIPLIER"),
+    )
+    model_balanced_multiplier: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=100.0,
+        validation_alias=AliasChoices("model_balanced_multiplier", "MODEL_BALANCED_MULTIPLIER"),
+    )
+    model_deep_multiplier: float = Field(
+        default=12.0,
+        ge=0.1,
+        le=100.0,
+        validation_alias=AliasChoices("model_deep_multiplier", "MODEL_DEEP_MULTIPLIER"),
+    )
+    model_research_multiplier: float = Field(
+        default=22.0,
+        ge=0.1,
+        le=100.0,
+        validation_alias=AliasChoices("model_research_multiplier", "MODEL_RESEARCH_MULTIPLIER"),
+    )
+    model_slime_55_multiplier: float = Field(
+        default=15.0,
+        ge=0.1,
+        le=100.0,
+        validation_alias=AliasChoices("model_slime_55_multiplier", "MODEL_SLIME_55_MULTIPLIER"),
+    )
     supabase_url: str = Field(default="", validation_alias=AliasChoices("supabase_url", "SUPABASE_URL"))
     supabase_service_role_key: str = Field(
         default="",
@@ -94,6 +193,14 @@ class Settings(BaseSettings):
     tier3_auto_update_every: int = Field(default=5, ge=0, validation_alias=AliasChoices("tier3_auto_update_every", "TIER3_AUTO_UPDATE_EVERY"))
     #: Require at least this many decisions before Tier 3 auto-refresh can run.
     tier3_min_decisions: int = Field(default=3, ge=1, validation_alias=AliasChoices("tier3_min_decisions", "TIER3_MIN_DECISIONS"))
+    #: When True (default), memory facts tagged ``other`` are re-bucketed with a small structured LLM call before rule fallback.
+    memory_fact_category_llm_refine: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "memory_fact_category_llm_refine",
+            "MEMORY_FACT_CATEGORY_LLM_REFINE",
+        ),
+    )
     #: Enable temporal graph memory augmentation on top of vector retrieval.
     graph_enabled: bool = Field(default=False, validation_alias=AliasChoices("graph_enabled", "GRAPH_ENABLED"))
     #: Blend ratio for graph surfaced episodes in retrieval [0..1].
@@ -185,11 +292,20 @@ class Settings(BaseSettings):
     credit_cost_shadow_chat: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_SHADOW_CHAT"))
     credit_cost_slime_chat: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_SLIME_CHAT"))
     credit_cost_slime_voice: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_SLIME_VOICE"))
-    credit_cost_decision_report: int = Field(default=5, ge=0, validation_alias=AliasChoices("CREDIT_COST_DECISION_REPORT"))
+    credit_cost_decision_report: int = Field(default=3, ge=0, validation_alias=AliasChoices("CREDIT_COST_DECISION_REPORT"))
     credit_cost_diary_generate: int = Field(default=2, ge=0, validation_alias=AliasChoices("CREDIT_COST_DIARY_GENERATE"))
     credit_cost_memory_import: int = Field(default=3, ge=0, validation_alias=AliasChoices("CREDIT_COST_MEMORY_IMPORT"))
     credit_cost_calendar_agent: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_CALENDAR_AGENT"))
-    credit_cost_resource_search: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_RESOURCE_SEARCH"))
+    credit_cost_resource_search: int = Field(default=2, ge=0, validation_alias=AliasChoices("CREDIT_COST_RESOURCE_SEARCH"))
+    credit_cost_report_revision: int = Field(
+        default=3, ge=0, validation_alias=AliasChoices("CREDIT_COST_REPORT_REVISION")
+    )
+    credit_cost_task_decomposition: int = Field(
+        default=2, ge=0, validation_alias=AliasChoices("CREDIT_COST_TASK_DECOMPOSITION")
+    )
+    credit_cost_outcome_reflection: int = Field(
+        default=2, ge=0, validation_alias=AliasChoices("CREDIT_COST_OUTCOME_REFLECTION")
+    )
     credit_cost_tts: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_TTS"))
     credit_cost_asr: int = Field(default=0, ge=0, validation_alias=AliasChoices("CREDIT_COST_ASR"))
 

@@ -12,6 +12,10 @@ import { parseSseBlocks } from '../../../utils/parseSse';
 import { refetchSlimeProfileGlobal } from '../../../hooks/useSlimeProfile';
 import { useExecutionStorageUserKey } from '../../../hooks/useExecutionStorageUserKey';
 import { useDecisionReportStream } from '../../../hooks/useDecisionReportStream';
+import { ModelSelector } from '../../../features/models/ModelSelector';
+import { buildCheaperModelHint } from '../../../features/models/slimeModelsApi';
+import { useSlimeModelCatalog } from '../../../features/models/useSlimeModelCatalog';
+import type { SlimeCreditFeature } from '../../../features/models/types';
 import { AgentPresence3DPanel } from './AgentPresence3DPanel';
 import { ChatMessageList } from './ChatMessageList';
 import { ChatSidebar } from './ChatSidebar';
@@ -45,6 +49,13 @@ export function ShadowChatShell({
   const navigate = useNavigate();
   const { session } = useAuth();
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
+  const slimeModels = useSlimeModelCatalog();
+  const [modelOptionId, setModelOptionId] = useState('');
+  useEffect(() => {
+    if (slimeModels.ready && slimeModels.defaultModel && !modelOptionId) {
+      setModelOptionId(slimeModels.defaultModel);
+    }
+  }, [slimeModels.ready, slimeModels.defaultModel, modelOptionId]);
   const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
   const [threads, setThreads] = useState<ShadowThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -354,6 +365,7 @@ export function ShadowChatShell({
             save_clarification_to_profile: Boolean(saveClarificationToProfile),
             client_turn_seq: streamSeq,
             credit_request_id: creditReq,
+            ...(modelOptionId ? { model_option_id: modelOptionId } : {}),
           }),
         });
       } catch (e) {
@@ -368,6 +380,13 @@ export function ShadowChatShell({
         } catch {
           /* ignore */
         }
+        const mid = modelOptionId || slimeModels.defaultModel || 'little';
+        const creditFeat: SlimeCreditFeature =
+          userAction === 'generate_decision_report' ? 'decision_report' : 'shadow_chat';
+        const cheaperHint =
+          slimeModels.models.length > 0
+            ? await buildCheaperModelHint(creditFeat, mid, slimeModels.models)
+            : undefined;
         showInsufficient({
           required: Number(j.required ?? 0),
           balance: typeof j.balance === 'number' ? j.balance : null,
@@ -375,6 +394,7 @@ export function ShadowChatShell({
             typeof j.message === 'string'
               ? j.message
               : 'You need more Slime Credits for this action.',
+          cheaperHint,
         });
         setAgentStatus('idle');
         setSending(false);
@@ -546,6 +566,7 @@ export function ShadowChatShell({
         decisionPrompt: lastUser,
         clarificationAnswers,
         saveClarificationToProfile,
+        modelOptionId: modelOptionId || undefined,
       });
       if (streamError && streamError !== 'cancelled') {
         setAgentStatus('error');
@@ -583,6 +604,7 @@ export function ShadowChatShell({
           body.thread_id = activeThreadId;
           body.recent_messages = messages.slice(-8).map((m) => ({ role: m.role, content: m.content }));
         }
+        if (modelOptionId) body.model_option_id = modelOptionId;
         const clarifyCredit =
           typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `clarify-${Date.now()}`;
         const cr = await apiFetch('/api/clarify', {
@@ -600,6 +622,11 @@ export function ShadowChatShell({
           } catch {
             /* ignore */
           }
+          const mid = modelOptionId || slimeModels.defaultModel || 'little';
+          const cheaperHint =
+            slimeModels.models.length > 0
+              ? await buildCheaperModelHint('shadow_chat', mid, slimeModels.models)
+              : undefined;
           showInsufficient({
             required: Number(j.required ?? 0),
             balance: typeof j.balance === 'number' ? j.balance : null,
@@ -607,6 +634,7 @@ export function ShadowChatShell({
               typeof j.message === 'string'
                 ? j.message
                 : 'You need more Slime Credits for this action.',
+            cheaperHint,
           });
           return true;
         }
@@ -633,7 +661,7 @@ export function ShadowChatShell({
       }
       return false;
     },
-    [activeThreadId, messages, showInsufficient],
+    [activeThreadId, messages, modelOptionId, slimeModels.defaultModel, slimeModels.models, showInsufficient],
   );
 
   const applyCalendarCoachFromChat = useCallback(async () => {
@@ -847,6 +875,20 @@ export function ShadowChatShell({
                     }}
                   />
                 ) : null}
+                <div className="mb-2">
+                  <ModelSelector
+                    feature="shadow_chat"
+                    selectedModelId={modelOptionId || slimeModels.defaultModel}
+                    onChange={setModelOptionId}
+                    models={slimeModels.models}
+                    selectorEnabled={slimeModels.selectorEnabled}
+                    showCostPreview
+                    variant="compact"
+                    label="Slime model"
+                    hint="Little tier is the default (lowest credits). Upgrade per message thread."
+                    disabled={sending}
+                  />
+                </div>
                 <ShadowChatInput
                   disabled={sending || !activeThreadId}
                   bootstrapText={inputBootstrap}

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
+import { buildCheaperModelHint, fetchSlimeModelCatalog } from '../features/models/slimeModelsApi';
 import { apiFetch } from '../utils/apiFetch';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
 import { parseSseBlocks } from '../utils/parseSse';
@@ -26,6 +27,7 @@ export function useDecisionReportStream() {
     decisionPrompt: string;
     clarificationAnswers?: Record<string, string>;
     saveClarificationToProfile?: boolean;
+    modelOptionId?: string;
   }) => {
     setStatus('streaming');
     setProgressStep('Structuring decision');
@@ -94,6 +96,7 @@ export function useDecisionReportStream() {
             clarification_answers: params.clarificationAnswers,
             save_clarification_to_profile: Boolean(params.saveClarificationToProfile),
             credit_request_id: creditReq,
+            ...(params.modelOptionId ? { model_option_id: params.modelOptionId } : {}),
           }),
           signal: controller.signal,
         },
@@ -105,6 +108,15 @@ export function useDecisionReportStream() {
         } catch {
           /* ignore */
         }
+        let cheaperHint: string | undefined;
+        try {
+          const cat = await fetchSlimeModelCatalog();
+          const mid = (params.modelOptionId || cat.default_model || '').trim() || 'little';
+          cheaperHint =
+            cat.models.length > 0 ? await buildCheaperModelHint('decision_report', mid, cat.models) : undefined;
+        } catch {
+          cheaperHint = undefined;
+        }
         showInsufficient({
           required: Number(j.required ?? 0),
           balance: typeof j.balance === 'number' ? j.balance : null,
@@ -112,6 +124,7 @@ export function useDecisionReportStream() {
             typeof j.message === 'string'
               ? j.message
               : 'You need more Slime Credits for this action.',
+          cheaperHint,
         });
         setStatus('error');
         setIsStreaming(false);

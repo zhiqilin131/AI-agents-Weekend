@@ -276,6 +276,7 @@ def route_slime_voice_command(
     user_context: SlimeVoiceContext,
     *,
     settings: Settings,
+    llm_model: str | None = None,
 ) -> SlimeVoiceRouteResult:
     rename = _try_slime_rename_voice_patch(transcript.strip())
     if rename is not None:
@@ -307,7 +308,7 @@ def route_slime_voice_command(
             assistant_hint="I need the server to have OPENAI_API_KEY configured for intent routing.",
         )
 
-    llm = build_openai_llm(settings, temperature=0.1)
+    llm = build_openai_llm(settings, temperature=0.1, model=llm_model)
     ctx_json = _routing_context_json(user_context)
     prompt = _ROUTER_PROMPT.format(transcript=transcript.strip()[:4000], context_json=ctx_json)
     t0 = time.perf_counter()

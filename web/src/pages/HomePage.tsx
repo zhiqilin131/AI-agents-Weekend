@@ -13,6 +13,9 @@ import { parseSseBlocks } from '../utils/parseSse';
 import type { AppState, DecisionReport } from '../app/model';
 import { HomeRoamingSlime } from '../app/components/home/HomeRoamingSlime';
 import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
+import { ModelSelector } from '../features/models/ModelSelector';
+import { buildCheaperModelHint } from '../features/models/slimeModelsApi';
+import { useSlimeModelCatalog } from '../features/models/useSlimeModelCatalog';
 
 const PIPELINE_STAGES = ['enhance', 'perceive', 'retrieve', 'infer', 'simulate', 'evaluate', 'finalize'] as const;
 
@@ -59,6 +62,13 @@ export default function HomePage() {
   const navigate = useNavigate();
   const routeTraceId = useParams().decisionId;
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
+  const slimeModels = useSlimeModelCatalog();
+  const [runModelOptionId, setRunModelOptionId] = useState('');
+  useEffect(() => {
+    if (slimeModels.ready && slimeModels.defaultModel && !runModelOptionId) {
+      setRunModelOptionId(slimeModels.defaultModel);
+    }
+  }, [slimeModels.ready, slimeModels.defaultModel, runModelOptionId]);
 
   const [state, setState] = useState<AppState>(() => (routeTraceId ? 'loading' : 'empty'));
   const [decisionInput, setDecisionInput] = useState('');
@@ -184,6 +194,9 @@ export default function HomePage() {
         if (opts?.preserve_raw_input) {
           body.preserve_raw_input = true;
         }
+        if (runModelOptionId) {
+          body.model_option_id = runModelOptionId;
+        }
 
         const runCredit =
           typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `run-${Date.now()}`;
@@ -203,6 +216,11 @@ export default function HomePage() {
           } catch {
             /* ignore */
           }
+          const mid = runModelOptionId || slimeModels.defaultModel || 'little';
+          const cheaperHint =
+            slimeModels.models.length > 0
+              ? await buildCheaperModelHint('decision_report', mid, slimeModels.models)
+              : undefined;
           showInsufficient({
             required: Number(j.required ?? 0),
             balance: typeof j.balance === 'number' ? j.balance : null,
@@ -210,6 +228,7 @@ export default function HomePage() {
               typeof j.message === 'string'
                 ? j.message
                 : 'You need more Slime Credits for this action.',
+            cheaperHint,
           });
           window.clearTimeout(timeoutId);
           setLoadingStage(null);
@@ -304,7 +323,7 @@ export default function HomePage() {
         setRunProgress(0);
       }
     },
-    [decisionInput, loadTier3Profile, navigate, refreshCredits, showInsufficient],
+    [decisionInput, loadTier3Profile, navigate, refreshCredits, runModelOptionId, showInsufficient, slimeModels],
   );
 
   const handleRunDecision = async () => {
@@ -321,7 +340,10 @@ export default function HomePage() {
           'Content-Type': 'application/json',
           'X-Credit-Request-Id': clarifyCredit,
         },
-        body: JSON.stringify({ raw_input: decisionInput }),
+        body: JSON.stringify({
+          raw_input: decisionInput,
+          ...(runModelOptionId ? { model_option_id: runModelOptionId } : {}),
+        }),
       });
       if (cr.status === 402) {
         let j: Record<string, unknown> = {};
@@ -330,6 +352,11 @@ export default function HomePage() {
         } catch {
           /* ignore */
         }
+        const mid = runModelOptionId || slimeModels.defaultModel || 'little';
+        const cheaperHint =
+          slimeModels.models.length > 0
+            ? await buildCheaperModelHint('shadow_chat', mid, slimeModels.models)
+            : undefined;
         showInsufficient({
           required: Number(j.required ?? 0),
           balance: typeof j.balance === 'number' ? j.balance : null,
@@ -337,6 +364,7 @@ export default function HomePage() {
             typeof j.message === 'string'
               ? j.message
               : 'You need more Slime Credits for this action.',
+          cheaperHint,
         });
         setClarifyChecking(false);
         return;
@@ -501,6 +529,20 @@ export default function HomePage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
         <aside className="lg:col-span-4">
+          <div className="mb-3">
+            <ModelSelector
+              feature="decision_report"
+              selectedModelId={runModelOptionId || slimeModels.defaultModel}
+              onChange={setRunModelOptionId}
+              models={slimeModels.models}
+              selectorEnabled={slimeModels.selectorEnabled}
+              showCostPreview
+              variant="compact"
+              label="Model for this run"
+              hint="Defaults to the lowest-cost tier; upgrade for heavier reasoning."
+              disabled={state === 'loading'}
+            />
+          </div>
           <InputPanel
             decisionInput={decisionInput}
             onInputChange={setDecisionInput}

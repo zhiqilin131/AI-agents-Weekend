@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Crown } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
 import { apiFetch } from '../utils/apiFetch';
 import { SlimeCreditIcon } from '../app/components/credits/SlimeCreditIcon';
 import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
+import { ModelSelector } from '../features/models/ModelSelector';
+import { patchDefaultModelOption } from '../features/models/slimeModelsApi';
+import {
+  readSlimeLegendaryMode,
+  setSlimeLegendaryMode,
+  SLIME_LEGENDARY_MODEL_ID,
+} from '../features/models/legendaryMode';
+import { useSlimeModelCatalog } from '../features/models/useSlimeModelCatalog';
 import { Button } from '../app/components/ui/button';
 import { Input } from '../app/components/ui/input';
 import { cn } from '../app/components/ui/utils';
@@ -72,6 +81,10 @@ export default function ProfilePage() {
   const navigate = useNavigate();
   const { session, signOut } = useAuth();
   const { credits: slimeCredits, loading: slimeCreditsLoading, refresh: refreshSlimeCredits } = useSlimeCredits();
+  const slimeModels = useSlimeModelCatalog();
+  const legendaryEggBusyRef = useRef(false);
+  const [legendarySplash, setLegendarySplash] = useState(false);
+  const [defaultModelOptionId, setDefaultModelOptionId] = useState('');
   const [userPriorities, setUserPriorities] = useState('');
   const [clarificationRows, setClarificationRows] = useState<ProfileLineRow[]>([]);
   const [systemRows, setSystemRows] = useState<ProfileLineRow[]>([]);
@@ -177,6 +190,7 @@ export default function ProfilePage() {
         constraints: string[];
         values: string[];
         timezone?: string;
+        default_model_option_id?: string;
       };
       const pl = data.priority_lines;
       if (Array.isArray(pl) && pl.length > 0) {
@@ -201,6 +215,7 @@ export default function ProfilePage() {
       setConstraints(listToLines(data.constraints ?? []));
       setValues(listToLines(data.values ?? []));
       setTimezone((data.timezone || 'UTC').trim() || 'UTC');
+      setDefaultModelOptionId((data.default_model_option_id || '').trim());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load profile');
     }
@@ -221,6 +236,7 @@ export default function ProfilePage() {
         constraints: linesToList(constraints),
         values: linesToList(values),
         timezone: timezone.trim() || 'UTC',
+        ...(defaultModelOptionId ? { default_model_option_id: defaultModelOptionId } : {}),
       };
       const res = await apiFetch('/api/profile', {
         method: 'PUT',
@@ -346,6 +362,52 @@ export default function ProfilePage() {
     }
   }, [memoryCatOrder, selectedMemoryCat]);
 
+  /** If the profile default is the hidden tier but legendary mode is off, realign to a visible tier. */
+  useEffect(() => {
+    if (!slimeModels.ready || slimeModels.loading) return;
+    const has55 = slimeModels.models.some((m) => m.id === SLIME_LEGENDARY_MODEL_ID);
+    if (!has55 && defaultModelOptionId === SLIME_LEGENDARY_MODEL_ID) {
+      const fb = slimeModels.defaultModel || 'little';
+      setDefaultModelOptionId(fb);
+      void patchDefaultModelOption(fb).catch(() => {});
+    }
+  }, [
+    slimeModels.ready,
+    slimeModels.loading,
+    slimeModels.models,
+    slimeModels.defaultModel,
+    defaultModelOptionId,
+  ]);
+
+  const onLegendaryEggClick = async () => {
+    if (legendaryEggBusyRef.current) return;
+    legendaryEggBusyRef.current = true;
+    setError(null);
+    try {
+      const turnOn = !readSlimeLegendaryMode();
+      if (turnOn) {
+        setSlimeLegendaryMode(true);
+        setLegendarySplash(true);
+        await patchDefaultModelOption(SLIME_LEGENDARY_MODEL_ID);
+        setDefaultModelOptionId(SLIME_LEGENDARY_MODEL_ID);
+        await slimeModels.refresh();
+      } else {
+        setLegendarySplash(false);
+        setSlimeLegendaryMode(false);
+        await patchDefaultModelOption('little');
+        setDefaultModelOptionId('little');
+        setMessage('Legendary mode deactivated.');
+        await slimeModels.refresh();
+      }
+    } catch (e) {
+      setSlimeLegendaryMode(false);
+      setLegendarySplash(false);
+      setError(e instanceof Error ? e.message : 'Could not toggle legendary mode');
+    } finally {
+      legendaryEggBusyRef.current = false;
+    }
+  };
+
   const toggleSection = (key: keyof typeof openSections) => {
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
   };
@@ -402,7 +464,14 @@ export default function ProfilePage() {
             >
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <SlimeCreditIcon className="h-7 w-7" />
+                  <button
+                    type="button"
+                    onClick={() => void onLegendaryEggClick()}
+                    className="-m-1 rounded-full p-1 text-left transition hover:opacity-90 active:scale-95"
+                    aria-label="Slime credits mark"
+                  >
+                    <SlimeCreditIcon className="h-7 w-7" />
+                  </button>
                   <label className="text-sm text-gray-900" style={{ fontWeight: 700 }}>
                     Slime Credits
                   </label>
@@ -423,6 +492,34 @@ export default function ProfilePage() {
                       <p className="text-xs leading-relaxed text-gray-600">
                         You are not limited by Slime Credits. Buddy can run AI actions without counting credits.
                       </p>
+                      <p className="text-[11px] text-gray-500">
+                        You can still pick a model tier below — usage is logged; credits are not deducted.
+                      </p>
+                      <div className="mt-3 rounded-lg border border-violet-100/90 bg-white/60 p-2.5">
+                        <ModelSelector
+                          feature="shadow_chat"
+                          selectedModelId={
+                            defaultModelOptionId || slimeModels.defaultModel || slimeModels.models[0]?.id || ''
+                          }
+                          onChange={async (id) => {
+                            setDefaultModelOptionId(id);
+                            try {
+                              await patchDefaultModelOption(id);
+                              setMessage('Default model saved.');
+                              setError(null);
+                            } catch (e) {
+                              setError(e instanceof Error ? e.message : 'Could not save model preference');
+                            }
+                          }}
+                          models={slimeModels.models}
+                          selectorEnabled={slimeModels.selectorEnabled}
+                          showWhenSingle
+                          showCostPreview
+                          variant="cards"
+                          label="Default Slime model"
+                          hint=""
+                        />
+                      </div>
                     </div>
                   ) : (
                     <>
@@ -451,8 +548,34 @@ export default function ProfilePage() {
                         </p>
                       ) : null}
                       <p className="mt-1 text-[11px] leading-relaxed text-gray-600">
-                        Powers Buddy&apos;s AI actions. Example costs: Chat 1 · Report 5 · Diary 2 · Memory 3.
+                        Powers Buddy&apos;s AI actions. Costs scale by feature and by model tier (see default model
+                        below).
                       </p>
+                      <div className="mt-3 rounded-lg border border-violet-100/90 bg-white/60 p-2.5">
+                        <ModelSelector
+                          feature="shadow_chat"
+                          selectedModelId={
+                            defaultModelOptionId || slimeModels.defaultModel || slimeModels.models[0]?.id || ''
+                          }
+                          onChange={async (id) => {
+                            setDefaultModelOptionId(id);
+                            try {
+                              await patchDefaultModelOption(id);
+                              setMessage('Default model saved.');
+                              setError(null);
+                            } catch (e) {
+                              setError(e instanceof Error ? e.message : 'Could not save model preference');
+                            }
+                          }}
+                          models={slimeModels.models}
+                          selectorEnabled={slimeModels.selectorEnabled}
+                          showWhenSingle
+                          showCostPreview
+                          variant="cards"
+                          label="Default Slime model"
+                          hint=""
+                        />
+                      </div>
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Input
                           value={redeemCodeInput}
@@ -823,6 +946,36 @@ export default function ProfilePage() {
           </main>
         </div>
       </div>
+
+      {legendarySplash ? (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="legendary-splash-title"
+          onClick={() => setLegendarySplash(false)}
+        >
+          <div
+            className="max-w-lg rounded-[2rem] border-4 border-amber-400 bg-gradient-to-b from-amber-200 via-yellow-300 to-amber-300 p-10 shadow-2xl sm:p-14"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Crown className="mx-auto h-16 w-16 text-amber-800 drop-shadow-md sm:h-24 sm:w-24" strokeWidth={1.25} aria-hidden />
+            <p
+              id="legendary-splash-title"
+              className="mt-6 text-center text-2xl font-black leading-tight tracking-tight text-amber-950 sm:text-3xl"
+            >
+              Welcome Bob and Andrew, Lengendary Mode Activated
+            </p>
+            <button
+              type="button"
+              className="mt-10 w-full rounded-2xl bg-amber-950 py-3 text-sm font-bold text-amber-100 shadow-lg transition hover:bg-black"
+              onClick={() => setLegendarySplash(false)}
+            >
+              Continue
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {isSupabaseEnvConfigured() && session ? (
         <button

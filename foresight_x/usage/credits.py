@@ -18,8 +18,10 @@ from foresight_x.usage.credit_store import (
     save_redemptions,
     save_user_credits_row,
 )
+from foresight_x.schemas import UserProfile
 from foresight_x.usage.schemas import (
     CreditCheckResult,
+    CreditCostBreakdown,
     CreditFeature,
     CreditRedemption,
     CreditTransaction,
@@ -76,12 +78,42 @@ def credit_cost_for_feature(feature: CreditFeature, settings: Settings | None = 
         "memory_import": s.credit_cost_memory_import,
         "calendar_agent": s.credit_cost_calendar_agent,
         "resource_search": s.credit_cost_resource_search,
+        "report_revision": s.credit_cost_report_revision,
+        "task_decomposition": s.credit_cost_task_decomposition,
+        "outcome_reflection": s.credit_cost_outcome_reflection,
         "tts": s.credit_cost_tts,
         "asr": s.credit_cost_asr,
         "voucher": 0,
         "unknown": 1,
     }
     return max(0, int(mapping.get(key, 1)))
+
+
+def calculate_credit_cost(
+    feature: CreditFeature,
+    model_option_id: str | None,
+    *,
+    settings: Settings | None = None,
+    profile: UserProfile | None = None,
+) -> CreditCostBreakdown:
+    """``ceil(base_cost * model.credit_multiplier)`` using server-resolved model only."""
+    import math
+
+    from foresight_x.llm.model_resolve import get_model_option_for_request
+
+    s = settings or load_settings()
+    base = credit_cost_for_feature(feature, settings=s)
+    opt = get_model_option_for_request(s, str(feature), model_option_id, profile=profile)
+    mult = float(opt.credit_multiplier or 1.0)
+    final = max(0, int(math.ceil(max(0, base) * max(0.1, mult))))
+    return CreditCostBreakdown(
+        feature=str(feature),
+        base_cost=base,
+        model_option_id=opt.id,
+        model_display_name=opt.display_name,
+        model_multiplier=mult,
+        final_cost=final,
+    )
 
 
 def get_or_create_user_credits(user_id: str, settings: Settings | None = None) -> UserCredits:
@@ -161,11 +193,16 @@ def log_admin_usage(
     would_have_cost: int,
     request_id: str | None,
     settings: Settings | None = None,
+    *,
+    metadata: dict | None = None,
 ) -> None:
     s = settings or load_settings()
     uid = (user_id or "").strip()
     row = load_user_credits_row(uid, settings=s) or get_or_create_user_credits(uid, settings=s)
     now = _utc_now()
+    meta: dict = {"unlimited": True, "would_have_cost": would_have_cost}
+    if metadata:
+        meta.update(metadata)
     append_ledger(
         CreditTransaction(
             id=f"tx-{uuid.uuid4().hex}",
@@ -176,7 +213,7 @@ def log_admin_usage(
             reason="Unlimited admin usage (not charged)",
             feature=feature,
             request_id=(request_id or "").strip() or None,
-            metadata={"unlimited": True, "would_have_cost": would_have_cost},
+            metadata=meta,
             created_at=now,
         ),
         settings=s,
@@ -203,7 +240,7 @@ def consume_credits(
     if not s.enable_credit_limits:
         return None
     if is_unlimited_user(uid, user_email, settings=s):
-        log_admin_usage(uid, feature, cost_i, rid, settings=s)
+        log_admin_usage(uid, feature, cost_i, rid, settings=s, metadata=meta)
         return None
     if cost_i <= 0:
         return None

@@ -1,5 +1,6 @@
 """Tests for personalization merge (no LLM)."""
 
+from foresight_x.config import Settings
 from foresight_x.personalization.ingest import (
     PersonalizationExtract,
     PersonalizationMemoryFactDraft,
@@ -7,6 +8,8 @@ from foresight_x.personalization.ingest import (
     preview_extract_summary,
 )
 from foresight_x.schemas import UserProfile
+
+_NO_LLM_CAT = Settings(memory_fact_category_llm_refine=False)
 
 
 def test_merge_profiles_dedupes_and_appends_about() -> None:
@@ -26,7 +29,7 @@ def test_merge_profiles_dedupes_and_appends_about() -> None:
         about_me_append="Often frames tradeoffs as moral tests.",
         risk_posture="moderate",
     )
-    out = _merge_profiles(base, ext, stamp="2026-04-18T12:00:00Z")
+    out = _merge_profiles(base, ext, stamp="2026-04-18T12:00:00Z", settings=_NO_LLM_CAT)
     assert "defers under pressure" in out.recurring_themes
     assert out.recurring_themes.count("likes planning") == 1
     assert "autonomy" in out.values
@@ -45,7 +48,7 @@ def test_merge_profiles_appends_memory_facts() -> None:
             PersonalizationMemoryFactDraft(category="constraints", text="Studies at CMU"),
         ],
     )
-    out = _merge_profiles(base, ext, stamp="2026-04-20T12:00:00Z")
+    out = _merge_profiles(base, ext, stamp="2026-04-20T12:00:00Z", settings=_NO_LLM_CAT)
     assert len(out.memory_facts) == 3
     texts = {f.text for f in out.memory_facts}
     assert "Goes by Bella" in texts

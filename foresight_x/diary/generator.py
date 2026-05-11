@@ -251,6 +251,7 @@ def generate_diary_entry(
     *,
     settings: Settings | None = None,
     persona_context: str | None = None,
+    llm_model: str | None = None,
 ) -> DiaryEntry | None:
     """Return a new DiaryEntry, or None if there is nothing meaningful to summarize."""
     if not bundle_has_activity(bundle):
@@ -265,7 +266,7 @@ def generate_diary_entry(
         s = settings or load_settings()
         if not (s.openai_api_key or "").strip():
             raise RuntimeError("no_openai_key")
-        llm = build_openai_llm(settings=s, temperature=0.42, max_tokens=6144)
+        llm = build_openai_llm(settings=s, temperature=0.42, max_tokens=6144, model=llm_model)
         plan = run_two_stage_diary_llm(llm, cleaned, meta, persona_context=persona_context)
         if plan and (plan.summary or "").strip():
             entry = _plan_to_entry(user_id, bundle, plan)

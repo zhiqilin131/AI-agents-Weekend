@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from foresight_x.profile.memory_classification import refine_memory_category
+from foresight_x.profile.memory_classification_rules import refine_other_with_rules
 from foresight_x.schemas import MemoryFactCategory
 
 
@@ -92,4 +93,51 @@ def test_views_not_triggered_by_food_like_alone() -> None:
             subject_ref="user",
         )
         == MemoryFactCategory.BEHAVIOR
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "evidence", "predicate", "expected"),
+    [
+        (
+            "Peanut allergy",
+            "I'm allergic to peanuts",
+            "",
+            MemoryFactCategory.CONSTRAINTS,
+        ),
+        (
+            "Rent stress",
+            "I can't afford more than $800/month",
+            "",
+            MemoryFactCategory.CONSTRAINTS,
+        ),
+        (
+            "Bar exam",
+            "I want to pass the bar next year",
+            "",
+            MemoryFactCategory.GOALS,
+        ),
+        (
+            "Triple",
+            "Alice is a cofounder",
+            "co_founder_with",
+            MemoryFactCategory.IDENTITY,
+        ),
+        (
+            "Savings",
+            "",
+            "savings_goal",
+            MemoryFactCategory.GOALS,
+        ),
+    ],
+)
+def test_rule_fallback_tiers(text: str, evidence: str, predicate: str, expected: MemoryFactCategory) -> None:
+    assert (
+        refine_other_with_rules(
+            text=text,
+            evidence=evidence,
+            predicate=predicate,
+            subject_ref="user",
+        )
+        == expected
     )

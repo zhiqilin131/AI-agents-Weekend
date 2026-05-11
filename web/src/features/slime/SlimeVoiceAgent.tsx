@@ -23,6 +23,8 @@ import {
 import { refetchSlimeProfileGlobal } from '../../hooks/useSlimeProfile';
 import { cn } from '../../app/components/ui/utils';
 import { useSlimeCredits } from '../../app/components/credits/SlimeCreditsContext';
+import { ModelSelector } from '../models/ModelSelector';
+import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
 
 export type VoiceAgentState =
   | 'idle'
@@ -214,6 +216,13 @@ export function SlimeVoiceAgent({
 }: SlimeVoiceAgentProps) {
   const navigate = useNavigate();
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
+  const slimeModels = useSlimeModelCatalog();
+  const [voiceModelOptionId, setVoiceModelOptionId] = useState('');
+  useEffect(() => {
+    if (slimeModels.ready && slimeModels.defaultModel && !voiceModelOptionId) {
+      setVoiceModelOptionId(slimeModels.defaultModel);
+    }
+  }, [slimeModels.ready, slimeModels.defaultModel, voiceModelOptionId]);
   const { storageUserKey } = useExecutionStorageUserKey();
   const sendVoiceBlobRef = useRef<(blob: Blob | null) => Promise<void>>(async () => {});
   const { supported, recording, error, setError, startRecording, stopRecording, speechPhase } = useVoiceRecorder({
@@ -333,7 +342,10 @@ export function SlimeVoiceAgent({
               'Content-Type': 'application/json',
               'X-Credit-Request-Id': ttsCredit,
             },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({
+              text,
+              ...(voiceModelOptionId ? { model_option_id: voiceModelOptionId } : {}),
+            }),
           });
           if (gen !== ttsGenRef.current) return;
           if (r.status === 402) {
@@ -406,7 +418,7 @@ export function SlimeVoiceAgent({
         speak(text, synthOpts);
       })();
     },
-    [ttsSupported, slimeProfile.voice, speak, cancelTts, cancelBuddyAudio, showInsufficient],
+    [ttsSupported, slimeProfile.voice, speak, cancelTts, cancelBuddyAudio, showInsufficient, voiceModelOptionId],
   );
 
   const runSpokenSequence = useCallback(
@@ -523,6 +535,9 @@ export function SlimeVoiceAgent({
         fd.append('recent_ui_context', JSON.stringify({ timezone: tz }));
       } catch {
         fd.append('recent_ui_context', JSON.stringify({}));
+      }
+      if (voiceModelOptionId) {
+        fd.append('model_option_id', voiceModelOptionId);
       }
       setVoiceState('thinking');
       try {
@@ -705,6 +720,7 @@ export function SlimeVoiceAgent({
       onMemoryEvidenceRetrieved,
       showInsufficient,
       refreshCredits,
+      voiceModelOptionId,
     ],
   );
 
@@ -933,6 +949,27 @@ export function SlimeVoiceAgent({
         {!recording && voiceState !== 'idle' && statusLabel(voiceState) ? (
           <p className="text-center text-xs font-medium text-violet-950/90">{statusLabel(voiceState)}</p>
         ) : null}
+      </div>
+
+      <div
+        data-slime-avoid
+        className="pointer-events-auto fixed right-3 bottom-[max(5.75rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] z-[52] w-[min(92vw,16rem)] sm:right-5"
+      >
+        <div className="rounded-xl border border-white/40 bg-white/55 px-2 py-1 backdrop-blur-md">
+          <ModelSelector
+            feature="slime_voice"
+            selectedModelId={voiceModelOptionId || slimeModels.defaultModel}
+            onChange={setVoiceModelOptionId}
+            models={slimeModels.models}
+            selectorEnabled={slimeModels.selectorEnabled}
+            showCostPreview={false}
+            variant="compact"
+            elevated={false}
+            hideCompactHeader
+            compactSelectAriaLabel="Slime model tier for voice"
+            disabled={recording}
+          />
+        </div>
       </div>
 
       <EvidenceDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} items={drawerItems} />

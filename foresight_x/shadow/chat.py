@@ -467,6 +467,7 @@ def run_shadow_turn(
     slime_voice_style_addendum: str | None = None,
     synthesis_frame: Literal["shadow", "slime_buddy"] = "shadow",
     slime_intent_hint: str | None = None,
+    llm_model: str | None = None,
 ) -> ShadowTurnOutput:
     """Run one shadow chat turn with separated thread vs profile memory pathways."""
     s = settings or load_settings()
@@ -479,7 +480,7 @@ def run_shadow_turn(
     if not (s.openai_api_key or "").strip():
         raise RuntimeError("OPENAI_API_KEY is required for shadow chat")
 
-    llm = build_openai_llm(s, temperature=0.68)
+    llm = build_openai_llm(s, temperature=0.68, model=llm_model)
 
     state = load_shadow_self(settings=s)
     shadow_block = state.narrative.strip() or "(none yet — first turns.)"
@@ -576,6 +577,10 @@ def run_shadow_turn(
     if not memory_drafts and atomic_claims and synthesis_frame != "slime_buddy":
         memory_drafts = _coerce_atomic_claims_to_memory_drafts(atomic_claims)
 
+    llm_cat = None
+    if s.memory_fact_category_llm_refine and (s.openai_api_key or "").strip():
+        llm_cat = build_openai_llm(s, temperature=0.0)
+
     draft_records: list[ProfileMemoryFact] = []
     for d in memory_drafts:
         cat0 = _coerce_category(d.category)
@@ -594,6 +599,8 @@ def run_shadow_turn(
                 evidence=(d.evidence or "").strip(),
                 predicate=pred,
                 subject_ref=subj,
+                llm=llm_cat,
+                settings=s,
             )
             draft_records.append(
                 ProfileMemoryFact(
@@ -617,6 +624,8 @@ def run_shadow_turn(
             evidence=(d.evidence or "").strip(),
             predicate=pred,
             subject_ref=subj,
+            llm=llm_cat,
+            settings=s,
         )
         draft_records.append(
             ProfileMemoryFact(

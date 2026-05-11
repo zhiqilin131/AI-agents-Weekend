@@ -39,6 +39,8 @@ export type InsufficientCreditsPayload = {
   required: number;
   balance: number | null;
   message: string;
+  /** Optional UX hint, e.g. switching to a lower tier model. */
+  cheaperHint?: string;
 };
 
 type Ctx = {
@@ -142,6 +144,11 @@ export function SlimeCreditsProvider({ children }: { children: ReactNode }) {
               {modal ? (
                 <span className="block pt-2 font-medium text-slate-800">
                   This action needs {modal.required} credits. You have {balLabel}.
+                </span>
+              ) : null}
+              {modal?.cheaperHint ? (
+                <span className="mt-2 block rounded-md border border-violet-100 bg-violet-50/80 px-2 py-1.5 text-xs text-violet-950">
+                  {modal.cheaperHint}
                 </span>
               ) : null}
             </AlertDialogDescription>

@@ -15,6 +15,9 @@ CreditFeature = Literal[
     "memory_import",
     "calendar_agent",
     "resource_search",
+    "report_revision",
+    "task_decomposition",
+    "outcome_reflection",
     "tts",
     "asr",
     "voucher",
@@ -69,3 +72,14 @@ class CreditCheckResult(BaseModel):
     balance: int | None
     required: int
     reason: Literal["ok", "insufficient_credits", "unlimited_user", "limits_disabled", "unlimited_admin"]
+
+
+class CreditCostBreakdown(BaseModel):
+    """Server-side Slime Credit cost for ``feature`` × resolved model tier."""
+
+    feature: str
+    base_cost: int
+    model_option_id: str
+    model_display_name: str
+    model_multiplier: float
+    final_cost: int

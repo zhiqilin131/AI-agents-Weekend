@@ -169,6 +169,7 @@ def parse_calendar_intent(
     *,
     settings: Settings | None = None,
     source: CalendarSource = "manual",
+    llm_model: str | None = None,
 ) -> CalendarIntent:
     ctx = dict(context or {})
     t = (text or "").strip()
@@ -177,7 +178,7 @@ def parse_calendar_intent(
 
     s = settings
     if s and (s.openai_api_key or "").strip():
-        llm = build_openai_llm(s, temperature=0.05)
+        llm = build_openai_llm(s, temperature=0.05, model=llm_model)
         prompt = _PROMPT.format(
             text=t[:4000],
             thread_id=ctx.get("thread_id") or "",

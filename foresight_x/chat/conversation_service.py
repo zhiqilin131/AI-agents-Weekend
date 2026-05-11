@@ -159,6 +159,7 @@ def process_conversation_turn(
     source: Source,
     modality: Modality,
     clarification_answers: dict[str, str] | None = None,
+    llm_model: str | None = None,
 ) -> dict[str, Any]:
     """
     One assistant reply turn using the same core pathway as Shadow streaming:
@@ -306,6 +307,7 @@ def process_conversation_turn(
             slime_voice_style_addendum=slime_addendum,
             synthesis_frame=synthesis_frame,
             slime_intent_hint=slime_hint,
+            llm_model=llm_model,
         )
     except Exception as e:
         _log.exception("run_shadow_turn failed in process_conversation_turn")

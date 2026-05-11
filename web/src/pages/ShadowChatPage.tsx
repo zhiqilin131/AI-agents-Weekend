@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router';
 import { PageBackButton } from '../app/components/PageBackButton';
 import { VoiceRecorderTranscribeButton } from '../app/components/VoiceRecorderTranscribeButton';
 import { apiFetch } from '../utils/apiFetch';
+import { ModelSelector } from '../features/models/ModelSelector';
+import { useSlimeModelCatalog } from '../features/models/useSlimeModelCatalog';
 
 type Role = 'user' | 'assistant';
 
@@ -15,6 +17,13 @@ type ShadowToastState = { id: number; text: string; fadeOut: boolean };
 
 export default function ShadowChatPage() {
   const navigate = useNavigate();
+  const slimeModels = useSlimeModelCatalog();
+  const [shadowModelOptionId, setShadowModelOptionId] = useState('');
+  useEffect(() => {
+    if (slimeModels.ready && slimeModels.defaultModel && !shadowModelOptionId) {
+      setShadowModelOptionId(slimeModels.defaultModel);
+    }
+  }, [slimeModels.ready, slimeModels.defaultModel, shadowModelOptionId]);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -56,6 +65,7 @@ export default function ShadowChatPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: next.map((m) => ({ role: m.role, content: m.content })),
+          ...(shadowModelOptionId ? { model_option_id: shadowModelOptionId } : {}),
         }),
       });
       if (!res.ok) {
@@ -89,7 +99,7 @@ export default function ShadowChatPage() {
       setReadingMemory(false);
       setSending(false);
     }
-  }, [input, messages, sending, showRecordedToast]);
+  }, [input, messages, sending, showRecordedToast, shadowModelOptionId]);
 
   const appendVoice = (t: string) => {
     setInput((s) => (s.trim() ? `${s.trim()} ${t}` : t));
@@ -178,6 +188,20 @@ export default function ShadowChatPage() {
         </div>
 
         <div className="space-y-3">
+          <div>
+            <ModelSelector
+              feature="shadow_chat"
+              selectedModelId={shadowModelOptionId || slimeModels.defaultModel}
+              onChange={setShadowModelOptionId}
+              models={slimeModels.models}
+              selectorEnabled={slimeModels.selectorEnabled}
+              showCostPreview
+              variant="compact"
+              label="Slime model"
+              hint="Buddy tab: defaults to the lowest-cost tier."
+              disabled={sending}
+            />
+          </div>
           <div className="relative">
             <textarea
               value={input}
