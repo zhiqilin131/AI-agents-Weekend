@@ -67,15 +67,17 @@ def test_consume_and_insufficient(isolated_settings: Settings, monkeypatch: pyte
     assert chk2.allowed is False
 
 
-def test_redeem_test_code_and_duplicate(isolated_settings: Settings) -> None:
+def test_redeem_test_code_repeatable(isolated_settings: Settings) -> None:
     u = "user-c"
     get_or_create_user_credits(u, settings=isolated_settings)
     r1 = redeem_test_code(u, "  Beta-TEST-phrase  ", settings=isolated_settings)
     assert r1["ok"] is True
     assert r1["credits_granted"] == 100
+    assert r1["balance"] == 115
     r2 = redeem_test_code(u, "beta-test-phrase", settings=isolated_settings)
-    assert r2["ok"] is False
-    assert r2["error"] == "already_redeemed"
+    assert r2["ok"] is True
+    assert r2["credits_granted"] == 100
+    assert r2["balance"] == 215
 
 
 def test_voucher_redeem(isolated_settings: Settings) -> None:

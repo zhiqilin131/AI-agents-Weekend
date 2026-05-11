@@ -299,8 +299,6 @@ def redeem_test_code(user_id: str, code: str, settings: Settings | None = None) 
     lock = acquire_user_lock(uid)
     with lock:
         reds = load_redemptions(uid, settings=s)
-        if any(r.code_hash == code_hash for r in reds):
-            return {"ok": False, "error": "already_redeemed", "message": "You already used this testing code."}
         row = load_user_credits_row(uid, settings=s) or get_or_create_user_credits(uid, settings=s)
         now = _utc_now()
         new_bal = row.balance + reward
