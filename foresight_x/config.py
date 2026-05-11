@@ -9,6 +9,16 @@ from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _strip_outer_quotes_str(v: object) -> str:
+    """Railway and some UIs persist values wrapped in ASCII quotes — strip one matching pair."""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        return s[1:-1].strip()
+    return s
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -183,25 +193,30 @@ class Settings(BaseSettings):
     credit_cost_tts: int = Field(default=1, ge=0, validation_alias=AliasChoices("CREDIT_COST_TTS"))
     credit_cost_asr: int = Field(default=0, ge=0, validation_alias=AliasChoices("CREDIT_COST_ASR"))
 
+    @field_validator(
+        "redis_url",
+        "allowed_origins",
+        "cors_preview_regex",
+        "supabase_url",
+        "supabase_anon_key",
+        "supabase_service_role_key",
+        "openai_api_key",
+        "tavily_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _strip_outer_quotes_env_strings(cls, v: object) -> str:
+        return _strip_outer_quotes_str(v)
+
     @field_validator("slime_test_code", "slime_voucher_code", mode="before")
     @classmethod
     def _strip_outer_quotes_codes(cls, v: object) -> str:
-        """Railway/.env sometimes stores values wrapped in ASCII quotes; strip so hashes match user input."""
-        if v is None:
-            return ""
-        s = str(v).strip()
-        if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
-            return s[1:-1].strip()
-        return s
+        return _strip_outer_quotes_str(v)
 
     @field_validator("admin_emails", mode="before")
     @classmethod
     def _normalize_admin_emails(cls, v: object) -> str:
-        if v is None:
-            return ""
-        s = str(v).strip()
-        if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
-            s = s[1:-1].strip()
+        s = _strip_outer_quotes_str(v)
         for ch in ("\u201c", "\u201d", "\u2018", "\u2019"):
             s = s.replace(ch, "")
         return s.strip()
@@ -251,7 +266,12 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> list[str]:
-        return [x.strip() for x in self.allowed_origins.split(",") if x.strip()]
+        out: list[str] = []
+        for x in self.allowed_origins.split(","):
+            t = _strip_outer_quotes_str(x.strip())
+            if t:
+                out.append(t)
+        return out
 
 
 def load_settings() -> Settings:
