@@ -280,6 +280,11 @@ def _fetch_messages_supabase(*, thread_id: str) -> list[dict[str, Any]]:
 
 
 def _upsert_thread_supabase(thread: dict[str, Any]) -> None:
+    _log.warning(
+        "_upsert_thread_supabase called thread_id=%s user_id=%s",
+        thread.get("thread_id"),
+        thread.get("user_id"),
+    )
     client = get_client()
     tid = str(thread.get("thread_id") or "")
     uid = str(thread.get("user_id") or "demo_user")
@@ -295,6 +300,7 @@ def _upsert_thread_supabase(thread: dict[str, Any]) -> None:
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     client.table("threads").upsert(payload, on_conflict="id").execute()
+    _log.warning("_upsert_thread_supabase upsert executed")
 
 
 def _insert_new_messages_supabase(thread: dict[str, Any]) -> None:
@@ -349,6 +355,7 @@ def _insert_new_messages_supabase(thread: dict[str, Any]) -> None:
 
 
 def create_thread(*, user_id: str, title: str | None = None) -> dict[str, Any]:
+    _log.warning("create_thread called user_id=%s supabase_enabled=%s", user_id, _supabase_enabled())
     if _supabase_enabled():
         try:
             tid = str(uuid.uuid4())
