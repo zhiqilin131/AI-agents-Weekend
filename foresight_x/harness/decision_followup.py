@@ -176,8 +176,9 @@ def _save_notify_state(user_id: str, state: dict, settings: Settings) -> None:
     path.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
-def _prune_displays(displays: list, *, keep_days: int = 3) -> list:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=keep_days)
+def _prune_displays(displays: list, *, keep_days: int = 3, now: datetime | None = None) -> list:
+    ref = now or datetime.now(timezone.utc)
+    cutoff = ref - timedelta(days=keep_days)
     out: list = []
     for row in displays:
         if not isinstance(row, dict):
@@ -188,12 +189,15 @@ def _prune_displays(displays: list, *, keep_days: int = 3) -> list:
     return out
 
 
-def count_displays_today(user_id: str, tz_name: str, *, settings: Settings | None = None) -> int:
+def count_displays_today(
+    user_id: str, tz_name: str, *, now: datetime | None = None, settings: Settings | None = None
+) -> int:
     s = settings or load_settings()
+    n = now or datetime.now(timezone.utc)
     st = _load_notify_state(user_id, s)
-    displays = _prune_displays(list(st.get("displays") or []))
+    displays = _prune_displays(list(st.get("displays") or []), now=n)
     tz = _resolve_tz(tz_name)
-    today = _local_date_str(datetime.now(timezone.utc), tz)
+    today = _local_date_str(n, tz)
     n = 0
     for row in displays:
         if str(row.get("local_date") or "") == today:
@@ -204,14 +208,14 @@ def count_displays_today(user_id: str, tz_name: str, *, settings: Settings | Non
 def record_followup_displayed(user_id: str, followup_id: str, tz_name: str, *, settings: Settings | None = None) -> None:
     s = settings or load_settings()
     st = _load_notify_state(user_id, s)
-    displays = _prune_displays(list(st.get("displays") or []))
+    now_wall = datetime.now(timezone.utc)
+    displays = _prune_displays(list(st.get("displays") or []), now=now_wall)
     tz = _resolve_tz(tz_name)
-    now = datetime.now(timezone.utc)
     displays.append(
         {
             "followup_id": followup_id,
-            "at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "local_date": _local_date_str(now, tz),
+            "at": now_wall.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "local_date": _local_date_str(now_wall, tz),
         }
     )
     st["displays"] = displays
@@ -532,17 +536,18 @@ def filter_for_toast_delivery(
     tz_name: str = "UTC",
     max_per_day: int = 2,
     max_return: int = 8,
+    now: datetime | None = None,
     settings: Settings | None = None,
 ) -> list[DecisionFollowup]:
     """Apply daily display cap and 24h reshow guard."""
     s = settings or load_settings()
-    if count_displays_today(user_id, tz_name, settings=s) >= max_per_day:
+    n = now or datetime.now(timezone.utc)
+    if count_displays_today(user_id, tz_name, now=n, settings=s) >= max_per_day:
         return []
 
-    now = datetime.now(timezone.utc)
     out: list[DecisionFollowup] = []
     for fu in candidates:
-        hs = _hours_since_shown(fu, now)
+        hs = _hours_since_shown(fu, n)
         if hs is not None and hs < 24.0:
             continue
         out.append(fu)

@@ -174,7 +174,7 @@ def test_daily_cap_filter(iso: Settings) -> None:
         ),
         encoding="utf-8",
     )
-    filtered = filter_for_toast_delivery(uid, cand, tz_name="UTC", max_per_day=2, settings=iso)
+    filtered = filter_for_toast_delivery(uid, cand, tz_name="UTC", max_per_day=2, now=now, settings=iso)
     assert filtered == []
 
 
