@@ -110,6 +110,11 @@ PERSONA_PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
+def _collapse_whitespace(text: str, *, max_len: int = 320) -> str:
+    """Single-line role text for prompts. Kept as a function so regex stays out of f-string `{...}` (SyntaxError on Py<3.12)."""
+    return re.sub(r"\s+", " ", (text or "").strip())[:max_len]
+
+
 def _is_unsafe_user_preference_line(line: str) -> bool:
     low = line.lower().strip()
     if not low:
@@ -232,7 +237,7 @@ def build_slime_self_identity_prompt(self_model: SlimeSelfModel, slime_persona: 
     abilities = ", ".join(self_model.abilities[:6]) if self_model.abilities else "chat, memory-aware help, planning support"
     boundaries = "\n".join(f"- {b}" for b in (self_model.boundaries or [])[:8])
     limitations = ", ".join(self_model.limitations[:5]) if self_model.limitations else "(see product limits)"
-    role_line_compact = re.sub(r"\s+", " ", (p.role_identity or "").strip())[:320]
+    role_line_compact = _collapse_whitespace(p.role_identity or "", max_len=320)
 
     return "\n".join(
         [
@@ -304,7 +309,7 @@ def build_slime_persona_prompt(
     rl = p.reply_length if p.reply_length in ("short", "balanced", "detailed") else "balanced"
     length_line = _LENGTH_HINT.get(rl, _LENGTH_HINT["balanced"])
 
-    role = re.sub(r"\s+", " ", (p.role_identity or "").strip())[:320]
+    role = _collapse_whitespace(p.role_identity or "", max_len=320)
 
     addr_line = (
         f"Refer to the user as «{addr}» when it fits naturally (e.g. opening or a key beat) — not in every sentence."
