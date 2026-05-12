@@ -4,6 +4,7 @@ import { Agent3DCompanion } from './Agent3DCompanion';
 import type { AgentStatus, ShadowSuggestion } from './types';
 import { SlimeAdvisor } from '../report/SlimeAdvisor';
 import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 
 /** Short line under companion — plain language */
 const statusRibbon: Record<AgentStatus, string> = {
@@ -312,14 +313,16 @@ export function AgentPresence3DPanel({
             <p className="text-xs font-semibold uppercase tracking-wide">Decision detected</p>
           </div>
           <p className="mt-1 text-xs text-amber-900/90">{suggestion.message || 'A high-value decision moment was detected.'}</p>
-          <button
-            type="button"
-            disabled={generateReportDisabled}
-            className="mt-2 w-full rounded-lg bg-amber-500/90 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={onGenerateReport}
-          >
-            Generate report
-          </button>
+          <BuddyTooltip content="Run the decision report flow from the last user message in this thread.">
+            <button
+              type="button"
+              disabled={generateReportDisabled}
+              className="mt-2 w-full rounded-lg bg-amber-500/90 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={onGenerateReport}
+            >
+              Generate report
+            </button>
+          </BuddyTooltip>
         </div>
       ) : null}
     </aside>

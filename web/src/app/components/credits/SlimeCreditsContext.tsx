@@ -24,6 +24,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { SlimeCreditIcon } from './SlimeCreditIcon';
 import { cn } from '../ui/utils';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 
 export type CreditsPayload = {
   balance: number | null;
@@ -208,59 +209,72 @@ export function SlimeCreditsChipNav({ compact }: { compact?: boolean }) {
   const { credits, loading } = ctx;
   if (!credits) {
     return (
-      <button
-        type="button"
-        onClick={() => navigate('/profile')}
-        disabled={loading}
-        className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border border-amber-200/90 bg-amber-50/90 px-2.5 py-1 text-xs font-semibold text-amber-950 shadow-sm backdrop-blur-sm transition hover:border-amber-300',
-          compact && 'px-2 py-0.5 text-[11px]',
-        )}
-        title="Open Profile — if balance stays empty, set VITE_API_ORIGIN on Vercel to your Railway API URL"
-        aria-label="Slime Credits status unavailable — open Profile"
-      >
-        <SlimeCreditIcon className="h-3.5 w-3.5" />
-        <span>{loading ? '…' : '—'}</span>
-      </button>
+      <BuddyTooltip content="Open Profile. If the balance stays empty, point the web app at your API (e.g. VITE_API_ORIGIN on Vercel).">
+        <button
+          type="button"
+          onClick={() => navigate('/profile')}
+          disabled={loading}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-full border border-amber-200/90 bg-amber-50/90 px-2.5 py-1 text-xs font-semibold text-amber-950 shadow-sm backdrop-blur-sm transition hover:border-amber-300',
+            compact && 'px-2 py-0.5 text-[11px]',
+          )}
+          aria-label="Slime Credits status unavailable — open Profile"
+        >
+          <SlimeCreditIcon className="h-3.5 w-3.5" />
+          <span>{loading ? '…' : '—'}</span>
+        </button>
+      </BuddyTooltip>
     );
   }
   if (credits.is_unlimited) {
     return (
-      <button
-        type="button"
-        onClick={() => navigate('/profile')}
-        className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border border-violet-200/90 bg-gradient-to-r from-violet-50/95 to-emerald-50/90 px-2.5 py-1 text-xs font-semibold text-violet-900 shadow-sm backdrop-blur-sm transition hover:border-violet-300',
-          compact && 'px-2 py-0.5 text-[11px]',
-        )}
-        aria-label="Unlimited Slime Credits — open Profile"
-      >
-        <SlimeCreditIcon className="h-3.5 w-3.5" />
-        <span>∞</span>
-      </button>
+      <BuddyTooltip content="You have unlimited Slime Credits. Open Profile for account details.">
+        <button
+          type="button"
+          onClick={() => navigate('/profile')}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-full border border-violet-200/90 bg-gradient-to-r from-violet-50/95 to-emerald-50/90 px-2.5 py-1 text-xs font-semibold text-violet-900 shadow-sm backdrop-blur-sm transition hover:border-violet-300',
+            compact && 'px-2 py-0.5 text-[11px]',
+          )}
+          aria-label="Unlimited Slime Credits — open Profile"
+        >
+          <SlimeCreditIcon className="h-3.5 w-3.5" />
+          <span>∞</span>
+        </button>
+      </BuddyTooltip>
     );
   }
   const bal = credits.balance ?? 0;
   const low = bal > 0 && bal <= 5;
   const out = bal <= 0;
   return (
-    <button
-      type="button"
-      onClick={() => navigate('/profile')}
-      disabled={loading}
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur-sm transition',
-        compact && 'px-2 py-0.5 text-[11px]',
-        out && 'border-rose-200 bg-rose-50/95 text-rose-900 hover:border-rose-300',
-        low && !out && 'border-amber-200 bg-amber-50/95 text-amber-950 hover:border-amber-300',
-        !low && !out && 'border-emerald-200/90 bg-white/90 text-emerald-950 hover:border-emerald-300',
-      )}
-      aria-label={`Slime Credits: ${bal}. Open Profile.`}
+    <BuddyTooltip
+      content={
+        out
+          ? 'Out of Slime Credits — open Profile to redeem a voucher or check your plan.'
+          : low
+            ? 'Low balance — each model tier spends credits differently; open Profile for details.'
+            : 'Your Slime Credits balance. Open Profile for history, vouchers, and usage.'
+      }
     >
-      <SlimeCreditIcon className="h-3.5 w-3.5" />
-      <span>{loading ? '…' : bal}</span>
-      {low && !out ? <span className="sr-only">Low credits</span> : null}
-      {out ? <span className="sr-only">Out of credits</span> : null}
-    </button>
+      <button
+        type="button"
+        onClick={() => navigate('/profile')}
+        disabled={loading}
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur-sm transition',
+          compact && 'px-2 py-0.5 text-[11px]',
+          out && 'border-rose-200 bg-rose-50/95 text-rose-900 hover:border-rose-300',
+          low && !out && 'border-amber-200 bg-amber-50/95 text-amber-950 hover:border-amber-300',
+          !low && !out && 'border-emerald-200/90 bg-white/90 text-emerald-950 hover:border-emerald-300',
+        )}
+        aria-label={`Slime Credits: ${bal}. Open Profile.`}
+      >
+        <SlimeCreditIcon className="h-3.5 w-3.5" />
+        <span>{loading ? '…' : bal}</span>
+        {low && !out ? <span className="sr-only">Low credits</span> : null}
+        {out ? <span className="sr-only">Out of credits</span> : null}
+      </button>
+    </BuddyTooltip>
   );
 }

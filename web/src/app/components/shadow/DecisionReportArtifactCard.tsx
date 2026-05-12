@@ -1,6 +1,7 @@
 import { Calendar, FileText, MessageSquareText, Sparkles } from 'lucide-react';
 import { SlimeAdvisor } from '../report/SlimeAdvisor';
 import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 
 export type ArtifactStatus = 'complete' | 'generating' | 'error';
 
@@ -52,30 +53,36 @@ export function DecisionReportArtifactCard({
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={onOpenReport}
-          className="inline-flex items-center gap-1.5 rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
-        >
-          <Sparkles className="h-3.5 w-3.5" aria-hidden />
-          Open report
-        </button>
-        <button
-          type="button"
-          onClick={onReviseChat}
-          className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white px-3 py-1.5 text-xs font-medium text-violet-900 hover:bg-violet-50"
-        >
-          <MessageSquareText className="h-3.5 w-3.5" aria-hidden />
-          Revise with chat
-        </button>
-        <button
-          type="button"
-          onClick={onOpenExecutionCalendar}
-          className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 hover:bg-gray-50"
-        >
-          <Calendar className="h-3.5 w-3.5" aria-hidden />
-          Execution calendar
-        </button>
+        <BuddyTooltip content="Open the full decision report viewer for this artifact.">
+          <button
+            type="button"
+            onClick={onOpenReport}
+            className="inline-flex items-center gap-1.5 rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+          >
+            <Sparkles className="h-3.5 w-3.5" aria-hidden />
+            Open report
+          </button>
+        </BuddyTooltip>
+        <BuddyTooltip content="Pin this report for revision-style follow-ups in Shadow Chat.">
+          <button
+            type="button"
+            onClick={onReviseChat}
+            className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white px-3 py-1.5 text-xs font-medium text-violet-900 hover:bg-violet-50"
+          >
+            <MessageSquareText className="h-3.5 w-3.5" aria-hidden />
+            Revise with chat
+          </button>
+        </BuddyTooltip>
+        <BuddyTooltip content="Jump to the execution planner calendar for this decision.">
+          <button
+            type="button"
+            onClick={onOpenExecutionCalendar}
+            className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 hover:bg-gray-50"
+          >
+            <Calendar className="h-3.5 w-3.5" aria-hidden />
+            Execution calendar
+          </button>
+        </BuddyTooltip>
       </div>
       <p className="mt-2 text-[10px] text-gray-400 truncate" title={decisionId}>
         ID: {decisionId.slice(0, 8)}…

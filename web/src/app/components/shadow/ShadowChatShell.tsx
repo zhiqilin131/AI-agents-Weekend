@@ -15,6 +15,7 @@ import { useDecisionReportStream } from '../../../hooks/useDecisionReportStream'
 import { ModelSelector } from '../../../features/models/ModelSelector';
 import { buildCheaperModelHint } from '../../../features/models/slimeModelsApi';
 import { useSlimeModelCatalog } from '../../../features/models/useSlimeModelCatalog';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 import type { SlimeCreditFeature } from '../../../features/models/types';
 import { AgentPresence3DPanel } from './AgentPresence3DPanel';
 import { ChatMessageList } from './ChatMessageList';
@@ -756,14 +757,16 @@ export function ShadowChatShell({
                 />
                 {calendarCoachHint ? (
                   <div className="relative overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-white/95 via-indigo-50/40 to-violet-50/50 px-3 py-3 shadow-[0_8px_30px_rgba(99,102,241,0.12)]">
-                    <button
-                      type="button"
-                      className="absolute right-2 top-2 rounded-full p-1 text-slate-400 hover:bg-white/80 hover:text-slate-700"
-                      aria-label="Dismiss calendar hint"
-                      onClick={() => setCalendarCoachHint(null)}
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    <BuddyTooltip content="Dismiss this calendar hint card.">
+                      <button
+                        type="button"
+                        className="absolute right-2 top-2 rounded-full p-1 text-slate-400 hover:bg-white/80 hover:text-slate-700"
+                        aria-label="Dismiss calendar hint"
+                        onClick={() => setCalendarCoachHint(null)}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </BuddyTooltip>
                     <div className="flex items-center gap-2 pr-8 text-indigo-900">
                       <Sparkles className="h-4 w-4 shrink-0 text-indigo-600" aria-hidden />
                       <span className="text-xs font-semibold uppercase tracking-wide">Calendar insight</span>
@@ -777,38 +780,44 @@ export function ShadowChatShell({
                           {plannerSelectionContext.titles.slice(0, 4).join(' · ')}
                           {plannerSelectionContext.titles.length > 4 ? '…' : ''}
                         </p>
-                        <button
-                          type="button"
-                          className="mt-1 text-[10px] font-medium text-violet-800 underline hover:text-violet-950"
-                          onClick={() => {
-                            clearSelectedBlocksContext();
-                            setPlannerSelectionContext(null);
-                          }}
-                        >
-                          Clear selection scope
-                        </button>
+                        <BuddyTooltip content="Clear the narrowed planner scope and apply hints to the whole calendar again.">
+                          <button
+                            type="button"
+                            className="mt-1 text-[10px] font-medium text-violet-800 underline hover:text-violet-950"
+                            onClick={() => {
+                              clearSelectedBlocksContext();
+                              setPlannerSelectionContext(null);
+                            }}
+                          >
+                            Clear selection scope
+                          </button>
+                        </BuddyTooltip>
                       </div>
                     ) : null}
                     <div className="mt-2.5 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={calendarCoachBusy}
-                        onClick={() => void applyCalendarCoachFromChat()}
-                        className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50"
-                      >
-                        {calendarCoachBusy ? 'Applying…' : 'Apply to execution calendar'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={calendarCoachBusy}
-                        onClick={() => {
-                          sessionStorage.setItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY, calendarCoachHint.trim());
-                          navigate('/execution?from=shadow');
-                        }}
-                        className="rounded-full border border-indigo-200/90 bg-white/80 px-3 py-2 text-xs font-medium text-indigo-900 hover:bg-white"
-                      >
-                        Open planner
-                      </button>
+                      <BuddyTooltip content="Apply this calendar suggestion to your execution planner storage.">
+                        <button
+                          type="button"
+                          disabled={calendarCoachBusy}
+                          onClick={() => void applyCalendarCoachFromChat()}
+                          className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50"
+                        >
+                          {calendarCoachBusy ? 'Applying…' : 'Apply to execution calendar'}
+                        </button>
+                      </BuddyTooltip>
+                      <BuddyTooltip content="Open the execution planner in another view with this hint prefilled.">
+                        <button
+                          type="button"
+                          disabled={calendarCoachBusy}
+                          onClick={() => {
+                            sessionStorage.setItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY, calendarCoachHint.trim());
+                            navigate('/execution?from=shadow');
+                          }}
+                          className="rounded-full border border-indigo-200/90 bg-white/80 px-3 py-2 text-xs font-medium text-indigo-900 hover:bg-white"
+                        >
+                          Open planner
+                        </button>
+                      </BuddyTooltip>
                     </div>
                   </div>
                 ) : null}

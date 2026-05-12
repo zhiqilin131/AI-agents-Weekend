@@ -1,4 +1,5 @@
 import type { ShadowMessage } from './types';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 import { DecisionReportArtifactCard, type ArtifactStatus } from './DecisionReportArtifactCard';
 
 const SUGGESTION_CHIPS = [
@@ -29,15 +30,16 @@ export function ChatMessageList({
           <p className="mt-2 text-sm text-gray-500">Tap a starter or type below — no clarification until you send a message.</p>
           <div className="mt-5 flex flex-wrap justify-center gap-2">
             {SUGGESTION_CHIPS.map((label) => (
-              <button
-                key={label}
-                type="button"
-                disabled={!onSuggestionChip}
-                onClick={() => onSuggestionChip?.(label)}
-                className="rounded-full border border-indigo-200/90 bg-white/90 px-3 py-1.5 text-xs font-medium text-indigo-900 shadow-sm hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {label}
-              </button>
+              <BuddyTooltip key={label} content={`Insert this starter into the composer: “${label}”.`}>
+                <button
+                  type="button"
+                  disabled={!onSuggestionChip}
+                  onClick={() => onSuggestionChip?.(label)}
+                  className="rounded-full border border-indigo-200/90 bg-white/90 px-3 py-1.5 text-xs font-medium text-indigo-900 shadow-sm hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {label}
+                </button>
+              </BuddyTooltip>
             ))}
           </div>
         </div>

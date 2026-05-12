@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { VoiceRecorderTranscribeButton } from '../VoiceRecorderTranscribeButton';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 
 export function ShadowChatInput({
   disabled,
@@ -52,11 +53,17 @@ export function ShadowChatInput({
           compact
           showUploadFallback
         />
-        <button type="button" onClick={send} disabled={!value.trim() || disabled} className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-40">
-          Send
-        </button>
+        <BuddyTooltip content="Send your message to Shadow Chat (Enter also sends; Shift+Enter for a new line).">
+          <button
+            type="button"
+            onClick={send}
+            disabled={!value.trim() || disabled}
+            className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-40"
+          >
+            Send
+          </button>
+        </BuddyTooltip>
       </div>
     </div>
   );
 }
-

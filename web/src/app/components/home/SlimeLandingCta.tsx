@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import type { SlimeProfile } from '../../../app/model';
 import { DEFAULT_SLIME_PROFILE } from '../../../hooks/useSlimeProfile';
 import { slimeThemePalette } from '../../../features/slime/slimeThemePalette';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 import { cn } from '../ui/utils';
 
 type Props = {
@@ -34,26 +35,28 @@ export function SlimeLandingCta({ onClick, className, profile }: Props) {
 
   return (
     <div className={cn('flex flex-col items-center', className)}>
-      <button
-        type="button"
-        onClick={onClick}
-        style={
-          {
-            background: bg,
-            '--slime-accent': t.c,
-          } as CSSProperties
-        }
-        className={cn(
-          'slime-cta-btn group relative inline-flex min-w-[12.5rem] items-center justify-center overflow-hidden',
-          'rounded-[1.85rem] border border-violet-200/45 px-10 py-4 text-lg',
-          'origin-center font-semibold tracking-tight backdrop-blur-[2px]',
-          'transition-[filter] duration-300 hover:brightness-[1.02] active:scale-[0.98]',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f5f3ff]',
-          labelTone(p),
-        )}
-      >
-        <span className="relative z-[1]">Slime Chat</span>
-      </button>
+      <BuddyTooltip content="Open the Slime Buddy — voice-first companion, personalization, and playful chat.">
+        <button
+          type="button"
+          onClick={onClick}
+          style={
+            {
+              background: bg,
+              '--slime-accent': t.c,
+            } as CSSProperties
+          }
+          className={cn(
+            'slime-cta-btn group relative inline-flex min-w-[12.5rem] items-center justify-center overflow-hidden',
+            'rounded-[1.85rem] border border-violet-200/45 px-10 py-4 text-lg',
+            'origin-center font-semibold tracking-tight backdrop-blur-[2px]',
+            'transition-[filter] duration-300 hover:brightness-[1.02] active:scale-[0.98]',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f5f3ff]',
+            labelTone(p),
+          )}
+        >
+          <span className="relative z-[1]">Slime Chat</span>
+        </button>
+      </BuddyTooltip>
     </div>
   );
 }

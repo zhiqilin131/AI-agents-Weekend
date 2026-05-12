@@ -25,6 +25,7 @@ import { cn } from '../../app/components/ui/utils';
 import { useSlimeCredits } from '../../app/components/credits/SlimeCreditsContext';
 import { ModelSelector } from '../models/ModelSelector';
 import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
+import { BuddyTooltip } from './BuddyTooltip';
 
 export type VoiceAgentState =
   | 'idle'
@@ -816,7 +817,7 @@ export function SlimeVoiceAgent({
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 4 }}
-              className="max-w-sm rounded-2xl border border-white/80 bg-white/90 px-3 py-2 text-center text-sm leading-snug text-gray-800 shadow-md backdrop-blur-md"
+              className="max-w-sm rounded-2xl border border-white/85 bg-white/96 px-3 py-2 text-center text-sm leading-snug text-gray-800 shadow-md backdrop-blur-md"
             >
               {bubbleText}
             </motion.div>
@@ -824,57 +825,65 @@ export function SlimeVoiceAgent({
         </AnimatePresence>
 
         {bubbleText && ttsSupported && !recording ? (
-          <button
-            type="button"
-            className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
-            onClick={() => {
-              setTtsHint(null);
-              unlockSlimeAudioContext();
-              primeSpeechSynthesisFromGesture();
-              runTts(bubbleText, { force: true });
-            }}
-          >
-            {isSpeaking || buddyAudioPlaying ? 'Replay reply' : 'Play reply'}
-          </button>
+          <BuddyTooltip content="Speak the assistant's last reply with your browser voice (unlocks audio on first use).">
+            <button
+              type="button"
+              className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
+              onClick={() => {
+                setTtsHint(null);
+                unlockSlimeAudioContext();
+                primeSpeechSynthesisFromGesture();
+                runTts(bubbleText, { force: true });
+              }}
+            >
+              {isSpeaking || buddyAudioPlaying ? 'Replay reply' : 'Play reply'}
+            </button>
+          </BuddyTooltip>
         ) : null}
 
         {showEvidenceCta && drawerItems.length ? (
-          <button
-            type="button"
-            className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
-            onClick={() => setDrawerOpen(true)}
-          >
-            View evidence
-          </button>
+          <BuddyTooltip content="Open a drawer with memories and snippets that influenced this answer.">
+            <button
+              type="button"
+              className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
+              onClick={() => setDrawerOpen(true)}
+            >
+              View evidence
+            </button>
+          </BuddyTooltip>
         ) : null}
 
         {pendingConfirm ? (
-          <div className="flex max-w-sm flex-col items-center gap-2 rounded-2xl border border-amber-200/80 bg-amber-50/95 px-3 py-2 shadow-md backdrop-blur-md">
+          <div className="flex max-w-sm flex-col items-center gap-2 rounded-2xl border border-amber-200/85 bg-amber-50 px-3 py-2 shadow-md backdrop-blur-md">
             <p className="text-center text-sm text-amber-950">{pendingConfirm.title}</p>
             <div className="flex gap-2">
-              <button
-                type="button"
-                className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
-                onClick={() => void onConfirmPatch()}
-              >
-                Confirm
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
-                onClick={() => {
-                  setPendingConfirm(null);
-                  setVoiceState('idle');
-                }}
-              >
-                Cancel
-              </button>
+              <BuddyTooltip content="Apply the proposed profile or style update from this conversation.">
+                <button
+                  type="button"
+                  className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
+                  onClick={() => void onConfirmPatch()}
+                >
+                  Confirm
+                </button>
+              </BuddyTooltip>
+              <BuddyTooltip content="Discard the proposed update and go back to idle.">
+                <button
+                  type="button"
+                  className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
+                  onClick={() => {
+                    setPendingConfirm(null);
+                    setVoiceState('idle');
+                  }}
+                >
+                  Cancel
+                </button>
+              </BuddyTooltip>
             </div>
           </div>
         ) : null}
 
         {pendingCalendar ? (
-          <div className="flex max-w-sm flex-col gap-2 rounded-2xl border border-indigo-200/80 bg-white/95 px-4 py-3 text-left shadow-lg backdrop-blur-md">
+          <div className="flex max-w-sm flex-col gap-2 rounded-2xl border border-indigo-200/85 bg-white/98 px-4 py-3 text-left shadow-lg backdrop-blur-md">
             <p className="text-center text-xs font-semibold text-indigo-950">
               {petName} can add this to your calendar:
             </p>
@@ -886,31 +895,37 @@ export function SlimeVoiceAgent({
               ) : null}
             </div>
             <div className="flex flex-wrap justify-center gap-2">
-              <button
-                type="button"
-                className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
-                onClick={() => void onConfirmCalendar()}
-              >
-                Add to calendar
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
-                onClick={onEditCalendar}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-700"
-                onClick={() => {
-                  setPendingCalendar(null);
-                  setPendingAgentDraftId(null);
-                  setVoiceState('idle');
-                }}
-              >
-                Cancel
-              </button>
+              <BuddyTooltip content="Confirm and add this event to your execution calendar.">
+                <button
+                  type="button"
+                  className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
+                  onClick={() => void onConfirmCalendar()}
+                >
+                  Add to calendar
+                </button>
+              </BuddyTooltip>
+              <BuddyTooltip content="Open the planner to adjust times or details before saving.">
+                <button
+                  type="button"
+                  className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
+                  onClick={onEditCalendar}
+                >
+                  Edit
+                </button>
+              </BuddyTooltip>
+              <BuddyTooltip content="Dismiss this calendar suggestion without saving.">
+                <button
+                  type="button"
+                  className="rounded-full border border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-700"
+                  onClick={() => {
+                    setPendingCalendar(null);
+                    setPendingAgentDraftId(null);
+                    setVoiceState('idle');
+                  }}
+                >
+                  Cancel
+                </button>
+              </BuddyTooltip>
             </div>
           </div>
         ) : null}
@@ -928,19 +943,29 @@ export function SlimeVoiceAgent({
               transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
             />
           ) : null}
-          <button
-            type="button"
-            disabled={!supported}
-            onClick={() => void pushToTalk()}
-            title={`Talk to ${petName}`}
-            aria-label={recording ? 'Stop recording' : `Talk to ${petName}`}
-            className={cn(
-              'relative flex h-14 w-14 items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-lg transition hover:scale-[1.03] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-40',
-              recording && 'ring-4 ring-cyan-300/80',
-            )}
+          <BuddyTooltip
+            side="top"
+            content={
+              supported
+                ? `Tap to start or stop recording and send to ${petName}. Works like push-to-talk.`
+                : 'Voice input is not available in this browser.'
+            }
           >
-            {recording ? <Square className="h-6 w-6 fill-current" aria-hidden /> : <Mic className="h-6 w-6" aria-hidden />}
-          </button>
+            <span className="inline-flex rounded-full">
+              <button
+                type="button"
+                disabled={!supported}
+                onClick={() => void pushToTalk()}
+                aria-label={recording ? 'Stop recording' : `Talk to ${petName}`}
+                className={cn(
+                  'relative flex h-14 w-14 items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-lg transition hover:scale-[1.03] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-40',
+                  recording && 'ring-4 ring-cyan-300/80',
+                )}
+              >
+                {recording ? <Square className="h-6 w-6 fill-current" aria-hidden /> : <Mic className="h-6 w-6" aria-hidden />}
+              </button>
+            </span>
+          </BuddyTooltip>
         </div>
 
         {recording && speechPhaseLabel(speechPhase, recording) ? (
@@ -955,7 +980,7 @@ export function SlimeVoiceAgent({
         data-slime-avoid
         className="pointer-events-auto fixed right-3 bottom-[max(5.75rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] z-[52] w-[min(92vw,16rem)] sm:right-5"
       >
-        <div className="rounded-xl border border-white/40 bg-white/55 px-2 py-1 backdrop-blur-md">
+        <div className="rounded-xl border border-white/50 bg-white/72 px-2 py-1 backdrop-blur-md">
           <ModelSelector
             feature="slime_voice"
             selectedModelId={voiceModelOptionId || slimeModels.defaultModel}

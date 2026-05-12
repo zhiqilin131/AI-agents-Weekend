@@ -5,6 +5,7 @@ import type { ClarifyQuestion } from '../ClarifyDialog';
 import { Button } from '../ui/button';
 import { Label } from '../ui/label';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 
 export type ClarificationGateMeta = {
   domain?: string;
@@ -92,35 +93,45 @@ export function ClarificationCard({ questions, meta, disabled, onSkip, onAnswer 
             Remember for future sessions (durable preferences only)
           </label>
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              disabled={!canSubmit || disabled}
-              onClick={() => {
-                if (!canSubmit) return;
-                onAnswer(picked, saveToProfile);
-                setAnswering(false);
-                setPicked({});
-              }}
-            >
-              Submit answer
-            </Button>
-            <Button type="button" size="sm" variant="outline" onClick={() => setAnswering(false)}>
-              Back
-            </Button>
+            <BuddyTooltip content="Send your choices and continue — optional durable preferences if the box is checked.">
+              <Button
+                type="button"
+                size="sm"
+                disabled={!canSubmit || disabled}
+                onClick={() => {
+                  if (!canSubmit) return;
+                  onAnswer(picked, saveToProfile);
+                  setAnswering(false);
+                  setPicked({});
+                }}
+              >
+                Submit answer
+              </Button>
+            </BuddyTooltip>
+            <BuddyTooltip content="Return to the short clarification card without submitting.">
+              <Button type="button" size="sm" variant="outline" onClick={() => setAnswering(false)}>
+                Back
+              </Button>
+            </BuddyTooltip>
           </div>
         </div>
       ) : (
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => void onSkip()}>
-            Skip
-          </Button>
-          <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => setShowWhy((s) => !s)}>
-            Why ask this?
-          </Button>
-          <Button type="button" size="sm" disabled={disabled} onClick={() => setAnswering(true)}>
-            Answer
-          </Button>
+          <BuddyTooltip content="Skip clarification; the assistant will continue with best-effort assumptions.">
+            <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => void onSkip()}>
+              Skip
+            </Button>
+          </BuddyTooltip>
+          <BuddyTooltip content="Show why this clarification improves the next response.">
+            <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => setShowWhy((s) => !s)}>
+              Why ask this?
+            </Button>
+          </BuddyTooltip>
+          <BuddyTooltip content="Pick answers from multiple-choice options before continuing.">
+            <Button type="button" size="sm" disabled={disabled} onClick={() => setAnswering(true)}>
+              Answer
+            </Button>
+          </BuddyTooltip>
         </div>
       )}
     </div>
