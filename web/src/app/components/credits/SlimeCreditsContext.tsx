@@ -133,7 +133,10 @@ export function SlimeCreditsProvider({ children }: { children: ReactNode }) {
     <SlimeCreditsContext.Provider value={value}>
       {children}
       <AlertDialog open={modal !== null} onOpenChange={(o) => !o && setModal(null)}>
-        <AlertDialogContent className="border border-white/20 bg-white/75 shadow-2xl backdrop-blur-xl sm:max-w-md">
+        <AlertDialogContent
+          overlayClassName="z-[280]"
+          className="z-[280] border border-white/20 bg-white/75 shadow-2xl backdrop-blur-xl sm:max-w-md"
+        >
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-lg font-semibold text-slate-900">
               <SlimeCreditIcon className="h-6 w-6" />

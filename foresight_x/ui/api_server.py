@@ -2404,6 +2404,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         append_temporary_context_items(thread, out.thread_only_items)
         thread_context_kept = bool(out.thread_only_items)
         profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
+        profile_update_details = list(out.profile_memory_events or [])
         append_message(
             thread,
             role="assistant",
@@ -2415,7 +2416,12 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         )
         if profile_updates:
             thread.setdefault("memory_events", []).append(
-                {"kind": "profile_update", "items": profile_updates[:4], "at": _utc_now()}
+                {
+                    "kind": "profile_update",
+                    "items": profile_updates[:4],
+                    "details": profile_update_details[:4],
+                    "at": _utc_now(),
+                }
             )
         _finalize_shadow_thread_turn(thread, settings=settings)
         suggestion = _build_shadow_suggestion(
@@ -2716,9 +2722,10 @@ def stream_shadow_chat_message(
             for chunk in _chunk_text(text):
                 yield _sse_chunk({"type": "delta", "content": chunk})
             profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
+            profile_update_details = list(out.profile_memory_events or [])
             if profile_updates:
                 yield _sse_chunk({"type": "status", "status": "updating_profile", "label": "Updating profile..."})
-                yield _sse_chunk({"type": "profile_update", "items": profile_updates[:4]})
+                yield _sse_chunk({"type": "profile_update", "items": profile_updates[:4], "details": profile_update_details[:4]})
             elif out.thread_only_items and not out.memory_confirmation_question:
                 yield _sse_chunk(
                     {
@@ -2737,7 +2744,12 @@ def stream_shadow_chat_message(
             )
             if profile_updates:
                 thread.setdefault("memory_events", []).append(
-                    {"kind": "profile_update", "items": profile_updates[:4], "at": _utc_now()}
+                    {
+                        "kind": "profile_update",
+                        "items": profile_updates[:4],
+                        "details": profile_update_details[:4],
+                        "at": _utc_now(),
+                    }
                 )
             _finalize_shadow_thread_turn(thread, settings=settings)
 
@@ -3753,6 +3765,7 @@ def _run_slime_voice_pipeline(
         process_conversation_turn,
     )
     from foresight_x.chat.thread_store import append_message
+    from foresight_x.profile.proactive_memory import capture_turn_memory
     from foresight_x.shadow.thread_summary import maybe_update_thread_summary
     from foresight_x.voice.asr import transcribe_audio
     from foresight_x.voice.slime_voice_router import SlimeVoiceContext, route_slime_voice_command
@@ -3920,12 +3933,21 @@ def _run_slime_voice_pipeline(
         timing["tool_execute_ms"] = tool_ms
         timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
 
-        append_message(
+        user_row = append_message(
             thread,
             role="user",
             content=transcript,
             mode="normal",
             metadata_extra={"interaction_source": "slime_voice", "modality": "voice"},
+        )
+        memory_capture = capture_turn_memory(
+            settings=settings,
+            user_text=transcript,
+            assistant_text=assistant_text,
+            source_chat="slime_voice",
+            source_thread_id=resolved_tid,
+            source_message_id=str(user_row.get("id") or ""),
+            llm_model=llm_model,
         )
         append_message(
             thread,
@@ -3933,7 +3955,27 @@ def _run_slime_voice_pipeline(
             content=assistant_text,
             mode="normal",
             memory_used=route.tool_name == "search_memory",
+            profile_updated=bool(memory_capture.saved_texts),
         )
+        if memory_capture.saved_texts:
+            thread.setdefault("memory_events", []).append(
+                {
+                    "kind": "profile_update",
+                    "items": memory_capture.saved_texts[:4],
+                    "details": memory_capture.events[:4],
+                    "at": _utc_now(),
+                }
+            )
+            try:
+                from foresight_x.memory_graph import TemporalGraphMemory
+
+                if settings.graph_enabled:
+                    TemporalGraphMemory(settings.foresight_user_id, settings=settings).record_shadow_event(
+                        transcript,
+                        assistant_text,
+                    )
+            except Exception:
+                pass
         maybe_update_thread_summary(thread, settings=settings)
 
         voice_ui: dict[str, Any] = {
@@ -3954,7 +3996,8 @@ def _run_slime_voice_pipeline(
             "thread_id": resolved_tid,
             "intent": route.intent,
             "decision_suggestion": None,
-            "memory_updates": [],
+            "memory_updates": memory_capture.saved_texts,
+            "memory_update_details": memory_capture.events,
             "tool_call": {"name": route.tool_name, "arguments": route.arguments},
             "tool_result": tool_result,
             "frontend_action": fe,
@@ -4000,6 +4043,7 @@ def _run_slime_voice_pipeline(
         "intent": str(turn.get("intent") or route.intent),
         "decision_suggestion": ds,
         "memory_updates": turn.get("memory_updates") or [],
+        "memory_update_details": turn.get("memory_update_details") or [],
         "tool_call": {"name": route.tool_name, "arguments": route.arguments},
         "tool_result": {"ok": True, "conversation_turn": True},
         "frontend_action": fe_out,

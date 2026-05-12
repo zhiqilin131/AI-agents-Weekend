@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Literal
 
 from foresight_x.profile.memory_structured import (
     active_memory_facts,
@@ -15,6 +17,8 @@ from foresight_x.profile.memory_structured import (
     triple_key,
     user_scope_memory_facts,
 )
+from foresight_x.profile.memory_rules import enrich_memory_fact
+from foresight_x.profile.memory_rules import rank_memory_facts_for_query
 from foresight_x.schemas import (
     MemoryFactCategory,
     MemoryFactSource,
@@ -24,6 +28,31 @@ from foresight_x.schemas import (
     UserProfile,
     UserState,
 )
+
+
+MemoryMergeAction = Literal["new", "updated", "merged"]
+
+
+@dataclass
+class MemoryMergeEvent:
+    action: MemoryMergeAction
+    id: str
+    text: str
+    category: str
+    confidence: float
+    importance: float
+    previous_id: str = ""
+
+    def model_dump(self) -> dict[str, object]:
+        return {
+            "action": self.action,
+            "id": self.id,
+            "text": self.text,
+            "category": self.category,
+            "confidence": self.confidence,
+            "importance": self.importance,
+            "previous_id": self.previous_id,
+        }
 
 
 def _utc_ts() -> str:
@@ -97,7 +126,11 @@ def merge_profile_into_user_state(user_state: UserState, profile: UserProfile) -
     profile_only = profile.profile_channel_priority_texts()
     clar = profile.clarification_priority_texts()
     inferred = list(profile.inferred_priorities)
-    facts = user_scope_memory_facts(active_memory_facts(list(profile.memory_facts)))
+    facts = rank_memory_facts_for_query(
+        user_scope_memory_facts(active_memory_facts(list(profile.memory_facts))),
+        user_state.raw_input,
+        limit=48,
+    )
     fact_strings = [format_memory_fact_prompt_line(x) for x in facts]
     combined = list(dict.fromkeys([*profile_only, *clar, *inferred, *fact_strings]))
     merged_goals = list(dict.fromkeys([*profile_only, *clar, *inferred, *fact_strings, *user_state.goals]))
@@ -184,9 +217,80 @@ def append_profile_memory_records(
     max_facts: int = 64,
 ) -> UserProfile:
     """Append structured ``ProfileMemoryFact`` rows with triple-key dedup and single-slot deprecation."""
+    updated, _events = append_profile_memory_records_with_events(profile, records, max_facts=max_facts)
+    return updated
+
+
+def _merge_fact_metadata(existing: ProfileMemoryFact, rec: ProfileMemoryFact, *, ts: str) -> ProfileMemoryFact:
+    tags = list(dict.fromkeys([*(existing.retrieval_tags or []), *(rec.retrieval_tags or [])]))
+    rels = list(existing.relationships or [])
+    rel_key = {
+        (
+            str(r.get("relation_type") or ""),
+            str(r.get("target_ref") or ""),
+            str(r.get("target_memory_id") or ""),
+        )
+        for r in rels
+        if isinstance(r, dict)
+    }
+    for r in rec.relationships or []:
+        if not isinstance(r, dict):
+            continue
+        key = (
+            str(r.get("relation_type") or ""),
+            str(r.get("target_ref") or ""),
+            str(r.get("target_memory_id") or ""),
+        )
+        if key in rel_key:
+            continue
+        rel_key.add(key)
+        rels.append(r)
+    related = list(dict.fromkeys([*(existing.related_memory_ids or []), *(rec.related_memory_ids or [])]))
+    source_chat = existing.source_chat or rec.source_chat
+    source_thread_id = existing.source_thread_id or rec.source_thread_id
+    source_message_id = existing.source_message_id or rec.source_message_id
+    q = {**(existing.qualifiers or {}), **(rec.qualifiers or {})}
+    return existing.model_copy(
+        update={
+            "updated_at": ts,
+            "last_reinforced_at": ts,
+            "confidence": max(float(existing.confidence or 0.0), float(rec.confidence or 0.0)),
+            "importance": max(float(existing.importance or 0.0), float(rec.importance or 0.0)),
+            "retrieval_tags": tags[:24],
+            "relationships": rels[:12],
+            "related_memory_ids": related[:16],
+            "source_chat": source_chat,
+            "source_thread_id": source_thread_id,
+            "source_message_id": source_message_id,
+            "qualifiers": q,
+            "merge_count": int(existing.merge_count or 0) + 1,
+        }
+    )
+
+
+def _event_for(action: MemoryMergeAction, rec: ProfileMemoryFact, *, previous_id: str = "") -> MemoryMergeEvent:
+    return MemoryMergeEvent(
+        action=action,
+        id=rec.id,
+        text=rec.text,
+        category=getattr(rec.category, "value", str(rec.category)),
+        confidence=float(rec.confidence or 0.0),
+        importance=float(rec.importance or 0.0),
+        previous_id=previous_id,
+    )
+
+
+def append_profile_memory_records_with_events(
+    profile: UserProfile,
+    records: list[ProfileMemoryFact],
+    *,
+    max_facts: int = 64,
+) -> tuple[UserProfile, list[MemoryMergeEvent]]:
+    """Append/update structured memory rows and report whether each row was new, merged, or superseded older memory."""
     profile = UserProfile.model_validate(profile.model_dump(mode="json"))
     ts = _utc_ts()
     mf: list[ProfileMemoryFact] = list(profile.memory_facts)
+    events: list[MemoryMergeEvent] = []
 
     for raw in records:
         ensured = ensure_memory_fact_text(raw)
@@ -197,23 +301,38 @@ def append_profile_memory_records(
         ca = (rec.created_at or "").strip() or ts
         ua = (rec.updated_at or "").strip() or ts
         rec = rec.model_copy(update={"id": rid, "created_at": ca, "updated_at": ua})
+        rec = enrich_memory_fact(rec)
 
         pred_norm = normalize_predicate(rec.predicate)
         if not pred_norm:
             key = (rec.category, rec.text.strip().lower())
-            if any(
-                f.status == "active"
-                and not normalize_predicate(f.predicate)
-                and (f.category, f.text.strip().lower()) == key
-                for f in mf
-            ):
+            merged = False
+            for idx, f in enumerate(mf):
+                if (
+                    f.status == "active"
+                    and not normalize_predicate(f.predicate)
+                    and (f.category, f.text.strip().lower()) == key
+                ):
+                    mf[idx] = _merge_fact_metadata(f, rec, ts=ts)
+                    events.append(_event_for("merged", mf[idx]))
+                    merged = True
+                    break
+            if merged:
                 continue
             mf.append(rec)
+            events.append(_event_for("new", rec))
             if len(mf) > max_facts:
                 mf = mf[-max_facts:]
             continue
 
-        if any(triple_key(f) == triple_key(rec) and f.status == "active" for f in mf):
+        merged_existing = False
+        for idx, f in enumerate(mf):
+            if triple_key(f) == triple_key(rec) and f.status == "active":
+                mf[idx] = _merge_fact_metadata(f, rec, ts=ts)
+                events.append(_event_for("merged", mf[idx]))
+                merged_existing = True
+                break
+        if merged_existing:
             continue
 
         first_supersedes = ""
@@ -245,13 +364,15 @@ def append_profile_memory_records(
                 )
             mf = new_mf
             if first_supersedes:
-                rec = rec.model_copy(update={"supersedes_id": first_supersedes})
+                related = list(dict.fromkeys([*(rec.related_memory_ids or []), first_supersedes]))
+                rec = rec.model_copy(update={"supersedes_id": first_supersedes, "related_memory_ids": related[:16]})
 
         mf.append(rec)
+        events.append(_event_for("updated" if first_supersedes else "new", rec, previous_id=first_supersedes))
         if len(mf) > max_facts:
             mf = mf[-max_facts:]
 
-    return profile.model_copy(update={"memory_facts": mf})
+    return profile.model_copy(update={"memory_facts": mf}), events
 
 
 def delete_priority_line_by_id(profile: UserProfile, line_id: str) -> UserProfile | None:

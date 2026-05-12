@@ -12,6 +12,12 @@ from pydantic import ValidationError
 from foresight_x.chat.thread_store import list_threads, load_thread
 from foresight_x.config import Settings
 from foresight_x.harness.trace_index import list_traces
+from foresight_x.profile.memory_structured import (
+    active_memory_facts,
+    format_memory_fact_prompt_line,
+    user_scope_memory_facts,
+)
+from foresight_x.profile.memory_rules import rank_memory_facts_for_query
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import (
     SlimeAccessory,
@@ -95,30 +101,136 @@ ROUTE_TO_PATH: dict[str, str] = {
 
 
 def _tokens(q: str) -> set[str]:
-    return {t.lower() for t in re.findall(r"[a-zA-Z0-9']{3,}", q) if t}
+    raw = [t.lower() for t in re.findall(r"[a-zA-Z0-9']{2,}|[\u4e00-\u9fff]+", q or "")]
+    stop = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "can",
+        "do",
+        "does",
+        "for",
+        "how",
+        "is",
+        "it",
+        "me",
+        "my",
+        "of",
+        "the",
+        "to",
+        "what",
+        "who",
+        "you",
+        "your",
+        "about",
+        "remember",
+        "tell",
+        "just",
+    }
+    toks = {t for t in raw if len(t) >= 3 and t not in stop}
+    joined = " ".join(raw)
+    if any(x in joined for x in ("girlfriend", "boyfriend", "partner", "dating", "relationship")) or re.search(
+        r"女朋友|男朋友|对象|伴侣|恋爱|关系", q or ""
+    ):
+        toks.update({"girlfriend", "boyfriend", "partner", "dating", "relationship", "romantic"})
+    if any(x in joined for x in ("life", "routine", "daily", "day", "lifestyle", "living")) or re.search(
+        r"生活|日常|人生|平时", q or ""
+    ):
+        toks.update({"life", "routine", "daily", "school", "study", "work", "relationship", "goal", "habit"})
+    return toks
+
+
+def _is_broad_user_memory_query(query: str) -> bool:
+    q = (query or "").strip().lower()
+    return bool(
+        re.search(
+            r"\b(what do you know about me|what is my life like|my life|who am i|about me|remember about me)\b",
+            q,
+        )
+        or re.search(r"了解我|关于我|我的生活|我是谁|记得我", query or "")
+    )
 
 
 def _score_text(text: str, tokens: set[str]) -> float:
     if not text or not tokens:
         return 0.0
     low = text.lower()
-    hits = sum(1 for t in tokens if t in low)
-    return hits / max(len(tokens), 1)
+    score = 0.0
+    for t in tokens:
+        if t in low:
+            score += 1.35 if len(t) >= 6 else 1.0
+    return score / max(len(tokens), 1)
+
+
+def _profile_fact_text_for_search(f: Any) -> str:
+    bits = [
+        str(getattr(f, "text", "") or ""),
+        format_memory_fact_prompt_line(f),
+        str(getattr(f, "evidence", "") or ""),
+        str(getattr(f, "category", "") or ""),
+    ]
+    pred = str(getattr(f, "predicate", "") or "")
+    obj = str(getattr(f, "object_value", "") or "")
+    if pred or obj:
+        bits.append(f"{pred.replace('_', ' ')} {obj}")
+    return " | ".join(x.strip() for x in bits if x and x.strip())
+
+
+def _profile_fact_display_text(f: Any) -> str:
+    text = str(getattr(f, "text", "") or "").strip()
+    structured = format_memory_fact_prompt_line(f).strip()
+    evidence = str(getattr(f, "evidence", "") or "").strip()
+    parts: list[str] = []
+    if text:
+        parts.append(text)
+    if structured and structured.lower() != text.lower():
+        parts.append(f"structured: {structured}")
+    if evidence:
+        parts.append(f"evidence: {evidence}")
+    return " | ".join(parts)[:900] if parts else structured[:900]
 
 
 def _search_profile_and_memory(profile: UserProfile, query: str, tokens: set[str]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    if profile.about_me and _score_text(profile.about_me, tokens) > 0:
-        out.append({"kind": "about_me", "text": profile.about_me[:400], "id": None})
+    broad = _is_broad_user_memory_query(query)
+    if profile.about_me:
+        score = _score_text(profile.about_me, tokens)
+        if score > 0 or broad:
+            out.append({"kind": "about_me", "text": profile.about_me[:500], "id": None, "score": score + 0.18})
     for pl in profile.priority_lines or []:
         text = getattr(pl, "text", None) or str(pl)
-        if _score_text(text, tokens) > 0:
-            out.append({"kind": "priority_line", "text": text[:400], "id": getattr(pl, "id", None)})
-    for f in profile.memory_facts or []:
-        text = getattr(f, "text", None) or str(f)
-        if _score_text(text, tokens) > 0:
+        score = _score_text(text, tokens)
+        if score > 0 or broad:
+            out.append({"kind": "priority_line", "text": text[:500], "id": getattr(pl, "id", None), "score": score + 0.12})
+    facts = rank_memory_facts_for_query(
+        user_scope_memory_facts(active_memory_facts(list(profile.memory_facts or []))),
+        query,
+        limit=24,
+    )
+    direct_memory_q = _is_broad_user_memory_query(query) or bool(
+        re.search(r"\b(who|what)\b", query.lower()) and re.search(r"\b(remember|know|saved|profile|girlfriend|boyfriend|partner)\b", query.lower())
+    )
+    for idx, f in enumerate(facts):
+        search_text = _profile_fact_text_for_search(f)
+        score = _score_text(search_text, tokens)
+        rels = getattr(f, "relationships", None) or []
+        rel_boost = min(0.16, 0.04 * len(rels)) if isinstance(rels, list) else 0.0
+        if score > 0 or broad or (direct_memory_q and idx < 4):
             fid = getattr(f, "id", None)
-            out.append({"kind": "memory_fact", "text": text[:400], "id": fid})
+            category = str(getattr(getattr(f, "category", None), "value", getattr(f, "category", "")) or "")
+            category_boost = 0.08 if category in ("identity", "goals", "constraints") else 0.04
+            importance_boost = min(0.2, max(0.0, float(getattr(f, "importance", 0.0) or 0.0)) * 0.18)
+            recency_boost = 0.06 if str(getattr(f, "last_reinforced_at", "") or getattr(f, "updated_at", "")).strip() else 0.0
+            intent_boost = 0.05 if (direct_memory_q and category in ("identity", "goals", "constraints", "views")) else 0.0
+            out.append(
+                {
+                    "kind": "memory_fact",
+                    "text": _profile_fact_display_text(f),
+                    "id": fid,
+                    "score": score + 0.25 + category_boost + importance_boost + recency_boost + rel_boost + intent_boost,
+                }
+            )
     return out[:12]
 
 
@@ -126,49 +238,39 @@ def _search_chat_history(settings: Settings, query: str, tokens: set[str], threa
     out: list[dict[str, Any]] = []
     uid = settings.foresight_user_id
 
-    if thread_id:
-        t = load_thread(thread_id, user_id=uid)
+    def collect_thread(tid: str, *, current: bool = False) -> None:
+        t = load_thread(tid, user_id=uid)
         msgs = t.get("messages") or []
         ws = str(t.get("working_summary") or "")
-        if ws and _score_text(ws, tokens) > 0:
-            out.append({"kind": "thread_summary", "thread_id": thread_id, "text": ws[:500]})
+        boost = 0.12 if current else 0.0
+        score = _score_text(ws, tokens)
+        if ws and score > 0:
+            out.append({"kind": "thread_summary", "thread_id": tid, "text": ws[:500], "score": score + boost})
         for m in msgs:
             if str(m.get("role")) != "user":
                 continue
             c = str(m.get("content") or "")
-            if _score_text(c, tokens) > 0:
-                out.append(
-                    {
-                        "kind": "chat_message",
-                        "thread_id": thread_id,
-                        "message_id": m.get("id"),
-                        "text": c[:500],
-                    }
-                )
-        return out[:15]
-
-    metas = list_threads(user_id=uid)[:25]
-    for meta in metas:
-        tid = str(meta.get("thread_id") or "")
-        if not tid:
-            continue
-        t = load_thread(tid, user_id=uid)
-        ws = str(t.get("working_summary") or "")
-        if ws and _score_text(ws, tokens) > 0:
-            out.append({"kind": "thread_summary", "thread_id": tid, "text": ws[:400]})
-        for m in (t.get("messages") or [])[-40:]:
-            if str(m.get("role")) != "user":
-                continue
-            c = str(m.get("content") or "")
-            if _score_text(c, tokens) > 0:
+            score = _score_text(c, tokens)
+            if score > 0:
                 out.append(
                     {
                         "kind": "chat_message",
                         "thread_id": tid,
                         "message_id": m.get("id"),
-                        "text": c[:400],
+                        "text": c[:500],
+                        "score": score + boost,
                     }
                 )
+
+    if thread_id:
+        collect_thread(thread_id, current=True)
+
+    metas = list_threads(user_id=uid)[:25]
+    for meta in metas:
+        tid = str(meta.get("thread_id") or "")
+        if not tid or tid == thread_id:
+            continue
+        collect_thread(tid)
         if len(out) >= 18:
             break
     return out[:18]
@@ -178,16 +280,35 @@ def _search_decision_reports(settings: Settings, query: str, tokens: set[str]) -
     out: list[dict[str, Any]] = []
     for item in list_traces(settings=settings)[:40]:
         preview = f"{item.preview} {item.decision_type}"
-        if _score_text(preview, tokens) > 0:
+        score = _score_text(preview, tokens)
+        if score > 0:
             out.append(
                 {
                     "kind": "decision_trace",
                     "decision_id": item.decision_id,
                     "text": preview[:300],
                     "timestamp": item.timestamp,
+                    "score": score,
                 }
             )
     return out[:12]
+
+
+def _rank_memory_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    source_boost = {
+        "memory_fact": 0.35,
+        "about_me": 0.28,
+        "priority_line": 0.2,
+        "thread_summary": 0.16,
+        "chat_message": 0.12,
+        "decision_trace": 0.08,
+    }
+    ranked = list(hits)
+    for h in ranked:
+        kind = str(h.get("kind") or "")
+        h["rank_score"] = float(h.get("score") or 0.0) + source_boost.get(kind, 0.0)
+    ranked.sort(key=lambda h: float(h.get("rank_score") or 0.0), reverse=True)
+    return ranked
 
 
 def tool_search_memory(
@@ -217,10 +338,10 @@ def tool_search_memory(
     if scope in ("decision_reports", "all"):
         hits.extend(_search_decision_reports(settings, query, tokens))
 
-    # de-dupe by text prefix
+    # de-dupe by text prefix, then sort so precise profile facts beat loose chat matches.
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
-    for h in hits:
+    for h in _rank_memory_hits(hits):
         key = (h.get("text") or "")[:80]
         if key in seen:
             continue

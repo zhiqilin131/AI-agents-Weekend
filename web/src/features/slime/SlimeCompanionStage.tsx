@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { animate, motion, useMotionValue } from 'motion/react';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
+import { TypewriterText } from '../../app/components/TypewriterText';
 import { cn } from '../../app/components/ui/utils';
 import type { SlimeProfile } from '../../app/model';
+import type { SlimeSpeechOutput } from './SlimeVoiceAgent';
 
 /** Approximate radius of the slime “body” for obstacle clearance (viewport px). */
 const SLIME_FOOTPRINT_RADIUS = 78;
@@ -110,10 +112,12 @@ function pickSafeRoamDelta(
 export function SlimeCompanionStage({
   profile,
   advisorState = 'idle',
+  speechOutput,
   className,
 }: {
   profile: SlimeProfile;
   advisorState?: SlimeAdvisorState;
+  speechOutput?: SlimeSpeechOutput | null;
   /** Merged onto the stage root (e.g. z-index vs voice UI layers). */
   className?: string;
 }) {
@@ -279,6 +283,30 @@ export function SlimeCompanionStage({
             >
               <SlimeAdvisor state={advisorState} size="lg" profile={profile} companionMode />
             </motion.div>
+            {speechOutput?.text ? (
+              <motion.div
+                key={`${speechOutput.source}:${speechOutput.text}`}
+                initial={{ opacity: 0, y: 10, scale: 0.92, rotate: -1.5 }}
+                animate={{ opacity: 1, y: 0, scale: 1, rotate: 0 }}
+                exit={{ opacity: 0, y: 6, scale: 0.96 }}
+                transition={{ type: 'spring', stiffness: 420, damping: 26 }}
+                className={cn(
+                  'slime-comic-bubble pointer-events-none absolute left-[72%] top-[-18%] z-20 max-w-[min(74vw,25rem)]',
+                  speechOutput.source === 'error' && 'slime-comic-bubble-error',
+                  speechOutput.source === 'system' && 'slime-comic-bubble-system',
+                )}
+              >
+                <TypewriterText
+                  key={speechOutput.text}
+                  text={speechOutput.text}
+                  enabled
+                  as="p"
+                  charStep={2}
+                  intervalMs={18}
+                  className="break-keep text-[15px] font-medium leading-relaxed text-slate-800"
+                />
+              </motion.div>
+            ) : null}
           </motion.div>
         </motion.div>
       </motion.div>

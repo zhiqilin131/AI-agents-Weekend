@@ -98,8 +98,20 @@ class ProfileMemoryFact(BaseModel):
     valid_to: str = Field(default="", description="ISO-8601 UTC end of validity; empty = still valid if active.")
     status: MemoryFactStatus = "active"
     replaced_by_id: str = Field(default="", description="Newer fact that supersedes this row when deprecated.")
-    supersedes_id: str = Field(default="", description="Prior fact this one replaces.")
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    supersedes_id: str = Field(default="", description="Older memory fact id that this active row supersedes.")
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
+    retrieval_tags: list[str] = Field(default_factory=list)
+    related_memory_ids: list[str] = Field(default_factory=list)
+    relationships: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Lightweight graph edges: relation_type, target_ref, target_memory_id, evidence, confidence.",
+    )
+    source_chat: str = Field(default="", description="Surface that captured the memory, e.g. shadow_chat or slime_voice.")
+    source_thread_id: str = ""
+    source_message_id: str = ""
+    merge_count: int = Field(default=0, ge=0)
+    last_reinforced_at: str = ""
     evidence: str = Field(
         default="",
         description="Verbatim or near-verbatim snippet from the user for audit.",

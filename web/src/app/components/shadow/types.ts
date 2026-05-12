@@ -15,7 +15,20 @@ export type ShadowThread = {
   updated_at?: string;
   mode?: string;
   messages?: ShadowMessage[];
-  memory_events?: Array<{ kind: string; items: string[]; at: string }>;
+  memory_events?: Array<{
+    kind: string;
+    items: string[];
+    at: string;
+    details?: Array<{
+      action?: string;
+      id?: string;
+      text?: string;
+      category?: string;
+      confidence?: number;
+      importance?: number;
+      previous_id?: string;
+    }>;
+  }>;
   linked_decision_ids?: string[];
   active_report_context?: { decision_id: string; mode: string } | null;
   /** Rolling local summary — not durable profile memory */
@@ -42,4 +55,3 @@ export type AgentStatus =
   | 'scheduling'
   | 'report_open'
   | 'error';
-

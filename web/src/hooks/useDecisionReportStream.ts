@@ -126,7 +126,13 @@ export function useDecisionReportStream() {
               : 'You need more Slime Credits for this action.',
           cheaperHint,
         });
-        setStatus('error');
+        // Reset stream UI: callers close the report panel; without this, error stays null and the
+        // journey panel looks "stuck" on Structuring while credits modal sits underneath.
+        setPartialTrace(null);
+        setFinalTrace(null);
+        setError(null);
+        setProgressStep('Structuring decision');
+        setStatus('idle');
         setIsStreaming(false);
         return { trace: null, error: 'insufficient_credits' };
       }

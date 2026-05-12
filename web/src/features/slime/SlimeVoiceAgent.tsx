@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceRecorderSpeechPhase } from '../../hooks/useVoiceRecorder';
 import { Mic, Square } from 'lucide-react';
 import { useNavigate } from 'react-router';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import type { SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
 import { EvidenceDrawer } from '../../app/components/profile/EvidenceDrawer';
 import type { MemoryEvidenceItem } from '../../app/components/profile/memoryEvidenceTypes';
@@ -50,6 +50,12 @@ export type SlimeDecisionSuggestion = {
   description?: string;
 };
 
+export type SlimeSpeechOutput = {
+  text: string;
+  speaking: boolean;
+  source: 'assistant' | 'system' | 'error';
+};
+
 export type SlimeVoiceAgentProps = {
   slimeProfile: SlimeProfile;
   onUpdateSlimeProfile?: (patch: Partial<SlimeProfile>) => Promise<void> | void;
@@ -59,10 +65,16 @@ export type SlimeVoiceAgentProps = {
   threadId?: string;
   onThreadId?: (id: string) => void;
   onDecisionSuggestion?: (s: SlimeDecisionSuggestion | null) => void;
-  /** Buddy page: corner toast when profile-memory facts were saved. */
-  onProfileMemorySaved?: (message: string) => void;
+  /** Buddy page: toast/card when profile-memory facts were saved or updated. */
+  onProfileMemorySaved?: (payload: {
+    message: string;
+    items: string[];
+    details: Array<{ action?: string; id?: string; text?: string; category?: string }>;
+  }) => void;
   /** Buddy page: corner toast when a memory search returned evidence snippets. */
   onMemoryEvidenceRetrieved?: (count: number) => void;
+  /** Speech bubble rendered by the roaming stage so it stays attached to the slime. */
+  onSpeechOutputChange?: (output: SlimeSpeechOutput | null) => void;
   currentRoute?: string;
   className?: string;
 };
@@ -75,6 +87,24 @@ type ResolvedCalendar = {
   duration_minutes?: number;
   ambiguity_note?: string | null;
   timezone?: string;
+};
+
+type SlimeCalendarEvent = {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  description?: string | null;
+  source?: string;
+  locked?: boolean;
+  [key: string]: unknown;
+};
+
+type PendingCalendarMutation = {
+  kind: 'delete' | 'update';
+  event: SlimeCalendarEvent;
+  proposed?: Partial<SlimeCalendarEvent>;
+  message: string;
 };
 
 function mapVoiceToAdvisor(v: VoiceAgentState): SlimeAdvisorState {
@@ -142,6 +172,15 @@ type VoiceResponse = {
   thread_id?: string;
   decision_suggestion?: SlimeDecisionSuggestion | null;
   memory_updates?: string[];
+  memory_update_details?: Array<{
+    action?: string;
+    id?: string;
+    text?: string;
+    category?: string;
+    previous_id?: string;
+    confidence?: number;
+    importance?: number;
+  }>;
   tool_call?: { name?: string };
   frontend_action?: SlimeVoiceFrontendAction;
   tool_result?: { evidence_items?: MemoryEvidenceItem[]; conversation_turn?: boolean };
@@ -175,7 +214,10 @@ function friendlySlimeVoiceError(msg: string): string {
   return msg;
 }
 
-function formatProfileMemoryToast(memoryUpdates: string[]): string {
+function formatProfileMemoryToast(
+  memoryUpdates: string[],
+  details?: Array<{ action?: string; text?: string; category?: string }>,
+): string {
   const cleaned = memoryUpdates.map((s) => s.trim()).filter(Boolean);
   if (!cleaned.length) return '';
   const ellipsize = (s: string, max: number) => {
@@ -183,7 +225,13 @@ function formatProfileMemoryToast(memoryUpdates: string[]): string {
     if (t.length <= max) return t;
     return `${t.slice(0, max - 1)}…`;
   };
-  if (cleaned.length === 1) return `${ellipsize(cleaned[0], 52)} saved in memory`;
+  const firstDetail = details?.find((d) => (d.text || '').trim());
+  if (cleaned.length === 1) {
+    const action = (firstDetail?.action || 'saved').trim();
+    const category = (firstDetail?.category || '').trim();
+    const prefix = category ? `${action} · ${category}` : action;
+    return `${prefix}: ${ellipsize(firstDetail?.text || cleaned[0], 58)}`;
+  }
   return `${cleaned.length} notes saved in memory`;
 }
 
@@ -202,6 +250,61 @@ function speechPhaseLabel(phase: VoiceRecorderSpeechPhase, recording: boolean): 
   return null;
 }
 
+function normalizeCalendarText(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function calendarMutationKind(text: string): PendingCalendarMutation['kind'] | null {
+  const t = normalizeCalendarText(text);
+  const wantsDelete = /\b(delete|remove|cancel|drop|clear|get rid of)\b/.test(t) || /删除|取消|删掉|移除|去掉/.test(text);
+  if (wantsDelete) return 'delete';
+  const wantsUpdate =
+    /\b(change|edit|modify|update|move|reschedule|rename|shift|postpone)\b/.test(t) ||
+    /修改|更改|改成|改到|改为|挪到|换到|推迟|提前/.test(text);
+  if (wantsUpdate) return 'update';
+  return null;
+}
+
+function scoreCalendarEvent(ev: SlimeCalendarEvent, transcript: string): number {
+  const hay = normalizeCalendarText(transcript);
+  const title = normalizeCalendarText(ev.title);
+  if (!title) return 0;
+  let score = hay.includes(title) ? 12 : 0;
+  const tokens = title.split(' ').filter((x) => x.length >= 2);
+  for (const tok of tokens) {
+    if (hay.includes(tok)) score += Math.min(tok.length, 6);
+  }
+  const start = new Date(ev.start);
+  if (!Number.isNaN(start.getTime())) {
+    const day = start.toLocaleDateString(undefined, { weekday: 'long' }).toLowerCase();
+    const shortDay = start.toLocaleDateString(undefined, { weekday: 'short' }).toLowerCase();
+    if (hay.includes(day) || hay.includes(shortDay)) score += 2;
+  }
+  return score;
+}
+
+function chooseCalendarEvent(events: SlimeCalendarEvent[], transcript: string): SlimeCalendarEvent | null {
+  const valid = events.filter((e) => e?.id && e.title && e.start && e.end);
+  if (!valid.length) return null;
+  const ranked = valid
+    .map((event) => ({ event, score: scoreCalendarEvent(event, transcript) }))
+    .sort((a, b) => b.score - a.score);
+  if (ranked[0]?.score > 0) return ranked[0].event;
+  if (valid.length === 1) return valid[0];
+  return null;
+}
+
+function calendarEventSummary(ev: Pick<SlimeCalendarEvent, 'title' | 'start' | 'end'>): string {
+  const s = new Date(ev.start);
+  const e = new Date(ev.end);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return ev.title;
+  return `${ev.title} · ${s.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}–${e.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+
 export function SlimeVoiceAgent({
   slimeProfile,
   onUpdateSlimeProfile,
@@ -212,6 +315,7 @@ export function SlimeVoiceAgent({
   onDecisionSuggestion,
   onProfileMemorySaved,
   onMemoryEvidenceRetrieved,
+  onSpeechOutputChange,
   currentRoute,
   className,
 }: SlimeVoiceAgentProps) {
@@ -243,7 +347,7 @@ export function SlimeVoiceAgent({
 
   const [voiceState, setVoiceState] = useState<VoiceAgentState>('idle');
   const [transcriptPreview, setTranscriptPreview] = useState<string | null>(null);
-  const [bubbleText, setBubbleText] = useState<string | null>(null);
+  const [lastReplyText, setLastReplyText] = useState<string | null>(null);
   const [ttsHint, setTtsHint] = useState<string | null>(null);
   const [buddyAudioPlaying, setBuddyAudioPlaying] = useState(false);
   const buddyAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -258,6 +362,7 @@ export function SlimeVoiceAgent({
     patch: Record<string, unknown>;
   } | null>(null);
   const [pendingCalendar, setPendingCalendar] = useState<ResolvedCalendar | null>(null);
+  const [pendingCalendarMutation, setPendingCalendarMutation] = useState<PendingCalendarMutation | null>(null);
   const [pendingAgentDraftId, setPendingAgentDraftId] = useState<string | null>(null);
   const [drawerItems, setDrawerItems] = useState<MemoryEvidenceItem[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -266,6 +371,27 @@ export function SlimeVoiceAgent({
   useEffect(() => {
     onAdvisorStateChange?.(mapVoiceToAdvisor(voiceState));
   }, [voiceState, onAdvisorStateChange]);
+
+  const clearSpeechOutput = useCallback(() => {
+    onSpeechOutputChange?.(null);
+  }, [onSpeechOutputChange]);
+
+  const showSpeechOutput = useCallback(
+    (text: string, opts?: { speaking?: boolean; source?: SlimeSpeechOutput['source'] }) => {
+      const trimmed = text.trim();
+      setLastReplyText(trimmed || null);
+      onSpeechOutputChange?.(
+        trimmed
+          ? {
+              text: trimmed,
+              speaking: opts?.speaking ?? false,
+              source: opts?.source ?? 'assistant',
+            }
+          : null,
+      );
+    },
+    [onSpeechOutputChange],
+  );
 
   const cancelBuddyAudio = useCallback(() => {
     const w = buddyWebAudioSourceRef.current;
@@ -303,13 +429,17 @@ export function SlimeVoiceAgent({
          * Use for “Play reply” taps and for replies right after a voice-command / mic flow.
          */
         force?: boolean;
+        source?: SlimeSpeechOutput['source'];
         onMayHaveBlocked?: () => void;
+        onStart?: () => void;
         onComplete?: () => void;
       },
     ) => {
+      const trimmed = text.trim();
       const voiceOff = slimeProfile.voice?.enabled === false;
       const useTts = ttsSupported && Boolean(text?.trim()) && (opts?.force === true || !voiceOff);
       if (!useTts) {
+        if (trimmed) showSpeechOutput(trimmed, { speaking: false, source: opts?.source });
         setVoiceState('idle');
         opts?.onComplete?.();
         return;
@@ -321,15 +451,30 @@ export function SlimeVoiceAgent({
       setVoiceState('speaking');
       buddyTtsLoadPendingRef.current = true;
       const onComplete = opts?.onComplete;
+      let started = false;
+      const startOutput = () => {
+        if (gen !== ttsGenRef.current) return;
+        if (started) return;
+        started = true;
+        showSpeechOutput(trimmed, { speaking: true, source: opts?.source });
+        opts?.onStart?.();
+      };
+      const completeOutput = () => {
+        if (gen === ttsGenRef.current && trimmed) {
+          showSpeechOutput(trimmed, { speaking: false, source: opts?.source });
+        }
+        onComplete?.();
+      };
 
       const synthOpts = {
         rate: slimeProfile.voice?.rate,
         pitch: slimeProfile.voice?.pitch,
         preferredVoiceName: slimeProfile.voice?.preferredVoiceName,
+        onUtteranceStart: startOutput,
         onMayHaveBlocked: opts?.onMayHaveBlocked,
         onUtteranceEnd: () => {
           if (gen === ttsGenRef.current) setVoiceState('idle');
-          onComplete?.();
+          completeOutput();
         },
       };
 
@@ -373,9 +518,10 @@ export function SlimeVoiceAgent({
             const finishOutput = () => {
               cancelBuddyAudio();
               if (gen === ttsGenRef.current) setVoiceState('idle');
-              onComplete?.();
+              completeOutput();
             };
             const webOk = await playMp3BlobWithWebAudio(blob, {
+              onStart: startOutput,
               onEnded: finishOutput,
               trackSource: (node) => {
                 buddyWebAudioSourceRef.current = node;
@@ -388,7 +534,6 @@ export function SlimeVoiceAgent({
             buddyObjectUrlRef.current = url;
             const audio = new Audio();
             buddyAudioRef.current = audio;
-            audio.playsInline = true;
             audio.setAttribute('playsinline', 'true');
             audio.preload = 'auto';
             audio.src = url;
@@ -397,10 +542,11 @@ export function SlimeVoiceAgent({
               cancelBuddyAudio();
               setVoiceState('idle');
               setTtsHint('Could not play audio — check API / OPENAI_API_KEY, or try again.');
-              onComplete?.();
+              completeOutput();
             };
             try {
               await audio.play();
+              startOutput();
             } catch {
               cancelBuddyAudio();
               if (gen !== ttsGenRef.current) return;
@@ -419,7 +565,7 @@ export function SlimeVoiceAgent({
         speak(text, synthOpts);
       })();
     },
-    [ttsSupported, slimeProfile.voice, speak, cancelTts, cancelBuddyAudio, showInsufficient, voiceModelOptionId],
+    [ttsSupported, slimeProfile.voice, speak, cancelTts, cancelBuddyAudio, showInsufficient, voiceModelOptionId, showSpeechOutput],
   );
 
   const runSpokenSequence = useCallback(
@@ -456,6 +602,116 @@ export function SlimeVoiceAgent({
     }
   }, [storageUserKey]);
 
+  const updateLocalCalendarEvent = useCallback((event: SlimeCalendarEvent | null, deleteId?: string) => {
+    if (!storageUserKey) return;
+    try {
+      const k = executionStorageKeys(storageUserKey).events;
+      const raw = localStorage.getItem(k);
+      const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
+      if (!Array.isArray(arr)) return;
+      const next = deleteId
+        ? arr.filter((x) => !(x && typeof x === 'object' && (x as { id?: unknown }).id === deleteId))
+        : event
+          ? arr.map((x) => (x && typeof x === 'object' && (x as { id?: unknown }).id === event.id ? event : x))
+          : arr;
+      localStorage.setItem(k, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }, [storageUserKey]);
+
+  const prepareCalendarMutation = useCallback(
+    async (transcript: string): Promise<boolean> => {
+      const kind = calendarMutationKind(transcript);
+      if (!kind) return false;
+      const res = await apiFetch('/api/calendar/events', { cache: 'no-store' });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as { events?: SlimeCalendarEvent[] };
+      const event = chooseCalendarEvent(data.events ?? [], transcript);
+      if (!event) {
+        showSpeechOutput('I can do that, but I could not tell which calendar event you meant. Try saying the event title too.', {
+          source: 'error',
+        });
+        setVoiceState('idle');
+        return true;
+      }
+
+      if (kind === 'delete') {
+        setPendingCalendarMutation({
+          kind,
+          event,
+          message: `Delete ${calendarEventSummary(event)}?`,
+        });
+        setPendingCalendar(null);
+        setPendingConfirm(null);
+        onDecisionSuggestion?.(null);
+        runTts(`I found ${event.title}. Confirm below if you want me to delete it.`, { force: true });
+        return true;
+      }
+
+      const parseCredit = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `cal-parse-${Date.now()}`;
+      const parseRes = await apiFetch('/api/calendar-agent/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Credit-Request-Id': parseCredit },
+        body: JSON.stringify({
+          text: transcript,
+          thread_id: threadId ?? null,
+          current_event_id: event.id,
+          source: 'slime_voice',
+          ...(voiceModelOptionId ? { model_option_id: voiceModelOptionId } : {}),
+        }),
+      });
+      if (!parseRes.ok) throw new Error(await parseRes.text());
+      const parsed = (await parseRes.json()) as { intent?: Record<string, unknown> };
+      const intent = parsed.intent ?? {};
+      const draftCredit = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `cal-draft-${Date.now()}`;
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const draftRes = await apiFetch('/api/calendar-agent/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Credit-Request-Id': draftCredit },
+        body: JSON.stringify({
+          intent: {
+            ...intent,
+            intent_type: 'reschedule',
+            title: typeof intent.title === 'string' && intent.title.trim() ? intent.title : event.title,
+            current_event_id: event.id,
+            thread_id: threadId ?? null,
+          },
+          existing_events: (data.events ?? []).filter((e) => e.id !== event.id),
+          timezone,
+          ...(voiceModelOptionId ? { model_option_id: voiceModelOptionId } : {}),
+        }),
+      });
+      if (!draftRes.ok) throw new Error(await draftRes.text());
+      const draft = (await draftRes.json()) as { draft?: { proposed_events?: SlimeCalendarEvent[] } };
+      const proposed = draft.draft?.proposed_events?.[0];
+      if (!proposed?.start || !proposed?.end) {
+        showSpeechOutput('I found the event, but I could not confidently parse the new time. Open the planner to edit it precisely.', {
+          source: 'error',
+        });
+        setVoiceState('idle');
+        return true;
+      }
+      setPendingCalendarMutation({
+        kind,
+        event,
+        proposed: {
+          title: proposed.title || event.title,
+          start: proposed.start,
+          end: proposed.end,
+          description: proposed.description ?? event.description,
+        },
+        message: `Change ${calendarEventSummary(event)} to ${calendarEventSummary({ ...event, ...proposed })}?`,
+      });
+      setPendingCalendar(null);
+      setPendingConfirm(null);
+      onDecisionSuggestion?.(null);
+      runTts(`I found ${event.title}. Confirm below if you want me to update it.`, { force: true });
+      return true;
+    },
+    [onDecisionSuggestion, runTts, showSpeechOutput, threadId, voiceModelOptionId],
+  );
+
   const onConfirmCalendar = useCallback(async () => {
     primeSpeechSynthesisFromGesture();
     try {
@@ -466,7 +722,6 @@ export function SlimeVoiceAgent({
         }
         setPendingAgentDraftId(null);
         setPendingCalendar(null);
-        setBubbleText('Done — I added it to your execution calendar.');
         runTts('Done — I added it to your execution calendar.', {
           force: true,
           onMayHaveBlocked: () =>
@@ -492,17 +747,16 @@ export function SlimeVoiceAgent({
       const body = (await res.json()) as { event?: Record<string, unknown> };
       if (body.event) mergeCalendarEvent(body.event);
       setPendingCalendar(null);
-      setBubbleText('Done — I added it to your execution calendar.');
       runTts('Done — I added it to your execution calendar.', {
         force: true,
         onMayHaveBlocked: () =>
           setTtsHint('No audio? Tap “Play reply” below after the message appears.'),
       });
     } catch (e) {
-      setBubbleText(apiFetchErrorMessage(e));
+      showSpeechOutput(apiFetchErrorMessage(e), { source: 'error' });
       setVoiceState('error');
     }
-  }, [pendingAgentDraftId, pendingCalendar, mergeCalendarEvent, runTts]);
+  }, [pendingAgentDraftId, pendingCalendar, mergeCalendarEvent, runTts, showSpeechOutput]);
 
   const onEditCalendar = useCallback(() => {
     if (!pendingCalendar) return;
@@ -516,6 +770,40 @@ export function SlimeVoiceAgent({
     navigate('/execution');
   }, [pendingCalendar, navigate]);
 
+  const onConfirmCalendarMutation = useCallback(async () => {
+    if (!pendingCalendarMutation) return;
+    primeSpeechSynthesisFromGesture();
+    try {
+      if (pendingCalendarMutation.kind === 'delete') {
+        const res = await apiFetch(`/api/calendar/events/${encodeURIComponent(pendingCalendarMutation.event.id)}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) throw new Error(await res.text());
+        updateLocalCalendarEvent(null, pendingCalendarMutation.event.id);
+        const title = pendingCalendarMutation.event.title;
+        setPendingCalendarMutation(null);
+        runTts(`Done — I deleted ${title} from your execution calendar.`, { force: true, source: 'system' });
+        return;
+      }
+      const patch = pendingCalendarMutation.proposed;
+      if (!patch) return;
+      const res = await apiFetch(`/api/calendar/events/${encodeURIComponent(pendingCalendarMutation.event.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const body = (await res.json()) as { event?: SlimeCalendarEvent };
+      if (body.event) updateLocalCalendarEvent(body.event);
+      const title = (body.event?.title || pendingCalendarMutation.event.title).trim();
+      setPendingCalendarMutation(null);
+      runTts(`Done — I updated ${title} on your execution calendar.`, { force: true, source: 'system' });
+    } catch (e) {
+      showSpeechOutput(apiFetchErrorMessage(e), { source: 'error' });
+      setVoiceState('error');
+    }
+  }, [pendingCalendarMutation, runTts, showSpeechOutput, updateLocalCalendarEvent]);
+
   const sendVoiceBlob = useCallback(
     async (blob: Blob | null) => {
       unlockSlimeAudioContext();
@@ -523,7 +811,7 @@ export function SlimeVoiceAgent({
       setVoiceState('transcribing');
       if (!blob) {
         setVoiceState('idle');
-        setBubbleText('No audio captured.');
+        showSpeechOutput('No audio captured.', { source: 'error' });
         return;
       }
       const fd = new FormData();
@@ -576,8 +864,19 @@ export function SlimeVoiceAgent({
         if (data.thread_id) onThreadId?.(data.thread_id);
         const mus = data.memory_updates;
         if (mus?.length) {
-          const toastMsg = formatProfileMemoryToast(mus);
-          if (toastMsg) onProfileMemorySaved?.(toastMsg);
+          const toastMsg = formatProfileMemoryToast(mus, data.memory_update_details);
+          if (toastMsg) {
+            onProfileMemorySaved?.({
+              message: toastMsg,
+              items: mus,
+              details: (data.memory_update_details || []).map((d) => ({
+                action: d.action,
+                id: (d as { id?: string }).id,
+                text: d.text,
+                category: d.category,
+              })),
+            });
+          }
         }
 
         const phases = data.voice_ui?.memory_phases ?? [];
@@ -603,9 +902,12 @@ export function SlimeVoiceAgent({
         }
 
         setTranscriptPreview(data.transcript || null);
+        if (data.transcript && (await prepareCalendarMutation(data.transcript))) {
+          return;
+        }
         const assistant = (data.assistant_text || '').trim();
         const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
-        setBubbleText(toSpeak || null);
+        setLastReplyText(toSpeak || null);
 
         const fe = data.frontend_action;
         const convTurn = Boolean(
@@ -626,6 +928,7 @@ export function SlimeVoiceAgent({
           }
           if (resolved?.start_iso && resolved?.end_iso) {
             setPendingCalendar(resolved);
+            setPendingCalendarMutation(null);
             setPendingConfirm(null);
             onDecisionSuggestion?.(null);
             setVoiceState('awaiting_confirmation');
@@ -642,6 +945,7 @@ export function SlimeVoiceAgent({
           applySlimeVoiceFrontendAction(navigate, fe as SlimeVoiceFrontendAction);
           setPendingConfirm(null);
           setPendingCalendar(null);
+          setPendingCalendarMutation(null);
           setPendingAgentDraftId(null);
           onDecisionSuggestion?.(null);
           setVoiceState('idle');
@@ -659,6 +963,7 @@ export function SlimeVoiceAgent({
             setPendingConfirm({ title, patch });
           }
           setPendingCalendar(null);
+          setPendingCalendarMutation(null);
           onDecisionSuggestion?.(null);
           setVoiceState('idle');
           return;
@@ -666,6 +971,7 @@ export function SlimeVoiceAgent({
 
         setPendingConfirm(null);
         setPendingCalendar(null);
+        setPendingCalendarMutation(null);
         setVoiceState('executing_tool');
 
         if (evidenceItems.length) onMemoryEvidenceBurst?.(evidenceItems);
@@ -704,7 +1010,7 @@ export function SlimeVoiceAgent({
         });
       } catch (e) {
         setVoiceState('error');
-        setBubbleText(friendlySlimeVoiceError(apiFetchErrorMessage(e)));
+        showSpeechOutput(friendlySlimeVoiceError(apiFetchErrorMessage(e)), { source: 'error' });
       }
     },
     [
@@ -722,6 +1028,8 @@ export function SlimeVoiceAgent({
       showInsufficient,
       refreshCredits,
       voiceModelOptionId,
+      showSpeechOutput,
+      prepareCalendarMutation,
     ],
   );
 
@@ -744,16 +1052,18 @@ export function SlimeVoiceAgent({
     cancelBuddyAudio();
     ttsGenRef.current += 1;
     setTranscriptPreview(null);
-    setBubbleText(null);
+    setLastReplyText(null);
+    clearSpeechOutput();
     setPendingConfirm(null);
     setPendingCalendar(null);
+    setPendingCalendarMutation(null);
     setDrawerOpen(false);
     setShowEvidenceCta(false);
     setVoiceState('listening');
     primeSpeechSynthesisFromGesture({ skipUtterance: true });
     const ok = await startRecording();
     if (!ok) setVoiceState('error');
-  }, [recording, stopRecording, startRecording, sendVoiceBlob, cancelBuddyAudio, cancelTts, setError]);
+  }, [recording, stopRecording, startRecording, sendVoiceBlob, cancelBuddyAudio, cancelTts, setError, clearSpeechOutput]);
 
   const onConfirmPatch = useCallback(async () => {
     if (!pendingConfirm?.patch || !onUpdateSlimeProfile) {
@@ -765,25 +1075,13 @@ export function SlimeVoiceAgent({
     try {
       const normalized = normalizeVoiceSlimePatch(pendingConfirm.patch) as Partial<SlimeProfile>;
       await onUpdateSlimeProfile(normalized);
-      setBubbleText('Saved your Slime changes.');
       setPendingConfirm(null);
-      setVoiceState('speaking');
-      if (ttsSupported) {
-        cancelTts();
-        speak('Saved your Slime changes.', {
-          rate: slimeProfile.voice?.rate,
-          pitch: slimeProfile.voice?.pitch,
-          preferredVoiceName: slimeProfile.voice?.preferredVoiceName,
-          onUtteranceEnd: () => setVoiceState('idle'),
-        });
-      } else {
-        setVoiceState('idle');
-      }
+      runTts('Saved your Slime changes.', { force: true, source: 'system' });
     } catch {
-      setBubbleText('Could not save — try again from settings.');
+      showSpeechOutput('Could not save — try again from settings.', { source: 'error' });
       setVoiceState('error');
     }
-  }, [pendingConfirm, onUpdateSlimeProfile, speak, cancelTts, ttsSupported, slimeProfile.voice]);
+  }, [pendingConfirm, onUpdateSlimeProfile, runTts, showSpeechOutput]);
 
   const petName = slimeProfile.name?.trim() || 'your Slime';
 
@@ -811,20 +1109,7 @@ export function SlimeVoiceAgent({
           </p>
         ) : null}
 
-        <AnimatePresence>
-          {bubbleText ? (
-            <motion.div
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              className="max-w-sm rounded-2xl border border-white/85 bg-white/96 px-3 py-2 text-center text-sm leading-snug text-gray-800 shadow-md backdrop-blur-md"
-            >
-              {bubbleText}
-            </motion.div>
-          ) : null}
-        </AnimatePresence>
-
-        {bubbleText && ttsSupported && !recording ? (
+        {lastReplyText && ttsSupported && !recording ? (
           <BuddyTooltip content="Speak the assistant's last reply with your browser voice (unlocks audio on first use).">
             <button
               type="button"
@@ -833,7 +1118,7 @@ export function SlimeVoiceAgent({
                 setTtsHint(null);
                 unlockSlimeAudioContext();
                 primeSpeechSynthesisFromGesture();
-                runTts(bubbleText, { force: true });
+                runTts(lastReplyText, { force: true });
               }}
             >
               {isSpeaking || buddyAudioPlaying ? 'Replay reply' : 'Play reply'}
@@ -882,54 +1167,104 @@ export function SlimeVoiceAgent({
           </div>
         ) : null}
 
-        {pendingCalendar ? (
-          <div className="flex max-w-sm flex-col gap-2 rounded-2xl border border-indigo-200/85 bg-white/98 px-4 py-3 text-left shadow-lg backdrop-blur-md">
-            <p className="text-center text-xs font-semibold text-indigo-950">
-              {petName} can add this to your calendar:
-            </p>
-            <div className="rounded-xl bg-indigo-50/80 px-3 py-2 text-xs text-gray-800">
-              <p className="font-semibold text-indigo-950">{pendingCalendar.title}</p>
-              <p className="mt-1 text-gray-700">{pendingCalendar.display_summary}</p>
-              {pendingCalendar.ambiguity_note ? (
-                <p className="mt-1 text-[11px] text-amber-800">{pendingCalendar.ambiguity_note}</p>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap justify-center gap-2">
-              <BuddyTooltip content="Confirm and add this event to your execution calendar.">
-                <button
-                  type="button"
-                  className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
-                  onClick={() => void onConfirmCalendar()}
-                >
-                  Add to calendar
-                </button>
-              </BuddyTooltip>
-              <BuddyTooltip content="Open the planner to adjust times or details before saving.">
-                <button
-                  type="button"
-                  className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
-                  onClick={onEditCalendar}
-                >
-                  Edit
-                </button>
-              </BuddyTooltip>
-              <BuddyTooltip content="Dismiss this calendar suggestion without saving.">
-                <button
-                  type="button"
-                  className="rounded-full border border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-700"
-                  onClick={() => {
-                    setPendingCalendar(null);
-                    setPendingAgentDraftId(null);
-                    setVoiceState('idle');
-                  }}
-                >
-                  Cancel
-                </button>
-              </BuddyTooltip>
-            </div>
-          </div>
-        ) : null}
       </div>
+
+      {pendingCalendar || pendingCalendarMutation ? (
+        <div
+          data-slime-avoid
+          className="pointer-events-auto fixed bottom-[max(5.7rem,calc(env(safe-area-inset-bottom,0px)+5rem))] right-4 z-[58] w-[min(92vw,22rem)] rounded-3xl border border-white/80 bg-white/90 p-3 text-left shadow-[0_18px_60px_rgba(79,70,229,0.18)] backdrop-blur-xl sm:right-6"
+        >
+          {pendingCalendar ? (
+            <>
+              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">
+                {petName} can add this
+              </p>
+              <div className="mt-2 rounded-2xl bg-indigo-50/80 px-3 py-2 text-xs text-gray-800">
+                <p className="font-semibold text-indigo-950">{pendingCalendar.title}</p>
+                <p className="mt-1 text-gray-700">{pendingCalendar.display_summary}</p>
+                {pendingCalendar.ambiguity_note ? (
+                  <p className="mt-1 text-[11px] text-amber-800">{pendingCalendar.ambiguity_note}</p>
+                ) : null}
+              </div>
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <BuddyTooltip content="Confirm and add this event to your execution calendar.">
+                  <button
+                    type="button"
+                    className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white"
+                    onClick={() => void onConfirmCalendar()}
+                  >
+                    Add
+                  </button>
+                </BuddyTooltip>
+                <BuddyTooltip content="Open the planner to adjust times or details before saving.">
+                  <button
+                    type="button"
+                    className="rounded-full border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium text-gray-800"
+                    onClick={onEditCalendar}
+                  >
+                    Edit
+                  </button>
+                </BuddyTooltip>
+                <BuddyTooltip content="Dismiss this calendar suggestion without saving.">
+                  <button
+                    type="button"
+                    className="rounded-full border border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-700"
+                    onClick={() => {
+                      setPendingCalendar(null);
+                      setPendingAgentDraftId(null);
+                      setVoiceState('idle');
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </BuddyTooltip>
+              </div>
+            </>
+          ) : null}
+
+          {pendingCalendarMutation ? (
+            <>
+              <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">
+                {pendingCalendarMutation.kind === 'delete' ? 'Delete calendar event' : 'Update calendar event'}
+              </p>
+              <div className="mt-2 rounded-2xl bg-violet-50/80 px-3 py-2 text-xs text-gray-800">
+                <p className="font-semibold text-violet-950">{pendingCalendarMutation.message}</p>
+                {pendingCalendarMutation.proposed ? (
+                  <p className="mt-1 text-gray-700">
+                    New: {calendarEventSummary({ ...pendingCalendarMutation.event, ...pendingCalendarMutation.proposed })}
+                  </p>
+                ) : null}
+              </div>
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <BuddyTooltip content="Apply this calendar change.">
+                  <button
+                    type="button"
+                    className={cn(
+                      'rounded-full px-4 py-1.5 text-xs font-semibold text-white',
+                      pendingCalendarMutation.kind === 'delete' ? 'bg-red-500 hover:bg-red-600' : 'bg-violet-600 hover:bg-violet-700',
+                    )}
+                    onClick={() => void onConfirmCalendarMutation()}
+                  >
+                    {pendingCalendarMutation.kind === 'delete' ? 'Delete' : 'Update'}
+                  </button>
+                </BuddyTooltip>
+                <BuddyTooltip content="Dismiss this calendar change without applying it.">
+                  <button
+                    type="button"
+                    className="rounded-full border border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-700"
+                    onClick={() => {
+                      setPendingCalendarMutation(null);
+                      setVoiceState('idle');
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </BuddyTooltip>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
       <div
         data-slime-avoid

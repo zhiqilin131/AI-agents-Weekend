@@ -26,6 +26,8 @@ from foresight_x.profile.memory_structured import (
 )
 from foresight_x.profile.memory_classification import refine_memory_category
 from foresight_x.profile.merge import append_profile_memory_records
+from foresight_x.profile.merge import append_profile_memory_records_with_events
+from foresight_x.profile.memory_rules import enrich_memory_fact, rank_memory_facts_for_query
 from foresight_x.profile.store import load_user_profile, save_user_profile
 from foresight_x.schemas import MemoryFactCategory, ProfileMemoryFact
 from foresight_x.shadow.decision_context import build_shadow_decision_context_block
@@ -156,6 +158,7 @@ class ShadowTurnOutput:
     state: ShadowSelfState
     profile_record_texts: list[str] | None
     used_memory_facts: list[str]
+    profile_memory_events: list[dict[str, Any]] = field(default_factory=list)
     thread_only_items: list[dict[str, Any]] = field(default_factory=list)
     memory_confirmation_question: str | None = None
 
@@ -328,6 +331,9 @@ CONTEXT PRIORITY (critical):
   answer from [Recent conversation in this thread] and [Thread working summary] FIRST.
 - [Stable long-term user memory] is only for durable preferences/goals/patterns across chats — do NOT let it override
   explicit recent-thread content, jokes, or temporary names from this conversation.
+- If the user asks a direct memory-recall question ("who is my girlfriend?", "what do you know about my life?",
+  "what have I told you about me?"), answer with concrete details from [Stable long-term user memory], [Profile form
+  fields], [Foresight runs + indexed recall], or [Running shadow observations]. Do not turn it into generic advice.
 - Do NOT treat jokes, roleplay, hypotheticals, or thread-only notes as real identity — unless the user explicitly asks
   you to remember them long-term or clearly states a real correction ("my real name is…").
 
@@ -399,6 +405,9 @@ CONTEXT PRIORITY:
   answer from [Recent conversation in this thread] and [Thread working summary] FIRST.
 - [Stable long-term user memory] is only for durable preferences/goals/patterns across chats — do NOT let it override
   explicit recent-thread content, jokes, or temporary names from this conversation.
+- If the user asks a direct memory-recall question (\"who is my girlfriend?\", \"what do you know about my life?\",
+  \"what have I told you about me?\"), answer with concrete details from USER MEMORY / profile / indexed recall.
+  Use \"You mentioned…\" / \"You've told me…\" and do not turn it into generic relationship or lifestyle advice.
 - Do NOT treat jokes, roleplay, hypotheticals, or thread-only notes as real identity — unless the user explicitly asks
   you to remember them long-term or clearly states a real correction (\"my real name is…\").
 
@@ -491,8 +500,13 @@ def run_shadow_turn(
         {"role": m.get("role"), "content": m.get("content")} for m in recent_ctx
     ]
 
+    last_user_text = str(last.get("content", "") or "").strip()
     prof = load_user_profile(settings=s)
-    mem_active = user_scope_memory_facts(active_memory_facts(list(prof.memory_facts)))
+    mem_active = rank_memory_facts_for_query(
+        user_scope_memory_facts(active_memory_facts(list(prof.memory_facts))),
+        last_user_text,
+        limit=32,
+    )
     mem_owner_note = ""
     if synthesis_frame == "slime_buddy":
         mem_owner_note = (
@@ -505,7 +519,6 @@ def run_shadow_turn(
         memory_block = mem_owner_note + "(none yet.)"
     profile_block = _format_profile_block(prof)
 
-    last_user_text = str(last.get("content", "") or "").strip()
     prioritize_local = is_local_context_question(last_user_text)
     decision_context_block = build_shadow_decision_context_block(
         settings=s,
@@ -710,7 +723,21 @@ def run_shadow_turn(
     if memory_confirmation_question:
         reply = f"{reply.rstrip()}\n\n{memory_confirmation_question}"
 
-    recorded_profile: list[str] | None = [r.text for r in profile_records] if profile_records else None
+    source_chat = "slime_voice" if synthesis_frame == "slime_buddy" else "shadow_chat"
+    source_thread_id = (thread_id or "").strip()
+    if profile_records:
+        profile_records = [
+            enrich_memory_fact(
+                r,
+                source_chat=source_chat,
+                source_thread_id=source_thread_id,
+                extra_text=last_user_text,
+            )
+            for r in profile_records
+        ]
+
+    recorded_profile: list[str] | None = None
+    memory_events: list[dict[str, Any]] = []
 
     if profile_records:
         user_obs_records = [r for r in profile_records if not is_slime_owned_memory_fact(r)]
@@ -725,20 +752,33 @@ def run_shadow_turn(
         )
         if used:
             memory_used.extend(used)
-        if combined_shadow.strip():
-            state = merge_observation(state, combined_shadow)
-        else:
-            state = state.model_copy(update={"turn_count": state.turn_count + 1})
-        _schedule_shadow_memory_persist(
-            s,
-            profile_records,
-            combined_shadow,
-            last_user_text,
-            reply,
-        )
+        lock = _persist_lock_for(s.foresight_user_id)
+        with lock:
+            latest_profile = load_user_profile(settings=s)
+            updated_profile, merge_events = append_profile_memory_records_with_events(
+                latest_profile,
+                profile_records,
+            )
+            save_user_profile(updated_profile, settings=s)
+            latest_state = load_shadow_self(settings=s)
+            if combined_shadow.strip():
+                state = merge_observation(latest_state, combined_shadow)
+            else:
+                state = latest_state.model_copy(update={"turn_count": latest_state.turn_count + 1})
+            save_shadow_self(state, settings=s)
+        memory_events = [ev.model_dump() for ev in merge_events]
+        recorded_profile = [str(ev.get("text") or "") for ev in memory_events if str(ev.get("text") or "").strip()] or None
+        if s.graph_enabled:
+            try:
+                TemporalGraphMemory(s.foresight_user_id, settings=s).record_shadow_event(last_user_text, reply)
+            except Exception:
+                pass
     else:
-        state = state.model_copy(update={"turn_count": state.turn_count + 1})
-        save_shadow_self(state, settings=s)
+        lock = _persist_lock_for(s.foresight_user_id)
+        with lock:
+            latest_state = load_shadow_self(settings=s)
+            state = latest_state.model_copy(update={"turn_count": latest_state.turn_count + 1})
+            save_shadow_self(state, settings=s)
 
         scoped_active = user_scope_memory_facts([x for x in prof.memory_facts if x.status == "active"])
         reply, used = _ground_reply_with_memory_preferences(
@@ -761,6 +801,7 @@ def run_shadow_turn(
         state=state,
         profile_record_texts=recorded_profile,
         used_memory_facts=memory_used,
+        profile_memory_events=memory_events,
         thread_only_items=thread_only_items,
         memory_confirmation_question=memory_confirmation_question,
     )

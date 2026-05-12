@@ -22,7 +22,12 @@ import { ChatMessageList } from './ChatMessageList';
 import { ChatSidebar } from './ChatSidebar';
 import { DecisionReportStreamingPanel } from './DecisionReportStreamingPanel';
 import { DecisionSuggestionCard } from './DecisionSuggestionCard';
-import { ProfileMemoryToastStack, type ProfileMemoryToast, profileMemoryEventDedupeKey } from './ProfileMemoryToastStack';
+import {
+  ProfileMemoryToastStack,
+  type ProfileMemoryDetail,
+  type ProfileMemoryToast,
+  profileMemoryEventDedupeKey,
+} from './ProfileMemoryToastStack';
 import { ShadowChatInput } from './ShadowChatInput';
 import type { AgentStatus, ShadowMessage, ShadowSuggestion, ShadowThread } from './types';
 import { detectCalendarFeedbackIntent } from '../../../utils/calendarFeedbackIntent';
@@ -110,12 +115,12 @@ export function ShadowChatShell({
   }, []);
 
   const scheduleProfileMemoryToast = useCallback(
-    (ev: { items: string[]; at: string }) => {
+    (ev: { items: string[]; at: string; details?: ProfileMemoryDetail[] }) => {
       const id =
         typeof crypto !== 'undefined' && 'randomUUID' in crypto
           ? crypto.randomUUID()
           : `pm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-      setProfileMemoryToasts((prev) => [...prev.slice(-4), { id, items: ev.items, at: ev.at }]);
+      setProfileMemoryToasts((prev) => [...prev.slice(-4), { id, items: ev.items, at: ev.at, details: ev.details }]);
       const timer = window.setTimeout(() => dismissProfileMemoryToast(id), 6200);
       profileMemoryToastTimersRef.current.set(id, timer);
     },
@@ -160,7 +165,7 @@ export function ShadowChatShell({
     const data = (await res.json()) as { thread: ShadowThread };
     const tid = data.thread.thread_id;
     const mem = Array.isArray(data.thread.memory_events)
-      ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string }>)
+      ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string; details?: ProfileMemoryDetail[] }>)
       : [];
     const profileEvents = mem.filter(
       (ev) => ev.kind === 'profile_update' && Array.isArray(ev.items) && ev.items.length > 0,
@@ -175,7 +180,7 @@ export function ShadowChatShell({
         const k = profileMemoryEventDedupeKey(ev);
         if (profileMemoryToastKeysRef.current.has(k)) continue;
         profileMemoryToastKeysRef.current.add(k);
-        scheduleProfileMemoryToast({ items: ev.items, at: ev.at });
+        scheduleProfileMemoryToast({ items: ev.items, at: ev.at, details: ev.details });
       }
     }
 
@@ -198,6 +203,26 @@ export function ShadowChatShell({
     await refreshThreads();
     await loadThread(data.thread.thread_id);
   };
+
+  const deleteProfileMemoryFromToast = useCallback(
+    async (factId: string, toastId: string) => {
+      if (!factId) return;
+      try {
+        const res = await apiFetch(`/api/profile/memory-fact/${encodeURIComponent(factId)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(await res.text());
+        dismissProfileMemoryToast(toastId);
+        if (activeThreadId) void loadThread(activeThreadId, { preservePendingSuggestion: true });
+      } catch {
+        pushTimeline('Could not delete that memory');
+      }
+    },
+    [activeThreadId, dismissProfileMemoryToast],
+  );
+
+  const openProfileMemoryEditor = useCallback((factId?: string) => {
+    const suffix = factId ? `?memory=${encodeURIComponent(factId)}` : '';
+    navigate(`/profile${suffix}`);
+  }, [navigate]);
 
   const prevAuthUserRef = useRef<string | undefined>(undefined);
 
@@ -569,6 +594,12 @@ export function ShadowChatShell({
         saveClarificationToProfile,
         modelOptionId: modelOptionId || undefined,
       });
+      if (streamError === 'insufficient_credits') {
+        setReportOpen(false);
+        setAgentStatus('idle');
+        pushTimeline('Not enough Slime Credits — add credits in Profile, then try again.');
+        return;
+      }
       if (streamError && streamError !== 'cancelled') {
         setAgentStatus('error');
         pushTimeline(streamError.length > 80 ? `${streamError.slice(0, 80)}…` : streamError);
@@ -948,7 +979,12 @@ export function ShadowChatShell({
         onReviseReport={(decisionId) => void onReviseFromArtifactOrPanel(decisionId)}
         shadowThreadId={activeThreadId}
       />
-      <ProfileMemoryToastStack toasts={profileMemoryToasts} onDismiss={dismissProfileMemoryToast} />
+      <ProfileMemoryToastStack
+        toasts={profileMemoryToasts}
+        onDismiss={dismissProfileMemoryToast}
+        onDelete={deleteProfileMemoryFromToast}
+        onEdit={openProfileMemoryEditor}
+      />
     </div>
   );
 }

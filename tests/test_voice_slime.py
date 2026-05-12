@@ -157,6 +157,53 @@ def test_voice_command_http_mocked(monkeypatch) -> None:
     assert body["asr_provider"] == "faster_whisper"
 
 
+def test_voice_pipeline_conversation_turn_includes_memory_update_details(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    settings = Settings(
+        foresight_user_id="u_voice_turn_mem",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="sk-test",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_turn_mem.json").write_text(
+        json.dumps({"user_id": "u_voice_turn_mem", "memory_facts": [], "priority_lines": [], "about_me": ""}),
+        encoding="utf-8",
+    )
+
+    tr = TranscriptionResult(text="I prefer concise responses", provider="faster_whisper", language="en", timing={})
+    route = SlimeVoiceRouteResult(
+        intent="general_chat",
+        tool_name="no_op",
+        arguments={},
+        requires_confirmation=False,
+    )
+    turn = {
+        "thread_id": "t1",
+        "assistant_text": "Got it.",
+        "spoken_sequence": ["Got it."],
+        "intent": "general_chat",
+        "decision_suggestion": None,
+        "memory_updates": ["User prefers concise responses."],
+        "memory_update_details": [{"action": "new", "id": "m1", "text": "User prefers concise responses.", "category": "views"}],
+        "frontend_action": {"type": "none", "route": "", "payload": {}},
+    }
+    with patch("foresight_x.voice.asr.transcribe_audio", return_value=tr):
+        with patch("foresight_x.voice.slime_voice_router.route_slime_voice_command", return_value=route):
+            with patch("foresight_x.chat.conversation_service.process_conversation_turn", return_value=turn):
+                body = _run_slime_voice_pipeline(
+                    b"bytes",
+                    "a.webm",
+                    "/buddy",
+                    None,
+                    None,
+                    None,
+                    settings,
+                )
+    assert body["memory_updates"] == ["User prefers concise responses."]
+    assert body["memory_update_details"][0]["id"] == "m1"
+
+
 def test_slime_tts_requires_openai_key(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "")
@@ -517,6 +564,59 @@ def test_memory_search_returns_evidence_items_not_raw_dump(tmp_path: Path) -> No
     assert len(tr["evidence_items"]) >= 1
     assert "• From your profile" not in assistant
     assert "From your profile memory:" not in assistant
+
+
+def test_memory_search_direct_question_uses_concrete_profile_fact(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_memory_direct",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_memory_direct.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_memory_direct",
+                "memory_facts": [
+                    {
+                        "id": "f1",
+                        "category": "identity",
+                        "text": "Rose is my girlfriend and we plan October visits.",
+                        "subject_ref": "user",
+                        "predicate": "dating",
+                        "object_value": "Rose",
+                        "evidence": "my girlfriend Rose",
+                    },
+                    {
+                        "id": "f2",
+                        "category": "behavior",
+                        "text": "I am studying computer science and building Foresight-X.",
+                    },
+                ],
+                "priority_lines": [],
+                "about_me": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_memory_direct")
+    route = SlimeVoiceRouteResult(
+        intent="memory_search",
+        tool_name="search_memory",
+        arguments={"query": "Who is my girlfriend and what is my life like?", "scope": "all"},
+        requires_confirmation=False,
+    )
+    tr, _fe, assistant = execute_slime_tool(
+        route,
+        ctx,
+        settings=settings,
+        transcript="Who is my girlfriend and what is my life like?",
+    )
+    assert "Rose" in assistant
+    assert "girlfriend" in assistant.lower()
+    assert any("structured:" in str(item.get("fullText") or "") for item in tr["evidence_items"])
+    assert any("Foresight-X" in str(hit.get("text") or "") for hit in tr["hits"])
 
 
 def test_calendar_parse_saturday_morning() -> None:
