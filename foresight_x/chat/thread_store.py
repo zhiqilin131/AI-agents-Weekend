@@ -70,7 +70,7 @@ def _default_thread_payload(*, user_id: str, thread_id: str, title: str | None =
         "title": title or "New chat",
         "created_at": _now(),
         "updated_at": _now(),
-        "mode": "normal",
+        "mode": "shadow",
         "messages": [],
         "memory_events": [],
         "dismissed_suggestions": {"role_mode": False, "decision_report": False},
@@ -101,7 +101,7 @@ def _local_list_threads(*, user_id: str) -> list[dict[str, Any]]:
                     "title": t.get("title") or "New chat",
                     "updated_at": t.get("updated_at"),
                     "created_at": t.get("created_at"),
-                    "mode": t.get("mode", "normal"),
+                    "mode": t.get("mode", "shadow"),
                     "message_count": len(t.get("messages", [])),
                 }
             )
@@ -215,7 +215,7 @@ def _hydrate_thread_from_row(
         "title": row.get("title") or "New chat",
         "created_at": row.get("created_at") or _now(),
         "updated_at": row.get("updated_at") or row.get("created_at") or _now(),
-        "mode": row.get("mode", "normal"),
+        "mode": row.get("mode", "shadow"),
         "messages": messages,
         "memory_events": md.get("memory_events", []),
         "dismissed_suggestions": md.get("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
@@ -295,7 +295,7 @@ def _upsert_thread_supabase(thread: dict[str, Any]) -> None:
         "id": tid,
         "user_id": uid,
         "title": thread.get("title") or "New chat",
-        "mode": thread.get("mode") or "normal",
+        "mode": thread.get("mode") or "shadow",
         "metadata": _thread_metadata_from_thread(thread),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -412,7 +412,7 @@ def list_threads(*, user_id: str) -> list[dict[str, Any]]:
                         "title": r.get("title") or "New chat",
                         "updated_at": r.get("updated_at") or r.get("created_at"),
                         "created_at": r.get("created_at"),
-                        "mode": r.get("mode", "normal"),
+                        "mode": r.get("mode", "shadow"),
                         "message_count": msg_count.get(tid, 0),
                     }
                 )
