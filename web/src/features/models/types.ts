@@ -1,6 +1,7 @@
 /** Mirrors backend ``CreditFeature`` for cost preview + request tagging. */
 export type SlimeCreditFeature =
   | 'shadow_chat'
+  | 'clarify_gate'
   | 'slime_chat'
   | 'slime_voice'
   | 'decision_report'

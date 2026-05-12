@@ -113,6 +113,22 @@ def test_refund_restores_balance(isolated_settings: Settings) -> None:
     assert after == before + 2
 
 
+def test_clarify_gate_is_free(isolated_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "foresight_x.usage.credits.get_supabase_user_for_request",
+        lambda: {"id": "x", "email": "free@example.com"},
+    )
+    u = "user-clarify-free"
+    get_or_create_user_credits(u, settings=isolated_settings)
+    assert get_credit_balance(u, settings=isolated_settings) == 15
+    chk = check_credits(u, "clarify_gate", 0, user_email="free@example.com", settings=isolated_settings)
+    assert chk.allowed is True
+    assert chk.required == 0
+    tx = consume_credits(u, "clarify_gate", 0, "clarify-rid-1", settings=isolated_settings)
+    assert tx is None
+    assert get_credit_balance(u, settings=isolated_settings) == 15
+
+
 def test_limits_disabled_allows_without_consume(isolated_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     s = isolated_settings.model_copy(update={"enable_credit_limits": False})
     monkeypatch.setattr("foresight_x.usage.credits.load_settings", lambda: s)

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
-import { Ghost, Home } from 'lucide-react';
+import { Ghost, Home, MessageSquare } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../app/components/ui/tooltip';
 import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionReportStreamingPanel';
@@ -183,15 +184,15 @@ export default function SlimeCompanionPage() {
         <button
           type="button"
           onClick={() => navigate('/')}
-          className="inline-flex items-center gap-1.5 rounded-full border border-white/80 bg-white/75 px-3 py-1.5 text-xs font-medium text-gray-800 shadow-sm backdrop-blur-md transition hover:bg-white"
+          className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/75 px-4 py-2 text-sm font-medium text-gray-800 shadow-sm backdrop-blur-md transition hover:bg-white"
         >
-          <Home className="h-3.5 w-3.5 text-violet-600" aria-hidden />
+          <Home className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
           Home
         </button>
         <button
           type="button"
           onClick={() => navigate('/profile')}
-          className="inline-flex items-center gap-1.5 rounded-full border border-white/80 bg-white/75 px-3 py-1.5 text-xs font-medium text-gray-800 shadow-sm backdrop-blur-md transition hover:bg-white"
+          className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/75 px-4 py-2 text-sm font-medium text-gray-800 shadow-sm backdrop-blur-md transition hover:bg-white"
         >
           Profile
         </button>
@@ -201,34 +202,40 @@ export default function SlimeCompanionPage() {
         type="button"
         data-slime-avoid
         onClick={() => setPanelOpen((open) => !open)}
-        className="absolute right-3 top-3 z-[60] inline-flex items-center gap-1.5 rounded-full border border-violet-200/70 bg-white/80 px-3 py-1.5 text-xs font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400 sm:right-4 sm:top-4"
+        className="absolute right-3 top-3 z-[60] inline-flex items-center gap-2 rounded-full border border-violet-200/70 bg-white/80 px-4 py-2 text-sm font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400 sm:right-4 sm:top-4"
         aria-expanded={panelOpen}
         aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
       >
-        <Ghost className="h-3.5 w-3.5 text-violet-600" aria-hidden />
+        <Ghost className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
         {panelOpen ? 'Close' : 'Personalize'}
       </button>
 
-      {/* Bottom-left: hint opens personalize; logo below — stays clear of center mic column */}
+      {/* Bottom-left: link to full Chat UI; logo below — stays clear of center mic column */}
       <div
         data-slime-avoid
         className="absolute bottom-6 left-4 z-[65] flex max-w-[min(280px,calc(100vw-6rem))] flex-col items-start gap-3 sm:bottom-8 sm:left-6"
       >
-        <motion.button
-          type="button"
-          onClick={() => setPanelOpen((open) => !open)}
-          className="cursor-pointer text-left"
-          animate={{ opacity: [0.55, 1, 0.55] }}
-          transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
-          aria-expanded={panelOpen}
-          aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
-        >
-          <span className="bg-gradient-to-r from-violet-600 via-fuchsia-500 to-cyan-600 bg-clip-text text-xs font-semibold leading-snug tracking-wide text-transparent sm:text-sm">
-            {panelOpen
-              ? 'Tap to close studio · slime still wiggles'
-              : 'Tap the slime to wiggle · text opens personalize'}
-          </span>
-        </motion.button>
+        <Tooltip delayDuration={250}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              data-testid="slime-buddy-open-chat"
+              onClick={() => navigate('/chat')}
+              aria-label="Open Chat — traditional full-feature dialog"
+              className="inline-flex items-center gap-2 rounded-full border border-violet-200/80 bg-white/85 px-3.5 py-2 text-xs font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400/80 hover:bg-white sm:text-sm"
+            >
+              <MessageSquare className="h-3.5 w-3.5 shrink-0 text-violet-600" aria-hidden />
+              Chat
+            </button>
+          </TooltipTrigger>
+          <TooltipContent
+            side="top"
+            sideOffset={10}
+            className="max-w-[min(288px,calc(100vw-2rem))] border border-violet-950/20 bg-violet-950 px-3 py-2 text-left text-[11px] leading-relaxed font-medium text-violet-50 shadow-lg"
+          >
+            Chat 是一个更加传统的对话框，有更加完整的功能。
+          </TooltipContent>
+        </Tooltip>
         <img
           src="/ForesightXLogo.svg"
           alt=""

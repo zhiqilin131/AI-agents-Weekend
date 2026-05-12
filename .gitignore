@@ -12,6 +12,10 @@ data/profile/*.json
 data/outcomes/*.json
 !data/outcomes/.gitkeep
 data/shadow_self/
+data/calendar/*.json
+data/diary/
+data/personas_registry.json
+data/followups/
 chroma.sqlite3
 # Runtime-generated artifacts (keep repo clean/reproducible)
 data/commits/*.json

@@ -12,10 +12,12 @@ import { apiFetch } from '../utils/apiFetch';
 import { parseSseBlocks } from '../utils/parseSse';
 import type { AppState, DecisionReport } from '../app/model';
 import { HomeRoamingSlime } from '../app/components/home/HomeRoamingSlime';
+import { SlimeLandingCta } from '../app/components/home/SlimeLandingCta';
 import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
 import { ModelSelector } from '../features/models/ModelSelector';
 import { buildCheaperModelHint } from '../features/models/slimeModelsApi';
 import { useSlimeModelCatalog } from '../features/models/useSlimeModelCatalog';
+import { useSlimeProfile } from '../hooks/useSlimeProfile';
 
 const PIPELINE_STAGES = ['enhance', 'perceive', 'retrieve', 'infer', 'simulate', 'evaluate', 'finalize'] as const;
 
@@ -63,6 +65,7 @@ export default function HomePage() {
   const routeTraceId = useParams().decisionId;
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const slimeModels = useSlimeModelCatalog();
+  const { slimeProfile } = useSlimeProfile();
   const [runModelOptionId, setRunModelOptionId] = useState('');
   useEffect(() => {
     if (slimeModels.ready && slimeModels.defaultModel && !runModelOptionId) {
@@ -613,14 +616,7 @@ export default function HomePage() {
                 )}
 
                 <div className="mx-auto max-w-xl text-center">
-                  <button
-                    type="button"
-                    onClick={() => navigate('/chat')}
-                    className="inline-flex items-center justify-center px-10 py-4 rounded-full bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 text-white text-lg shadow-[0_14px_40px_rgba(99,102,241,0.35)] hover:shadow-[0_18px_48px_rgba(99,102,241,0.4)] hover:scale-[1.01] active:scale-[0.995] transition-all"
-                    style={{ fontWeight: 600 }}
-                  >
-                    Start Chatting
-                  </button>
+                  <SlimeLandingCta profile={slimeProfile} onClick={() => navigate('/buddy')} />
                 </div>
               </div>
             </div>

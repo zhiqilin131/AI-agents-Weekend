@@ -9,7 +9,7 @@ const X_MIN = 8;
 const X_MAX = 88;
 const Y_MIN = 25;
 const Y_MAX = 82;
-/** Rough box around landing title + Start Chatting — wander targets avoid this. */
+/** Rough box around landing title + Slime Chat CTA — wander targets avoid this. */
 const HOME_AVOID = { x0: 28, x1: 72, y0: 30, y1: 68 };
 /** Centered sign-in / sign-up card — keep slime in margins. */
 const AUTH_AVOID = { x0: 26, x1: 74, y0: 22, y1: 78 };

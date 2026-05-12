@@ -10,6 +10,7 @@ CreditFeature = Literal[
     "slime_chat",
     "slime_voice",
     "shadow_chat",
+    "clarify_gate",
     "decision_report",
     "diary_generate",
     "memory_import",

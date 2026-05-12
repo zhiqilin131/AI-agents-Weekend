@@ -360,20 +360,6 @@ export default function DiaryPage() {
         </header>
 
         <div className="mb-4 flex flex-wrap items-center justify-center gap-2">
-          <div className="flex w-full max-w-md flex-col sm:w-auto sm:min-w-[280px]">
-            <ModelSelector
-              feature="diary_generate"
-              selectedModelId={diaryModelOptionId || slimeModels.defaultModel}
-              onChange={setDiaryModelOptionId}
-              models={slimeModels.models}
-              selectorEnabled={slimeModels.selectorEnabled}
-              showCostPreview
-              variant="compact"
-              label="Diary model"
-              hint="Defaults to the lowest tier; higher tiers cost more credits per generate/regenerate."
-              disabled={genBusy || regenBusy}
-            />
-          </div>
           <button
             type="button"
             className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm hover:border-violet-300"
@@ -443,6 +429,26 @@ export default function DiaryPage() {
           onRegenerateCleaner={() => void regenerateCleaner()}
           regenerateBusy={regenBusy}
         />
+      </div>
+
+      <div
+        className="pointer-events-auto fixed bottom-6 left-4 z-40 w-[min(13rem,calc(100vw-2rem))] origin-bottom-left scale-[0.92] sm:bottom-8 sm:left-5 sm:scale-95"
+      >
+        <div className="rounded-xl border border-violet-200/70 bg-white/92 p-1 shadow-md shadow-violet-900/5 backdrop-blur-md">
+          <ModelSelector
+            feature="diary_generate"
+            selectedModelId={diaryModelOptionId || slimeModels.defaultModel}
+            onChange={setDiaryModelOptionId}
+            models={slimeModels.models}
+            selectorEnabled={slimeModels.selectorEnabled}
+            showCostPreview={false}
+            variant="compact"
+            elevated={false}
+            hideCompactHeader
+            compactSelectAriaLabel="Diary model tier"
+            disabled={genBusy || regenBusy}
+          />
+        </div>
       </div>
     </div>
   );

@@ -1076,6 +1076,7 @@ def slime_model_cost_preview(
     settings = _settings_for_active_user()
     allowed: set[str] = {
         "shadow_chat",
+        "clarify_gate",
         "slime_chat",
         "slime_voice",
         "decision_report",
@@ -1389,7 +1390,7 @@ def clarify(body: ClarifyRequest, request: Request):
     profile = load_user_profile(settings)
     tx, gate_err = _credit_gate(
         settings,
-        "shadow_chat",
+        "clarify_gate",
         request_id=rid,
         model_option_id=body.model_option_id,
         profile=profile,

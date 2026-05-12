@@ -149,19 +149,19 @@ export function MainNavButtons({
   );
 
   const scrollClass =
-    'min-w-0 flex-1 overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]';
+    'flex min-w-0 flex-1 justify-center overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]';
 
   return (
     <>
       <div className={cn(!compact && 'mb-8', className)}>
         {!compact ? (
           <div className="flex w-full min-w-0 items-center gap-2 py-2">
-            {homeBtn}
-            <div className="shrink-0">
+            <div className="flex shrink-0 items-center gap-2">
+              {homeBtn}
               <PersonaSwitcher compact />
             </div>
             <div className={scrollClass}>
-              <div className="flex w-max flex-nowrap items-center gap-2 px-1">{navPills}</div>
+              <div className="flex w-max flex-nowrap items-center justify-center gap-2 px-1">{navPills}</div>
             </div>
             <div className="flex shrink-0 items-center self-center">
               <SlimeCreditsChipNav />
@@ -169,9 +169,9 @@ export function MainNavButtons({
           </div>
         ) : (
           <div className="flex w-full min-w-0 items-center gap-2 py-3 px-1">
-            {homeBtn}
+            <div className="flex shrink-0 items-center gap-2">{homeBtn}</div>
             <div className={scrollClass}>
-              <div className="flex w-max flex-nowrap items-center gap-2">{navPills}</div>
+              <div className="flex w-max flex-nowrap items-center justify-center gap-2">{navPills}</div>
             </div>
             <div className="flex shrink-0 items-center self-center">
               <SlimeCreditsChipNav compact />

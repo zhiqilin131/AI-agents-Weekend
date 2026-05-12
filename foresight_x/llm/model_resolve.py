@@ -11,6 +11,7 @@ from foresight_x.schemas import UserProfile
 # When the user (or profile) does not specify a model, default to the cheapest tier (``little`` / gpt-4o-mini).
 FEATURE_DEFAULT_MODEL: dict[str, str] = {
     "shadow_chat": "little",
+    "clarify_gate": "little",
     "slime_chat": "little",
     "slime_voice": "little",
     "decision_report": "little",

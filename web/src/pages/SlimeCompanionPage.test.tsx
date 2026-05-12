@@ -1,7 +1,27 @@
+import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import SlimeCompanionPage from './SlimeCompanionPage';
+
+vi.mock('../app/components/credits/SlimeCreditsContext', () => ({
+  useSlimeCredits: () => ({
+    credits: {
+      balance: 10,
+      lifetime_granted: 10,
+      lifetime_used: 0,
+      limits_enabled: true,
+      is_admin: false,
+      is_unlimited: false,
+      display_balance: 10,
+    },
+    loading: false,
+    refresh: vi.fn(),
+    showInsufficient: vi.fn(),
+  }),
+  SlimeCreditsChipNav: () => null,
+  SlimeCreditsProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 vi.mock('../hooks/useSlimeProfile', () => ({
   DEFAULT_SLIME_PROFILE: {
@@ -39,7 +59,7 @@ describe('SlimeCompanionPage', () => {
       </MemoryRouter>,
     );
     expect(html).toContain('data-testid="slime-advisor"');
-    expect(html).toContain('Tap the slime');
+    expect(html).toContain('data-testid="slime-buddy-open-chat"');
     expect(html).toContain('Personalize');
     expect(html).toContain('Talk to Mochi');
   });

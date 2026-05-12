@@ -71,6 +71,8 @@ def credit_cost_for_feature(feature: CreditFeature, settings: Settings | None = 
     key = str(feature)
     mapping: dict[str, int] = {
         "shadow_chat": s.credit_cost_shadow_chat,
+        # Pre-flight clarify LLM is billed on the main action (stream / run), not twice here.
+        "clarify_gate": 0,
         "slime_chat": s.credit_cost_slime_chat,
         "slime_voice": s.credit_cost_slime_voice,
         "decision_report": s.credit_cost_decision_report,

@@ -485,42 +485,50 @@ export function SlimePersonalizationForm({
           />
         </div>
 
-        <div className="mt-3 flex flex-col gap-2 rounded-lg border border-violet-100/90 bg-white/70 p-2">
-          <ModelSelector
-            feature="shadow_chat"
-            selectedModelId={previewModelOptionId || slimeModels.defaultModel}
-            onChange={setPreviewModelOptionId}
-            models={slimeModels.models}
-            selectorEnabled={slimeModels.selectorEnabled}
-            showCostPreview
-            variant="compact"
-            elevated={false}
-            label="Preview model"
-            hint="LLM used only for this sample line (default: lowest tier)."
-            disabled={previewBusy}
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <Label className="text-[10px] text-gray-600">Preview sample</Label>
-            <select
-              value={previewCtx}
-              onChange={(e) => setPreviewCtx(e.target.value as typeof previewCtx)}
-              className={cn(fieldSelectClass, 'h-8 max-w-[200px] text-[10px]')}
-            >
-              <option value="casual">Casual recommendation</option>
-              <option value="memory">Memory answer</option>
-              <option value="calendar">Calendar</option>
-              <option value="decision">Decision mode</option>
-            </select>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={previewBusy}
-              onClick={() => void runPreview()}
-              className="h-8 rounded-full text-[10px]"
-            >
-              {previewBusy ? '…' : 'Preview'}
-            </Button>
+        <div className="mt-3 space-y-2 rounded-lg border border-violet-100/90 bg-white/70 p-2.5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end sm:gap-3">
+            <div className="min-w-0 flex-1 sm:min-w-[12rem] sm:max-w-md">
+              <ModelSelector
+                feature="shadow_chat"
+                selectedModelId={previewModelOptionId || slimeModels.defaultModel}
+                onChange={setPreviewModelOptionId}
+                models={slimeModels.models}
+                selectorEnabled={slimeModels.selectorEnabled}
+                showCostPreview
+                variant="compact"
+                elevated={false}
+                hideCompactHeader
+                compactSelectAriaLabel="Model for preview line"
+                hint=""
+                disabled={previewBusy}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Label className="sr-only" htmlFor="slime-preview-ctx">
+                Preview scenario
+              </Label>
+              <select
+                id="slime-preview-ctx"
+                value={previewCtx}
+                onChange={(e) => setPreviewCtx(e.target.value as typeof previewCtx)}
+                className={cn(fieldSelectClass, 'h-8 min-w-[10rem] max-w-full flex-1 text-[11px] sm:max-w-[220px]')}
+              >
+                <option value="casual">Casual recommendation</option>
+                <option value="memory">Memory answer</option>
+                <option value="calendar">Calendar</option>
+                <option value="decision">Decision mode</option>
+              </select>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={previewBusy}
+                onClick={() => void runPreview()}
+                className="h-8 shrink-0 rounded-full text-[11px]"
+              >
+                {previewBusy ? '…' : 'Preview'}
+              </Button>
+            </div>
           </div>
           {previewLine !== null ? (
             <p className="text-xs italic leading-relaxed text-gray-800">
