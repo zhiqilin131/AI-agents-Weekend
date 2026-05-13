@@ -19,6 +19,7 @@ import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../hooks/useSlimeProfile
 import { useDecisionReportStream } from '../hooks/useDecisionReportStream';
 import { apiFetch } from '../utils/apiFetch';
 import { primeSpeechSynthesisFromGesture } from '../app/hooks/useSpeechSynthesis';
+import { SLIME_CALENDAR_BRIEF_CONTEXT_KEY } from '../utils/executionStorageKeys';
 
 /** Legacy single-key storage; per-user keys are ``${prefix}:${supabaseUserId}``. */
 const BUDDY_THREAD_STORAGE_PREFIX = 'slimeBuddyShadowThreadId';
@@ -158,6 +159,22 @@ export default function SlimeCompanionPage() {
     setPanelOpen(true);
     setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (searchParams.get('calendar') !== '1') return;
+    let title = 'Calendar context loaded.';
+    try {
+      const raw = sessionStorage.getItem(SLIME_CALENDAR_BRIEF_CONTEXT_KEY);
+      const parsed = raw ? (JSON.parse(raw) as { headline?: string }) : null;
+      if (parsed?.headline) title = parsed.headline;
+    } catch {
+      /* ignore */
+    }
+    flashBuddyCornerToast(title, 'neutral');
+    const next = new URLSearchParams(searchParams);
+    next.delete('calendar');
+    setSearchParams(next, { replace: true });
+  }, [flashBuddyCornerToast, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.speechSynthesis === 'undefined') return;

@@ -1,15 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
+  CheckCircle2,
+  Clock3,
   Download,
-  Home,
+  ListChecks,
+  LockKeyhole,
   MessageSquare,
+  Plus,
   RotateCcw,
   Sparkles,
   Trash2,
+  WandSparkles,
   X,
 } from 'lucide-react';
 import { addDays, addMinutes, differenceInMinutes, format, isSameDay, parseISO, setHours, setMinutes, startOfDay, startOfWeek } from 'date-fns';
@@ -32,9 +37,9 @@ import {
 import { parseIcsToCalendarEvents, exportEventsToIcs } from '../utils/ics';
 import { mapRecommendationActionsToTasks } from '../utils/executionTasks';
 import {
-  CALENDAR_AGENT_SESSION_DRAFT_KEY,
   EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY,
   executionStorageKeys,
+  SLIME_CALENDAR_BRIEF_CONTEXT_KEY,
   SLIME_VOICE_CALENDAR_RESOLVED_KEY,
 } from '../utils/executionStorageKeys';
 import {
@@ -46,12 +51,11 @@ import {
   type PlannerCoachOptions,
 } from '../utils/calendarRefineSchedule';
 import { saveSelectedBlocksContext, taskIdFromAiCalendarEventId } from '../utils/executionCalendarSelection';
-import { SLIME_VOICE_CALENDAR_DRAFT_KEY } from '../utils/slimeVoiceActions';
-import { SlimeAdvisor } from '../app/components/report/SlimeAdvisor';
-import { CalendarAgentPanel } from '../app/components/calendar/CalendarAgentPanel';
+import { SLIME_VOICE_CALENDAR_DRAFT_KEY, SLIME_VOICE_CHAT_PREFILL_KEY } from '../utils/slimeVoiceActions';
+import { SlimeAdvisor, type SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { useSlimeProfile } from '../hooks/useSlimeProfile';
-import type { CalendarAgentDraft } from '../utils/calendarAgentApi';
 import { useExecutionStorageUserKey } from '../hooks/useExecutionStorageUserKey';
+import { SlimeVoiceAgent, type SlimeSpeechOutput } from '../features/slime/SlimeVoiceAgent';
 
 type TraceShape = {
   decision_id: string;
@@ -133,11 +137,61 @@ function dedupeEventsForTaskTitles(events: CalendarEvent[], tasks: ExecutionTask
   });
 }
 
+const LENS_OPTIONS = [
+  { id: 'week', label: 'Week' },
+  { id: 'focus', label: 'Focus' },
+  { id: 'tasks', label: 'Tasks' },
+] as const;
+
+type PlannerLens = (typeof LENS_OPTIONS)[number]['id'];
+
+function parseEventDate(raw: string): Date | null {
+  const d = parseISO(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function eventDurationMinutes(ev: Pick<CalendarEvent, 'start' | 'end'>): number {
+  const s = parseEventDate(ev.start);
+  const e = parseEventDate(ev.end);
+  if (!s || !e) return 0;
+  return Math.max(0, differenceInMinutes(e, s));
+}
+
+function formatHours(minutes: number): string {
+  if (minutes <= 0) return '0h';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (!h) return `${m}m`;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+function isEventInWeek(ev: CalendarEvent, week: Date): boolean {
+  const s = parseEventDate(ev.start);
+  if (!s) return false;
+  return isSameDay(startOfWeek(s, { weekStartsOn: 1 }), startOfWeek(week, { weekStartsOn: 1 }));
+}
+
+function sourcePillLabel(source: CalendarEvent['source']): string {
+  if (source === 'ai') return 'AI';
+  if (source === 'uploaded') return 'Busy';
+  return 'Manual';
+}
+
+function priorityTone(priority: ExecutionTask['priority'] | undefined): string {
+  if (priority === 'high') return 'border-rose-200 bg-rose-50 text-rose-900';
+  if (priority === 'low') return 'border-sky-200 bg-sky-50 text-sky-900';
+  return 'border-violet-200 bg-violet-50 text-violet-900';
+}
+
 export default function ExecutionPlannerPage() {
   const { slimeProfile } = useSlimeProfile();
   const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
   const storageKeys = useMemo(
     () => (storageUserKey ? executionStorageKeys(storageUserKey) : null),
+    [storageUserKey],
+  );
+  const calendarThreadStorageKey = useMemo(
+    () => (storageUserKey ? `calendarSlimeShadowThreadId:${storageUserKey}` : null),
     [storageUserKey],
   );
   const navigate = useNavigate();
@@ -160,11 +214,22 @@ export default function ExecutionPlannerPage() {
   const [scheduleFeedback, setScheduleFeedback] = useState('');
   const [scheduleCoachBusy, setScheduleCoachBusy] = useState(false);
   const [scheduleCoachNote, setScheduleCoachNote] = useState<string | null>(null);
+  const [plannerLens, setPlannerLens] = useState<PlannerLens>('week');
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDuration, setNewTaskDuration] = useState(45);
+  const [newTaskPriority, setNewTaskPriority] = useState<ExecutionTask['priority']>('medium');
+  const [quickEventTitle, setQuickEventTitle] = useState('');
+  const [quickEventDate, setQuickEventDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [quickEventTime, setQuickEventTime] = useState('09:00');
+  const [quickEventDuration, setQuickEventDuration] = useState(30);
+  const [bridgeNotice, setBridgeNotice] = useState<string | null>(null);
+  const [calendarThreadId, setCalendarThreadId] = useState<string | null>(null);
+  const [calendarAdvisorState, setCalendarAdvisorState] = useState<SlimeAdvisorState>('idle');
+  const [calendarSpeechOutput, setCalendarSpeechOutput] = useState<SlimeSpeechOutput | null>(null);
   /** Accumulated scheduler prefs from prior coach runs (merged on each Re-plan). */
   const [coachBaseOptions, setCoachBaseOptions] = useState<PlannerCoachOptions>(() => normalizePlannerCoachOptions({}));
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [draftPlacement, setDraftPlacement] = useState<{ id: string; start: string; end: string; conflict: boolean } | null>(null);
-  const [sessionAgentDraft, setSessionAgentDraft] = useState<CalendarAgentDraft | null>(null);
   const calendarBodyRef = useRef<HTMLDivElement | null>(null);
   const pendingPointerRef = useRef<{
     eventId: string;
@@ -192,6 +257,31 @@ export default function ExecutionPlannerPage() {
   const [detailLocked, setDetailLocked] = useState(false);
 
   const detailEvent = useMemo(() => events.find((e) => e.id === detailEventId) ?? null, [detailEventId, events]);
+
+  useEffect(() => {
+    if (!calendarThreadStorageKey) {
+      setCalendarThreadId(null);
+      return;
+    }
+    try {
+      setCalendarThreadId(localStorage.getItem(calendarThreadStorageKey));
+    } catch {
+      setCalendarThreadId(null);
+    }
+  }, [calendarThreadStorageKey]);
+
+  const persistCalendarThreadId = useCallback(
+    (id: string) => {
+      setCalendarThreadId(id);
+      if (!calendarThreadStorageKey) return;
+      try {
+        localStorage.setItem(calendarThreadStorageKey, id);
+      } catch {
+        /* ignore */
+      }
+    },
+    [calendarThreadStorageKey],
+  );
 
   useEffect(() => {
     if (!detailEventId) return;
@@ -269,22 +359,6 @@ export default function ExecutionPlannerPage() {
       cancelled = true;
     };
   }, [decisionId]);
-
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(CALENDAR_AGENT_SESSION_DRAFT_KEY);
-      if (raw) {
-        sessionStorage.removeItem(CALENDAR_AGENT_SESSION_DRAFT_KEY);
-        const parsed = JSON.parse(raw) as { draft?: CalendarAgentDraft };
-        if (parsed.draft?.draft_id) {
-          setSessionAgentDraft(parsed.draft);
-          serverSyncSkipUntilRef.current = Date.now() + 2500;
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   useEffect(() => {
     try {
@@ -529,6 +603,120 @@ export default function ExecutionPlannerPage() {
       .filter((x): x is NonNullable<typeof x> => Boolean(x));
   }, [days, draftPlacement, events]);
 
+  const visibleEvents = useMemo(() => events.filter((ev) => isEventInWeek(ev, weekStart)), [events, weekStart]);
+  const visibleAiEvents = useMemo(() => visibleEvents.filter((ev) => ev.source === 'ai'), [visibleEvents]);
+  const selectedAiEvents = useMemo(
+    () => events.filter((e) => e.source === 'ai' && selectedAiEventIds.includes(e.id)),
+    [events, selectedAiEventIds],
+  );
+  const selectedEvent = selectedAiEvents.length === 1 ? selectedAiEvents[0] : null;
+  const scheduledTaskIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const ev of events) {
+      const tid = taskIdFromAiCalendarEventId(ev.id);
+      if (tid) ids.add(tid);
+    }
+    return ids;
+  }, [events]);
+  const taskBacklog = useMemo(
+    () => tasks.map((task) => ({ task, scheduled: scheduledTaskIds.has(task.id) })),
+    [scheduledTaskIds, tasks],
+  );
+  const openTaskCount = taskBacklog.filter((x) => !x.scheduled).length;
+  const weekStats = useMemo(() => {
+    const aiMinutes = visibleAiEvents.reduce((sum, ev) => sum + eventDurationMinutes(ev), 0);
+    const busyMinutes = visibleEvents
+      .filter((ev) => ev.source !== 'ai')
+      .reduce((sum, ev) => sum + eventDurationMinutes(ev), 0);
+    const locked = visibleEvents.filter((ev) => ev.locked).length;
+    const imported = visibleEvents.filter((ev) => ev.source === 'uploaded').length;
+    const conflicts = visibleEvents.reduce((count, ev, idx) => {
+      const s = parseEventDate(ev.start);
+      const e = parseEventDate(ev.end);
+      if (!s || !e) return count;
+      const overlaps = visibleEvents.slice(idx + 1).some((other) => {
+        const os = parseEventDate(other.start);
+        const oe = parseEventDate(other.end);
+        return Boolean(os && oe && s < oe && e > os);
+      });
+      return overlaps ? count + 1 : count;
+    }, 0);
+    const next = [...visibleEvents]
+      .filter((ev) => {
+        const s = parseEventDate(ev.start);
+        return Boolean(s && s >= new Date());
+      })
+      .sort((a, b) => (parseEventDate(a.start)?.getTime() ?? 0) - (parseEventDate(b.start)?.getTime() ?? 0))[0];
+    return {
+      aiMinutes,
+      busyMinutes,
+      totalMinutes: aiMinutes + busyMinutes,
+      locked,
+      imported,
+      conflicts,
+      next,
+    };
+  }, [visibleAiEvents, visibleEvents]);
+  const dayLoad = useMemo(
+    () =>
+      days.map((day) => {
+        const dayEvents = visibleEvents.filter((ev) => {
+          const s = parseEventDate(ev.start);
+          return Boolean(s && isSameDay(s, day));
+        });
+        const minutes = dayEvents.reduce((sum, ev) => sum + eventDurationMinutes(ev), 0);
+        return { day, events: dayEvents.length, minutes };
+      }),
+    [days, visibleEvents],
+  );
+  const calendarBrief = useMemo(() => {
+    const lines = [
+      `Week ${format(weekStart, 'MMM d')} to ${format(addDays(weekStart, 6), 'MMM d')}`,
+      `${visibleEvents.length} events, ${formatHours(weekStats.aiMinutes)} AI planned, ${openTaskCount} open tasks`,
+    ];
+    if (weekStats.next) {
+      const s = parseEventDate(weekStats.next.start);
+      if (s) lines.push(`Next: ${weekStats.next.title} on ${format(s, 'EEE h:mm a')}`);
+    }
+    if (selectedAiEvents.length) lines.push(`Selected blocks: ${selectedAiEvents.map((ev) => ev.title).join(', ')}`);
+    if (coachConstraintsLine) lines.push(`Constraints: ${coachConstraintsLine}`);
+    return lines.join('\n');
+  }, [coachConstraintsLine, openTaskCount, selectedAiEvents, visibleEvents.length, weekStart, weekStats.aiMinutes, weekStats.next]);
+
+  const slimeCalendarContext = useMemo(
+    () => ({
+      headline: `${visibleEvents.length} events this week`,
+      brief: calendarBrief,
+      week_start: weekStart.toISOString(),
+      selected_event_ids: selectedAiEventIds,
+      events: visibleEvents.slice(0, 12).map((ev) => ({
+        id: ev.id,
+        title: ev.title,
+        start: ev.start,
+        end: ev.end,
+        source: ev.source,
+        locked: ev.locked,
+      })),
+      tasks: taskBacklog.slice(0, 12).map(({ task, scheduled }) => ({
+        id: task.id,
+        title: task.title,
+        duration_minutes: task.duration_minutes,
+        priority: task.priority,
+        scheduled,
+      })),
+      created_at: new Date().toISOString(),
+    }),
+    [calendarBrief, selectedAiEventIds, taskBacklog, visibleEvents, weekStart],
+  );
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(SLIME_CALENDAR_BRIEF_CONTEXT_KEY, JSON.stringify(slimeCalendarContext));
+    } catch {
+      /* ignore */
+    }
+  }, [slimeCalendarContext]);
+
   const positionedEventsRef = useRef(positionedEvents);
   positionedEventsRef.current = positionedEvents;
 
@@ -724,12 +912,6 @@ export default function ExecutionPlannerPage() {
     })();
   };
 
-  const selectedAiEvents = useMemo(
-    () => events.filter((e) => e.source === 'ai' && selectedAiEventIds.includes(e.id)),
-    [events, selectedAiEventIds],
-  );
-  const selectedEvent = selectedAiEvents.length === 1 ? selectedAiEvents[0] : null;
-
   const openChatWithSelection = () => {
     const ids = selectedAiEventIds.map((id) => taskIdFromAiCalendarEventId(id)).filter((x): x is string => Boolean(x));
     if (ids.length === 0) return;
@@ -770,6 +952,74 @@ export default function ExecutionPlannerPage() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  const addTaskFromComposer = () => {
+    const title = newTaskTitle.trim();
+    if (!title) return;
+    const id =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? `manual-${crypto.randomUUID().slice(0, 8)}`
+        : `manual-${Date.now()}`;
+    setTasks((prev) => [
+      ...prev,
+      {
+        id,
+        title: title.slice(0, 180),
+        duration_minutes: Math.max(15, Math.min(480, Number(newTaskDuration) || 45)),
+        priority: newTaskPriority,
+        source: 'manual',
+      } as ExecutionTask,
+    ]);
+    setNewTaskTitle('');
+  };
+
+  const removeTaskAndBlocks = (taskId: string) => {
+    setTasks((prev) => prev.filter((task) => task.id !== taskId));
+    setEvents((prev) => prev.filter((ev) => taskIdFromAiCalendarEventId(ev.id) !== taskId));
+    setSelectedAiEventIds((prev) => prev.filter((eventId) => taskIdFromAiCalendarEventId(eventId) !== taskId));
+  };
+
+  const addQuickEvent = () => {
+    const title = quickEventTitle.trim();
+    if (!title || !quickEventDate || !quickEventTime) return;
+    const start = new Date(`${quickEventDate}T${quickEventTime}`);
+    if (Number.isNaN(start.getTime())) return;
+    const end = addMinutes(start, Math.max(5, Math.min(480, Number(quickEventDuration) || 30)));
+    const ev: CalendarEvent = {
+      id: `manual-${Date.now()}`,
+      title: title.slice(0, 180),
+      start: start.toISOString(),
+      end: end.toISOString(),
+      source: 'manual',
+      locked: false,
+      description: 'Created in Execution Calendar',
+    };
+    setEvents((prev) => [...prev, ev]);
+    setWeekStart(startOfWeek(start, { weekStartsOn: 1 }));
+    setQuickEventTitle('');
+  };
+
+  const saveSlimeCalendarContext = useCallback(() => {
+    sessionStorage.setItem(SLIME_CALENDAR_BRIEF_CONTEXT_KEY, JSON.stringify(slimeCalendarContext));
+    sessionStorage.setItem(
+      SLIME_VOICE_CHAT_PREFILL_KEY,
+      `Calendar context:\n${calendarBrief}\n\nHelp me adjust this plan.`,
+    );
+    setBridgeNotice('Calendar context handed to Slime.');
+    window.setTimeout(() => setBridgeNotice(null), 2800);
+    return slimeCalendarContext;
+  }, [calendarBrief, slimeCalendarContext]);
+
+  const openBuddyWithCalendar = useCallback(() => {
+    saveSlimeCalendarContext();
+    navigate('/buddy?calendar=1');
+  }, [navigate, saveSlimeCalendarContext]);
+
+  const openChatWithCalendarBrief = useCallback(() => {
+    saveSlimeCalendarContext();
+    const tid = shadowThreadId?.trim();
+    navigate(tid ? `/chat?thread=${encodeURIComponent(tid)}` : '/chat');
+  }, [navigate, saveSlimeCalendarContext, shadowThreadId]);
 
   const clampToCalendar = (candidateStart: Date, durationMinutes: number, dayIdx: number): { start: Date; end: Date } | null => {
     if (dayIdx < 0 || dayIdx >= days.length) return null;
@@ -954,112 +1204,89 @@ export default function ExecutionPlannerPage() {
     <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
       <div className="mx-auto max-w-[1500px]">
         <MainNavButtons />
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md shadow-indigo-500/25">
-              <CalendarDays className="h-5 w-5" aria-hidden />
+        <div className="mb-4 overflow-hidden rounded-[32px] border border-white/90 bg-white/62 p-4 shadow-[0_18px_58px_rgba(99,102,241,0.10)] backdrop-blur-xl">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md shadow-indigo-500/25">
+                <CalendarDays className="h-5 w-5" aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-violet-500/80">Execution Calendar</p>
+                <h1 className="mt-1 text-3xl font-bold tracking-tight text-gray-950">
+                  Slime-connected weekly plan
+                </h1>
+                <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
+                  {format(weekStart, 'MMM d')} – {format(addDays(weekStart, 6), 'MMM d')} · {visibleEvents.length} events
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-3xl text-gray-900" style={{ fontWeight: 700 }}>
-                Execution Calendar
-              </h1>
-            </div>
-          </div>
-          <nav className="flex flex-wrap items-center gap-2" aria-label="Page actions">
-            {fromShadow && shadowThreadId ? (
-              <>
-                <Link to={`/chat?thread=${encodeURIComponent(shadowThreadId)}`} className={navPillLink}>
-                  <MessageSquare className="h-4 w-4 text-indigo-600" aria-hidden />
-                  Chat
-                </Link>
-                {decisionId ? (
-                  <Link
-                    to={`/chat?thread=${encodeURIComponent(shadowThreadId)}&openReport=${encodeURIComponent(decisionId)}`}
-                    className={navPillLink}
-                  >
-                    <Sparkles className="h-4 w-4 text-violet-600" aria-hidden />
-                    Report
+            <nav className="flex flex-wrap items-center gap-2" aria-label="Page actions">
+              {fromShadow && shadowThreadId ? (
+                <>
+                  <Link to={`/chat?thread=${encodeURIComponent(shadowThreadId)}`} className={navPillLink}>
+                    <MessageSquare className="h-4 w-4 text-indigo-600" aria-hidden />
+                    Thread
                   </Link>
-                ) : null}
-              </>
-            ) : null}
-            {trace?.decision_id ? (
-              <Link to={`/trace/${trace.decision_id}`} className={navPillLink}>
-                <CalendarDays className="h-4 w-4 text-purple-600" aria-hidden />
-                Trace
-              </Link>
-            ) : (
-              <Link to="/" className={navPillLink}>
-                <Home className="h-4 w-4 text-purple-600" aria-hidden />
-                Home
-              </Link>
-            )}
-          </nav>
+                  {decisionId ? (
+                    <Link
+                      to={`/chat?thread=${encodeURIComponent(shadowThreadId)}&openReport=${encodeURIComponent(decisionId)}`}
+                      className={navPillLink}
+                    >
+                      <Sparkles className="h-4 w-4 text-violet-600" aria-hidden />
+                      Report
+                    </Link>
+                  ) : null}
+                </>
+              ) : null}
+              {trace?.decision_id ? (
+                <Link to={`/trace/${trace.decision_id}`} className={navPillLink}>
+                  <CalendarDays className="h-4 w-4 text-purple-600" aria-hidden />
+                  Trace
+                </Link>
+              ) : null}
+            </nav>
+          </div>
+          {bridgeNotice ? <p className="mt-3 text-xs font-medium text-emerald-800">{bridgeNotice}</p> : null}
         </div>
 
-        {sessionAgentDraft ? (
-          <div className="mb-4">
-            <CalendarAgentPanel
-              draft={sessionAgentDraft}
-              onDismiss={() => setSessionAgentDraft(null)}
-              onEventsConfirmed={(confirmed) => {
-                setEvents((prev) => [
-                  ...prev,
-                  ...confirmed.map(
-                    (c): CalendarEvent => ({
-                      id: c.id,
-                      title: c.title,
-                      start: c.start,
-                      end: c.end,
-                      source: 'manual',
-                      description: c.description,
-                      locked: c.locked ?? false,
-                    }),
-                  ),
-                ]);
-                setSessionAgentDraft(null);
-                setScheduleCoachNote('Saved blocks from Calendar Agent — drag to adjust if needed.');
-              }}
-            />
-          </div>
-        ) : null}
-
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_minmax(260px,300px)] xl:items-start">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px] xl:items-start">
           <div className="min-w-0 space-y-0">
             <div className={`overflow-hidden ${shellCard} p-3 sm:p-4`}>
-              <div className="flex flex-wrap items-center gap-2 border-b border-indigo-100/50 pb-3">
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-full border border-white/90 bg-white/90 p-2 text-indigo-700 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
-                  onClick={() => setWeekStart((w) => addDays(w, -7))}
-                  aria-label="Previous week"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-white/90 bg-white/90 px-4 py-2 text-xs font-semibold text-indigo-900 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
-                  onClick={() => setWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}
-                >
-                  Today
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-full border border-white/90 bg-white/90 p-2 text-indigo-700 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
-                  onClick={() => setWeekStart((w) => addDays(w, 7))}
-                  aria-label="Next week"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-                <span className="text-xs tabular-nums text-gray-600">
-                  {format(weekStart, 'MMM d')} – {format(addDays(weekStart, 6), 'MMM d')}
-                </span>
-                <span className="rounded-full bg-violet-100/80 px-2 py-0.5 text-[11px] font-medium text-violet-900">
-                  {visibleWeekCount} events
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-indigo-100/50 pb-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center rounded-full border border-white/90 bg-white/90 p-2 text-indigo-700 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
+                    onClick={() => setWeekStart((w) => addDays(w, -7))}
+                    aria-label="Previous week"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/90 bg-white/90 px-4 py-2 text-xs font-semibold text-indigo-900 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
+                    onClick={() => setWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center rounded-full border border-white/90 bg-white/90 p-2 text-indigo-700 shadow-sm backdrop-blur-sm hover:border-purple-200 hover:bg-white"
+                    onClick={() => setWeekStart((w) => addDays(w, 7))}
+                    aria-label="Next week"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                  <span className="text-xs tabular-nums text-gray-600">
+                    {format(weekStart, 'MMM d')} – {format(addDays(weekStart, 6), 'MMM d')}
+                  </span>
+                  <span className="rounded-full bg-violet-100/80 px-2 py-0.5 text-[11px] font-medium text-violet-900">
+                    {visibleWeekCount} events
+                  </span>
+                </div>
               </div>
 
-              <div className="max-h-[min(420px,52vh)] overflow-auto pt-3">
+              <div className="max-h-[min(640px,66vh)] overflow-auto pt-3">
                 <div className="min-h-[280px] min-w-[720px]">
                   <div
                     className="mb-1 grid overflow-hidden rounded-2xl border border-indigo-100/60 bg-gradient-to-b from-white/90 to-violet-50/40"
@@ -1133,6 +1360,25 @@ export default function ExecutionPlannerPage() {
                               backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${SLOT_HEIGHT_PX - 1}px, rgba(196,181,253,0.35) ${SLOT_HEIGHT_PX - 1}px, rgba(196,181,253,0.35) ${SLOT_HEIGHT_PX}px)`,
                             }}
                           >
+                            {isSameDay(day, today) ? (
+                              <div
+                                className="pointer-events-none absolute left-0 right-0 z-20 border-t border-rose-400/80"
+                                style={{
+                                  top: `${Math.min(
+                                    100,
+                                    Math.max(
+                                      0,
+                                      (((today.getHours() * 60 + today.getMinutes()) - VIEW_DAY_START_HOUR * 60) /
+                                        ((VIEW_DAY_END_HOUR - VIEW_DAY_START_HOUR) * 60)) *
+                                        100,
+                                    ),
+                                  )}%`,
+                                }}
+                                aria-hidden
+                              >
+                                <span className="absolute -top-1.5 left-1 h-2.5 w-2.5 rounded-full bg-rose-400 shadow-sm" />
+                              </div>
+                            ) : null}
                             {positionedEvents
                               .filter((ev) => ev.dayIdx === dayIdx)
                               .map((ev) => {
@@ -1182,7 +1428,11 @@ export default function ExecutionPlannerPage() {
                                     }`}
                                     style={{ top: `${ev.topPct}%`, height: `${Math.max(4, ev.heightPct)}%` }}
                                   >
-                                    <div className="truncate text-[10px] font-semibold">{ev.title}</div>
+                                    <div className="flex min-w-0 items-center justify-between gap-1">
+                                      <span className="truncate text-[10px] font-semibold">{ev.title}</span>
+                                      <span className="shrink-0 text-[9px] opacity-80">{sourcePillLabel(source)}</span>
+                                    </div>
+                                    <div className="truncate text-[9px] opacity-85">{ev.startLabel}–{ev.endLabel}</div>
                                     {source === 'ai' ? (
                                       <div
                                         onMouseDown={(event) => {
@@ -1216,177 +1466,67 @@ export default function ExecutionPlannerPage() {
           </div>
 
           <aside className="min-w-0 space-y-4 xl:sticky xl:top-6 xl:self-start">
-            {preview && agilityPreviewSidebarHasContent(preview as unknown as AgilityPreviewData) ? (
-              <div className={shellCard}>
-                <AgilityPreviewSidebar preview={preview as unknown as AgilityPreviewData} variant="sidebar" />
-              </div>
-            ) : null}
-
-            <section className={`${shellCard} space-y-3 p-4`}>
-              <div className="flex flex-wrap items-center gap-2">
-                <CalendarUpload onUpload={onUploadIcs} uploadedCount={events.filter((x) => x.source === 'uploaded').length} />
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500"
-                  onClick={runAutoSchedule}
-                >
-                  <Sparkles className="h-3.5 w-3.5 opacity-90" aria-hidden />
-                  Plan
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 rounded-full border border-indigo-200/90 bg-white/80 px-3 py-1.5 text-xs font-medium text-indigo-900 hover:bg-white"
-                  onClick={exportAiIcs}
-                >
-                  <Download className="h-3.5 w-3.5" aria-hidden />
-                  .ics
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 rounded-full border border-indigo-200/90 bg-white/80 px-3 py-1.5 text-xs font-medium text-indigo-900 hover:bg-white"
-                  onClick={() => {
-                    plannerHydratedRef.current = false;
-                    if (storageKeys) {
-                      localStorage.removeItem(storageKeys.events);
-                      localStorage.removeItem(storageKeys.tasks);
-                      localStorage.removeItem(storageKeys.coachOptions);
-                    }
-                    setCoachBaseOptions(
-                      storageUserKey ? loadCoachSchedulerOptions(storageUserKey) : normalizePlannerCoachOptions({}),
-                    );
-                    setEvents([]);
-                    setTasks([]);
-                    setUnscheduled([]);
-                    setSelectedAiEventIds([]);
-                    setAltSuggestion(null);
-                    setCalendarWarning(null);
-                    setDetailEventId(null);
-                    plannerHydratedRef.current = true;
-                  }}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-                  Reset
-                </button>
-              </div>
-
-              <div className="border-t border-indigo-100/60 pt-3">
-                <div className="flex items-center gap-2 text-indigo-900">
-                  <Sparkles className="h-4 w-4 shrink-0 text-indigo-600" aria-hidden />
-                  <span className="text-xs font-semibold uppercase tracking-wide">Schedule coach</span>
-                  <SlimeAdvisor size="sm" profile={slimeProfile} state={scheduleCoachBusy ? 'thinking' : 'idle'} className="scale-[0.65] origin-left" />
+            <section className={`${shellCard} relative min-h-[520px] overflow-hidden p-4`}>
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_16%,rgba(255,255,255,0.95),transparent_30%),radial-gradient(circle_at_50%_45%,rgba(139,92,246,0.16),transparent_55%)]" />
+              <div className="relative z-10">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-violet-500/90">Calendar Slime</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-950">{visibleEvents.length} events this week</p>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {COACH_QUICK_ACTIONS.map((q) => (
-                    <button
-                      key={q.label}
-                      type="button"
-                      disabled={scheduleCoachBusy || tasks.length === 0}
-                      onClick={() => void runScheduleCoach(q.text)}
-                      className="rounded-full border border-indigo-200/80 bg-white/90 px-2.5 py-1 text-[10px] font-semibold text-indigo-900 hover:bg-white disabled:opacity-40"
-                    >
-                      {q.label}
-                    </button>
-                  ))}
-                </div>
-                {coachConstraintsLine ? (
-                  <p className="mt-2 line-clamp-2 text-[11px] text-gray-600" title={coachConstraintsLine}>
-                    {coachConstraintsLine}
-                  </p>
-                ) : null}
-                <textarea
-                  value={scheduleFeedback}
-                  onChange={(e) => setScheduleFeedback(e.target.value)}
-                  rows={2}
-                  placeholder={selectedAiEventIds.length ? `${selectedAiEventIds.length} selected · describe…` : 'Describe changes…'}
-                  className="mt-2 w-full resize-none rounded-2xl border border-indigo-100/90 bg-white/90 px-3 py-2 text-xs text-gray-800 placeholder:text-gray-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-purple-400/30"
-                />
-                <button
-                  type="button"
-                  disabled={scheduleCoachBusy || !scheduleFeedback.trim() || tasks.length === 0}
-                  onClick={() => void runScheduleCoach()}
-                  className="mt-2 w-full rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 py-2 text-xs font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500 disabled:opacity-40"
-                >
-                  {scheduleCoachBusy ? 'Applying…' : 'Apply'}
-                </button>
-                {tasks.length === 0 ? <p className="mt-2 text-[11px] text-amber-800">Add tasks to use the coach.</p> : null}
-                {scheduleCoachNote ? (
-                  <p className="mt-2 line-clamp-3 text-[11px] leading-relaxed text-gray-600">{scheduleCoachNote}</p>
-                ) : null}
               </div>
 
-              {unscheduled.length > 0 && (
-                <p className="line-clamp-2 text-[11px] text-amber-800" title={unscheduled.map((x) => x.title).join(', ')}>
-                  Open: {unscheduled.map((x) => x.title).join(', ')}
-                </p>
-              )}
-              {uploadNotice && <p className="text-[11px] text-emerald-800">{uploadNotice}</p>}
-              {visibleWeekCount === 0 && events.length > 0 && (
-                <p className="text-[11px] text-amber-800">No events this week — use arrows.</p>
-              )}
-              {calendarWarning && <p className="text-[11px] text-rose-700">{calendarWarning}</p>}
+              <div className="relative z-10 mt-6 h-72">
+                {calendarSpeechOutput?.text ? (
+                  <div className="absolute right-1 top-2 z-20 max-w-[14rem] rounded-[24px] border border-white/90 bg-white/92 px-4 py-3 text-sm font-medium leading-relaxed text-slate-900 shadow-[0_18px_50px_rgba(99,102,241,0.16)] backdrop-blur-md">
+                    {calendarSpeechOutput.text}
+                  </div>
+                ) : null}
+                <div className="absolute left-1/2 top-10 z-10 -translate-x-1/2">
+                  <SlimeAdvisor
+                    size="lg"
+                    profile={slimeProfile}
+                    state={calendarAdvisorState}
+                    companionMode
+                    className="scale-[0.96]"
+                  />
+                </div>
+                <div className="pointer-events-none absolute left-[57%] top-[10.55rem] z-20 w-20 rotate-[7deg] rounded-xl border border-violet-200/90 bg-white/92 p-1.5 shadow-[0_14px_30px_rgba(109,40,217,0.16)] backdrop-blur-sm">
+                  <span className="absolute -left-3 top-7 h-5 w-5 rounded-full border border-white/70 bg-white/75 shadow-sm" aria-hidden />
+                  <div className="mb-2 flex gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-fuchsia-300" />
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {Array.from({ length: 16 }, (_, i) => (
+                      <span
+                        key={i}
+                        className={`h-2 rounded ${i === 5 || i === 9 ? 'bg-violet-500/75' : 'bg-violet-100'}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <SlimeVoiceAgent
+                slimeProfile={slimeProfile}
+                currentRoute="/execution"
+                threadId={calendarThreadId ?? undefined}
+                onThreadId={persistCalendarThreadId}
+                onAdvisorStateChange={setCalendarAdvisorState}
+                onSpeechOutputChange={setCalendarSpeechOutput}
+                hideModelSelector
+                className="bottom-5 sm:bottom-5"
+              />
             </section>
 
-            {selectedAiEvents.length > 0 && (
-              <section className={`${shellCard} space-y-2 p-4`}>
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-indigo-900">
-                    {selectedAiEvents.length} selected
-                  </p>
-                  <button
-                    type="button"
-                    className="shrink-0 rounded-full border border-indigo-200/90 bg-white/90 p-1 text-gray-500 hover:bg-white"
-                    onClick={() => setSelectedAiEventIds([])}
-                  >
-                    ✕
-                  </button>
-                </div>
-                <ul className="max-h-24 space-y-0.5 overflow-y-auto text-xs text-gray-800">
-                  {selectedAiEvents.map((ev) => (
-                    <li key={ev.id} className="truncate font-medium" title={ev.title}>
-                      {ev.title}
-                    </li>
-                  ))}
-                </ul>
-                <button
-                  type="button"
-                  disabled={selectedAiEventIds.every((id) => !taskIdFromAiCalendarEventId(id))}
-                  onClick={openChatWithSelection}
-                  className="flex w-full items-center justify-center gap-2 rounded-full border border-indigo-200/90 bg-white/90 py-2 text-xs font-semibold text-indigo-900 hover:bg-white disabled:opacity-40"
-                >
-                  <MessageSquare className="h-4 w-4 shrink-0 text-indigo-600" aria-hidden />
-                  Chat
-                </button>
-                {selectedEvent ? (
-                <div className="flex flex-wrap gap-2 border-t border-indigo-100/60 pt-3">
-                  <button
-                    type="button"
-                    className="rounded-full border border-indigo-200/90 bg-white/90 px-3 py-1.5 text-xs font-medium text-indigo-900 hover:bg-white"
-                    onClick={requestAltSlot}
-                  >
-                    Other slot
-                  </button>
-                  {altSuggestion && (
-                    <>
-                      <button
-                        type="button"
-                        className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-indigo-500 hover:to-violet-500"
-                        onClick={acceptAltSlot}
-                      >
-                        {format(parseISO(altSuggestion.start), 'EEE HH:mm')}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-indigo-200/90 bg-white/90 px-3 py-1.5 text-xs text-gray-600 hover:bg-white"
-                        onClick={() => setAltSuggestion(null)}
-                      >
-                        ✕
-                      </button>
-                    </>
-                  )}
-                </div>
-                ) : null}
-              </section>
-            )}
+            <section className={`${shellCard} p-4`}>
+              <div className="flex items-center justify-between gap-3">
+                <CalendarUpload onUpload={onUploadIcs} uploadedCount={events.filter((x) => x.source === 'uploaded').length} />
+                {uploadNotice ? <p className="min-w-0 flex-1 text-right text-[11px] text-emerald-800">{uploadNotice}</p> : null}
+              </div>
+              {calendarWarning ? <p className="mt-2 text-[11px] text-rose-700">{calendarWarning}</p> : null}
+            </section>
           </aside>
         </div>
 
@@ -1486,9 +1626,6 @@ export default function ExecutionPlannerPage() {
                   Save
                 </button>
               </div>
-              <p className="mt-2 text-[10px] text-gray-500">
-                Tip: AI blocks — click to open details; drag to move; drag the bottom edge to resize. ⌘/Ctrl-click to multi-select.
-              </p>
             </div>
           </div>
         ) : null}

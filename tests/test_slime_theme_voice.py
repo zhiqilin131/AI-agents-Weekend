@@ -38,8 +38,18 @@ def test_route_quick_theme_switch_to_no_openai() -> None:
     assert r.arguments.get("patch", {}).get("color_theme") == "aurora"
 
 
-def test_route_quick_theme_blocked_call_me_mint() -> None:
+def test_route_quick_theme_chinese_no_openai() -> None:
+    settings = Settings(foresight_user_id="u", openai_api_key="")
+    ctx = SlimeVoiceContext(user_id="u")
+    r = route_slime_voice_command("把颜色换成薄荷色", ctx, settings=settings)
+    assert r.tool_name == "update_slime_profile"
+    assert r.arguments.get("patch", {}).get("color_theme") == "mint"
+
+
+def test_route_quick_theme_call_me_mint_is_nickname_not_color() -> None:
     settings = Settings(foresight_user_id="u", openai_api_key="")
     ctx = SlimeVoiceContext(user_id="u")
     r = route_slime_voice_command("call me mint", ctx, settings=settings)
-    assert r.tool_name == "no_op"
+    assert r.tool_name == "update_slime_profile"
+    assert r.arguments.get("patch", {}).get("persona", {}).get("user_nickname") == "mint"
+    assert "color_theme" not in r.arguments.get("patch", {})

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
@@ -387,6 +387,108 @@ def tool_navigate(args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]
     return {"ok": True, "route": route, "path": path}, {"type": "navigate", "route": path, "payload": {}}
 
 
+def _parse_event_dt(raw: str) -> datetime | None:
+    t = (raw or "").strip()
+    if not t:
+        return None
+    if t.endswith("Z"):
+        t = t[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(t)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _calendar_range_bounds(range_name: str, *, now: datetime) -> tuple[datetime | None, datetime | None, str]:
+    raw = (range_name or "").strip().lower()
+    r = raw
+    if r not in {"today", "tomorrow", "week", "all"}:
+        if "tomorrow" in raw or "明天" in raw:
+            r = "tomorrow"
+        elif "today" in raw or "tonight" in raw or "今天" in raw:
+            r = "today"
+        elif "all" in raw or "everything" in raw or "全部" in raw:
+            r = "all"
+        else:
+            r = "week"
+    local_now = now.astimezone()
+    start_day = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if r == "today":
+        return start_day, start_day + timedelta(days=1), "today"
+    if r == "tomorrow":
+        s = start_day + timedelta(days=1)
+        return s, s + timedelta(days=1), "tomorrow"
+    if r == "week":
+        s = start_day - timedelta(days=start_day.weekday())
+        return s, s + timedelta(days=7), "this week"
+    return None, None, "your calendar"
+
+
+def _event_time_phrase(start: datetime, end: datetime) -> str:
+    same_day = start.date() == end.date()
+    if same_day:
+        return f"{start.strftime('%a %b %-d, %-I:%M %p')}–{end.strftime('%-I:%M %p')}"
+    return f"{start.strftime('%a %b %-d, %-I:%M %p')}–{end.strftime('%a %b %-d, %-I:%M %p')}"
+
+
+def tool_search_calendar(
+    args: dict[str, Any],
+    *,
+    settings: Settings,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    from foresight_x.calendar_agent.store import list_events as cal_list_events
+
+    current = now or datetime.now(timezone.utc)
+    range_name = str(args.get("range") or "").strip().lower()
+    query = str(args.get("query") or "").strip()
+    start, end, label = _calendar_range_bounds(range_name or query, now=current)
+    q_tokens = _tokens(query)
+    hits: list[dict[str, Any]] = []
+    for ev in cal_list_events(settings, settings.foresight_user_id):
+        st = _parse_event_dt(ev.start)
+        en = _parse_event_dt(ev.end)
+        if st is None or en is None:
+            continue
+        st_local = st.astimezone()
+        en_local = en.astimezone()
+        if start is not None and end is not None and not (st_local < end and en_local > start):
+            continue
+        blob = " ".join([ev.title, ev.description or "", ev.source, ev.decision_id or ""])
+        score = _score_text(blob, q_tokens)
+        if q_tokens and score <= 0 and range_name == "all":
+            continue
+        hits.append(
+            {
+                "id": ev.id,
+                "title": ev.title,
+                "start": ev.start,
+                "end": ev.end,
+                "source": ev.source,
+                "locked": ev.locked,
+                "description": ev.description or "",
+                "time_label": _event_time_phrase(st_local, en_local),
+                "score": score,
+            }
+        )
+    hits.sort(key=lambda h: (_parse_event_dt(str(h.get("start") or "")) or current).timestamp())
+    return (
+        {
+            "ok": True,
+            "query": query,
+            "range": label,
+            "events": hits[:12],
+            "total": len(hits),
+        },
+        {
+            "type": "show_calendar_result",
+            "route": "",
+            "payload": {"events": hits[:12], "range": label},
+        },
+    )
+
+
 def tool_create_calendar_draft(
     args: dict[str, Any],
     *,
@@ -644,7 +746,7 @@ def tool_update_slime_profile(
         route.requires_confirmation
         or name_needs_confirm
         or "custom_colors" in patch_in
-        or nickname_patch_requested
+        or (nickname_patch_requested and not route.auto_apply_voice_persona)
     )
     if needs_confirm:
         patch_json = _voice_profile_patch_json(patch_in)
@@ -755,6 +857,21 @@ def execute_slime_tool(
             "should_show_evidence_drawer": synth.should_show_evidence_drawer,
         }
         return tr_out, {"type": fe["type"], "route": "", "payload": fe.get("payload", {})}, synth.assistant_text
+
+    if name == "search_calendar":
+        tr, fe = tool_search_calendar(args, settings=settings)
+        events = tr.get("events") if isinstance(tr, dict) else []
+        if not isinstance(events, list) or not events:
+            neutral = f"I don't see anything on {tr.get('range', 'your calendar')}."
+        else:
+            parts = []
+            for ev in events[:4]:
+                parts.append(f"{ev.get('title', 'Event')} at {ev.get('time_label', '')}".strip())
+            more = int(tr.get("total") or len(events)) - len(parts)
+            tail = f" There are {more} more." if more > 0 else ""
+            neutral = f"On {tr.get('range', 'your calendar')}, I found: " + "; ".join(parts) + "." + tail
+        text = _persona_spoken(neutral, tool_name="search_calendar", transcript=transcript, settings=settings)
+        return tr, {"type": fe["type"], "route": "", "payload": fe.get("payload", {})}, text
 
     if name == "create_calendar_draft":
         tz = str(context.recent_ui_context.get("timezone") or "UTC")

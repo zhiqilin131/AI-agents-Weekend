@@ -13,7 +13,11 @@ import type { SlimeProfile } from '../../app/model';
 import { apiFetch } from '../../utils/apiFetch';
 import { apiFetchErrorMessage } from '../../utils/apiOrigin';
 import { confirmCalendarDraft } from '../../utils/calendarAgentApi';
-import { executionStorageKeys, SLIME_VOICE_CALENDAR_RESOLVED_KEY } from '../../utils/executionStorageKeys';
+import {
+  executionStorageKeys,
+  SLIME_CALENDAR_BRIEF_CONTEXT_KEY,
+  SLIME_VOICE_CALENDAR_RESOLVED_KEY,
+} from '../../utils/executionStorageKeys';
 import { useExecutionStorageUserKey } from '../../hooks/useExecutionStorageUserKey';
 import {
   applySlimeVoiceFrontendAction,
@@ -76,6 +80,7 @@ export type SlimeVoiceAgentProps = {
   /** Speech bubble rendered by the roaming stage so it stays attached to the slime. */
   onSpeechOutputChange?: (output: SlimeSpeechOutput | null) => void;
   currentRoute?: string;
+  hideModelSelector?: boolean;
   className?: string;
 };
 
@@ -317,6 +322,7 @@ export function SlimeVoiceAgent({
   onMemoryEvidenceRetrieved,
   onSpeechOutputChange,
   currentRoute,
+  hideModelSelector = false,
   className,
 }: SlimeVoiceAgentProps) {
   const navigate = useNavigate();
@@ -821,7 +827,14 @@ export function SlimeVoiceAgent({
       fd.append('slime_profile', JSON.stringify(slimeProfile));
       try {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        fd.append('recent_ui_context', JSON.stringify({ timezone: tz }));
+        let calendarContext: unknown = null;
+        try {
+          const rawCalendar = sessionStorage.getItem(SLIME_CALENDAR_BRIEF_CONTEXT_KEY);
+          calendarContext = rawCalendar ? JSON.parse(rawCalendar) : null;
+        } catch {
+          calendarContext = null;
+        }
+        fd.append('recent_ui_context', JSON.stringify({ timezone: tz, calendar_context: calendarContext }));
       } catch {
         fd.append('recent_ui_context', JSON.stringify({}));
       }
@@ -1311,26 +1324,28 @@ export function SlimeVoiceAgent({
         ) : null}
       </div>
 
-      <div
-        data-slime-avoid
-        className="pointer-events-auto fixed right-3 bottom-[max(5.75rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] z-[52] w-[min(92vw,16rem)] sm:right-5"
-      >
-        <div className="rounded-xl border border-white/50 bg-white/72 px-2 py-1 backdrop-blur-md">
-          <ModelSelector
-            feature="slime_voice"
-            selectedModelId={voiceModelOptionId || slimeModels.defaultModel}
-            onChange={setVoiceModelOptionId}
-            models={slimeModels.models}
-            selectorEnabled={slimeModels.selectorEnabled}
-            showCostPreview={false}
-            variant="compact"
-            elevated={false}
-            hideCompactHeader
-            compactSelectAriaLabel="Slime model tier for voice"
-            disabled={recording}
-          />
+      {!hideModelSelector ? (
+        <div
+          data-slime-avoid
+          className="pointer-events-auto fixed right-3 bottom-[max(5.75rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] z-[52] w-[min(92vw,16rem)] sm:right-5"
+        >
+          <div className="rounded-xl border border-white/50 bg-white/72 px-2 py-1 backdrop-blur-md">
+            <ModelSelector
+              feature="slime_voice"
+              selectedModelId={voiceModelOptionId || slimeModels.defaultModel}
+              onChange={setVoiceModelOptionId}
+              models={slimeModels.models}
+              selectorEnabled={slimeModels.selectorEnabled}
+              showCostPreview={false}
+              variant="compact"
+              elevated={false}
+              hideCompactHeader
+              compactSelectAriaLabel="Slime model tier for voice"
+              disabled={recording}
+            />
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <EvidenceDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} items={drawerItems} />
     </>

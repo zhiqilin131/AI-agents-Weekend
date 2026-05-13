@@ -27,3 +27,5 @@ export const EXECUTION_SELECTED_BLOCKS_CONTEXT_KEY = 'fx.execution.selectedBlock
 
 /** Full Calendar Agent draft payload when opening planner from report or Slime. */
 export const CALENDAR_AGENT_SESSION_DRAFT_KEY = 'fx.calendarAgent.sessionDraft.v1';
+/** Calendar context handoff from planner into Slime Buddy voice/chat. */
+export const SLIME_CALENDAR_BRIEF_CONTEXT_KEY = 'fx.slime.calendarBriefContext.v1';
