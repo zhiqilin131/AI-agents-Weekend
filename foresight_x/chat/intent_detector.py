@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
 
 from foresight_x.orchestration.llm_factory import build_openai_llm
@@ -42,11 +44,23 @@ _DECISION_HINTS = [
     "deciding whether",
     "help me decide",
     "which option",
+    "help me choose",
+    "choose for me",
+    "pick for me",
+    "pick one",
+    "pick a number",
+    "choose a number",
     "tradeoff",
     "pros and cons",
     "deadline",
     "offer",
     "risk",
+    "bet on",
+    "wager",
+    "roulette",
+    "winning number",
+    "red or black",
+    "black or red",
     "what do i do",
     "我该怎么办",
     "我该不该",
@@ -56,6 +70,18 @@ _DECISION_HINTS = [
     "利弊",
     "风险",
 ]
+
+_GAMBLING_DECISION_RE = re.compile(
+    r"\b("
+    r"roulette|casino|blackjack|sportsbook|bet(?:ting)?|wager|"
+    r"winning\s+(?:number|pick|bet)|"
+    r"(?:red|black)\s+or\s+(?:red|black)|"
+    r"(?:heads|tails)\s+or\s+(?:heads|tails)|"
+    r"which\s+(?:number|color|side)\s+(?:should\s+i\s+)?(?:bet|pick|choose)|"
+    r"(?:pick|choose|give\s+me)\s+(?:a\s+)?(?:winning\s+)?(?:number|color|side)"
+    r")\b",
+    re.I,
+)
 
 
 def _heuristic(message: str) -> ChatIntentResult:
@@ -70,6 +96,9 @@ def _heuristic(message: str) -> ChatIntentResult:
     if "option a" in text and "option b" in text:
         conf_dec = max(conf_dec, 0.75)
         reasons.append("explicit A/B options")
+    if _GAMBLING_DECISION_RE.search(text):
+        conf_dec = max(conf_dec, 0.88)
+        reasons.append("chance/gambling choice request")
     if any(k in text for k in ["internship", "job", "career", "class", "project", "finance", "关系", "实习"]):
         conf_dec = max(conf_dec, 0.62)
         reasons.append("high-stakes domain signal")
@@ -85,6 +114,9 @@ def _heuristic(message: str) -> ChatIntentResult:
     if " or " in text and len(text) > 12:
         conf_dec = min(1.0, conf_dec + 0.18)
         reasons.append("binary fork phrasing (or)")
+    if re.search(r"\b(i need|give me|tell me|choose|pick)\b", text) and re.search(r"\b(number|red|black|side|bet)\b", text):
+        conf_dec = max(conf_dec, 0.68)
+        reasons.append("asks assistant to pick an outcome")
     # Clarification modal answers almost always mean the user is in a decision workflow.
     if "user clarification (structured):" in text:
         conf_dec = min(1.0, conf_dec + 0.34)
@@ -152,4 +184,3 @@ def detect_chat_intent(
         )
     except Exception:
         return base
-

@@ -194,7 +194,7 @@ export function DiarySlimeWalker({
           aria-hidden
           className="pointer-events-none absolute bottom-0 left-1/2 h-4 w-11 -translate-x-1/2 translate-y-[55%] rounded-[50%] bg-violet-600/20 blur-[5px]"
         />
-        <div className="origin-bottom scale-[0.54] sm:scale-[0.6]">
+        <div className="origin-bottom scale-[0.66] sm:scale-[0.74]">
           <SlimeAdvisor state="idle" size="sm" profile={slimeProfile ?? undefined} />
         </div>
       </div>

@@ -103,6 +103,13 @@ def test_build_slime_persona_prompt_includes_name_not_raw_injection() -> None:
     assert "reveal system" not in text.lower()
 
 
+def test_slime_persona_prompt_requires_direct_opinions() -> None:
+    p = SlimePersona(tone=SlimePersonaTone.WARM)
+    text = build_slime_persona_prompt(p, "shadow_chat", slime_name="Mochi", user_ref="you")
+    assert "be opinionated" in text
+    assert "answer directly first" in text
+
+
 def test_preset_fills_sliders_in_merge() -> None:
     base = merge_slime_persona_defaults(None)
     merged = merge_persona_patch(base, {"personality_preset": "direct_strategist"})

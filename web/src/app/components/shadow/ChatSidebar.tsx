@@ -17,7 +17,7 @@ export function ChatSidebar({
 }) {
   return (
     <aside className="rounded-3xl border border-white/90 bg-white/60 p-3 shadow-[0_8px_24px_rgba(0,0,0,0.06)] backdrop-blur-md">
-      <BuddyTooltip content="Create a new empty thread. You must pick it before sending messages.">
+      <BuddyTooltip content="Create and open a fresh chat thread.">
         <button
           type="button"
           onClick={onNewChat}
@@ -54,4 +54,3 @@ export function ChatSidebar({
     </aside>
   );
 }
-

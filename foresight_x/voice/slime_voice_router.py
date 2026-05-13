@@ -239,6 +239,134 @@ def _quick_slime_color_theme_patch(transcript: str) -> dict[str, Any] | None:
     return None
 
 
+_FAST_CONVERSATION_BLOCKERS_EN = (
+    "calendar",
+    "planner",
+    "schedule",
+    "reschedule",
+    "appointment",
+    "event",
+    "remind",
+    "delete",
+    "remove",
+    "move ",
+    "navigate",
+    "open ",
+    "go to ",
+    "take me to",
+    "profile",
+    "settings",
+    "diary",
+    "journal",
+    "history",
+    "remember",
+    "memory",
+    "recall",
+    "what do you know about",
+    "what did i",
+    "who is",
+    "who's",
+    "what is my",
+    "what's my",
+    "my girlfriend",
+    "my boyfriend",
+    "my partner",
+    "about me",
+    "decision report",
+    "from my report",
+    "from the report",
+    "trace ",
+)
+
+_FAST_CONVERSATION_BLOCKERS_ZH = (
+    "日历",
+    "计划到",
+    "加入",
+    "删除",
+    "改期",
+    "移动",
+    "打开",
+    "去",
+    "跳转",
+    "主页",
+    "档案",
+    "个人资料",
+    "日记",
+    "历史",
+    "记得",
+    "记忆",
+    "回忆",
+    "我是谁",
+    "我的名字",
+    "女朋友",
+    "男朋友",
+    "对象",
+    "关于我",
+    "报告",
+)
+
+
+def _looks_like_tool_or_retrieval_request(transcript: str) -> bool:
+    raw = (transcript or "").strip()
+    low = raw.lower()
+    if any(marker in low for marker in _FAST_CONVERSATION_BLOCKERS_EN):
+        return True
+    return any(marker in raw for marker in _FAST_CONVERSATION_BLOCKERS_ZH)
+
+
+def _try_fast_conversational_no_op(transcript: str) -> SlimeVoiceRouteResult | None:
+    """
+    Skip the router LLM for obvious conversation/opinion turns.
+    This still falls through to the full chat pipeline, so answer quality and memory retrieval stay unchanged.
+    """
+    raw = (transcript or "").strip()
+    if not raw or len(raw) > 320:
+        return None
+    low = raw.lower()
+    if _looks_like_tool_or_retrieval_request(raw):
+        return None
+
+    compact = re.sub(r"[\s!?.,;:，。！？、]+", " ", low).strip()
+    if compact in {"hi", "hello", "hey", "yo", "thanks", "thank you", "okay", "ok"}:
+        return SlimeVoiceRouteResult(
+            intent="general_chat",
+            tool_name="no_op",
+            arguments={"reason": "fast_conversation"},
+            requires_confirmation=False,
+        )
+
+    opinion_like = bool(
+        re.search(
+            r"\b("
+            r"do you like|what do you think|what's your take|what is your take|"
+            r"in your opinion|would you rather|which .* do you prefer|"
+            r"who do you prefer|is .* good|is .* better"
+            r")\b",
+            low,
+        )
+    ) or any(marker in raw for marker in ("你觉得", "你怎么看", "你喜欢", "你更喜欢", "你认为"))
+
+    decision_like = bool(
+        re.search(
+            r"\b("
+            r"should i|shall i|would you choose|help me choose|choose for me|"
+            r"pick one|pick for me|red or black|black or red|roulette|winning number"
+            r")\b",
+            low,
+        )
+    ) or any(marker in raw for marker in ("我该不该", "要不要", "帮我选", "帮我决定", "选哪个"))
+
+    if not (opinion_like or decision_like):
+        return None
+
+    return SlimeVoiceRouteResult(
+        intent="decision_candidate" if decision_like else "general_chat",
+        tool_name="no_op",
+        arguments={"reason": "fast_conversation"},
+        requires_confirmation=False,
+    )
+
+
 def _explicit_report_schedule_intent(transcript: str) -> bool:
     """
     True when the user is clearly asking to schedule items **from an existing decision report**
@@ -433,6 +561,10 @@ def route_slime_voice_command(
             requires_confirmation=False,
             assistant_hint=None,
         )
+
+    fast_convo = _try_fast_conversational_no_op(transcript.strip())
+    if fast_convo is not None:
+        return fast_convo
 
     if not (settings.openai_api_key or "").strip():
         return SlimeVoiceRouteResult(

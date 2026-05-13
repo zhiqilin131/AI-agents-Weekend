@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
 
 
@@ -28,9 +30,19 @@ DECISION_KEYWORDS = [
     "should i",
     "which option",
     "help me decide",
+    "help me choose",
+    "choose for me",
+    "pick for me",
+    "pick a number",
+    "choose a number",
     "pros and cons",
     "tradeoff",
     "risk",
+    "bet on",
+    "roulette",
+    "winning number",
+    "red or black",
+    "black or red",
     "consequence",
     "我该不该",
     "要不要",
@@ -40,6 +52,17 @@ DECISION_KEYWORDS = [
     "风险",
     "后果",
 ]
+
+GAMBLING_DECISION_RE = re.compile(
+    r"\b("
+    r"roulette|casino|blackjack|bet(?:ting)?|wager|"
+    r"winning\s+(?:number|pick|bet)|"
+    r"(?:red|black)\s+or\s+(?:red|black)|"
+    r"which\s+(?:number|color|side)\s+(?:should\s+i\s+)?(?:bet|pick|choose)|"
+    r"(?:pick|choose|give\s+me)\s+(?:a\s+)?(?:winning\s+)?(?:number|color|side)"
+    r")\b",
+    re.I,
+)
 
 
 def detect_chat_mode_intent(
@@ -59,6 +82,9 @@ def detect_chat_mode_intent(
     if "option a" in text and "option b" in text:
         decision_conf = max(decision_conf, 0.72)
         reasons.append("contains explicit A/B options")
+    if GAMBLING_DECISION_RE.search(text):
+        decision_conf = max(decision_conf, 0.74)
+        reasons.append("chance/gambling choice request")
 
     if role_hits:
         reasons.append(f"roleplay cues: {', '.join(role_hits[:3])}")
@@ -85,4 +111,3 @@ def detect_chat_mode_intent(
         reasons=reasons or ["no high-confidence mode signal"],
         suggested_action="continue",
     )
-

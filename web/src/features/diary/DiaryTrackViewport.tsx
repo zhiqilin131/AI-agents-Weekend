@@ -20,10 +20,10 @@ export type DiaryTrackViewportProps = {
   children?: ReactNode;
 };
 
-const SLOT_W = 88;
-const STRIP_H = 200;
-const NODE_CY = 118;
-const WAVE_AMP = 26;
+const SLOT_W = 112;
+const STRIP_H = 260;
+const NODE_CY = 152;
+const WAVE_AMP = 40;
 
 function slotCenterX(i: number): number {
   return i * SLOT_W + SLOT_W / 2;
@@ -143,16 +143,20 @@ export function DiaryTrackViewport({
     <div
       data-testid="diary-track-viewport"
       data-visible-count={n}
-      className="relative mx-auto w-full max-w-2xl overflow-hidden pb-14 pt-2"
-      style={{ height: STRIP_H + 72 }}
+      className="relative mx-auto w-full overflow-hidden pb-10 pt-4"
+      style={{ height: STRIP_H + 96 }}
     >
-      <div className="pointer-events-none absolute inset-x-0 top-1 flex justify-center">
-        <span className="rounded-full border border-violet-100/90 bg-white/70 px-3 py-0.5 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500 shadow-sm backdrop-blur-sm">
-          Journey path
+      <div className="pointer-events-none absolute inset-x-0 top-4 bottom-10 rounded-lg border border-white/80 bg-white/48 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_24px_80px_rgba(79,70,229,0.10)] backdrop-blur-md">
+        <div className="absolute inset-0 rounded-lg opacity-[0.42] [background-image:linear-gradient(rgba(124,58,237,0.11)_1px,transparent_1px),linear-gradient(90deg,rgba(14,165,233,0.10)_1px,transparent_1px)] [background-size:34px_34px]" />
+        <div className="absolute inset-x-8 top-1/2 h-px bg-gradient-to-r from-transparent via-violet-300/50 to-transparent" />
+      </div>
+      <div className="pointer-events-none absolute left-5 top-7">
+        <span className="rounded-full border border-violet-100/90 bg-white/76 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-violet-600 shadow-sm backdrop-blur-sm">
+          Timefield
         </span>
       </div>
 
-      <motion.div ref={stripRef} className="absolute left-0 top-10 will-change-transform" style={{ x: stripX, width: stripW }}>
+      <motion.div ref={stripRef} className="absolute left-0 top-12 will-change-transform" style={{ x: stripX, width: stripW }}>
         <svg width={stripW} height={STRIP_H} className="overflow-visible" aria-hidden>
           <defs>
             <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="0%">
@@ -176,7 +180,7 @@ export function DiaryTrackViewport({
             d={pathD}
             fill="none"
             stroke="rgba(139, 92, 246, 0.18)"
-            strokeWidth={18}
+            strokeWidth={24}
             strokeLinecap="round"
             opacity={0.95}
           />
@@ -185,9 +189,9 @@ export function DiaryTrackViewport({
             d={pathD}
             fill="none"
             stroke="rgba(148, 163, 184, 0.35)"
-            strokeWidth={4}
+            strokeWidth={3}
             strokeLinecap="round"
-            strokeDasharray="4 18"
+            strokeDasharray="3 20"
             opacity={0.65}
           />
           <motion.path
@@ -195,7 +199,7 @@ export function DiaryTrackViewport({
             d={pathD}
             fill="none"
             stroke={`url(#${gradId})`}
-            strokeWidth={4}
+            strokeWidth={5}
             strokeLinecap="round"
             strokeDasharray="7 16"
             opacity={0.98}
@@ -217,7 +221,7 @@ export function DiaryTrackViewport({
               d={segmentPath}
               fill="none"
               stroke={`url(#${glowId})`}
-              strokeWidth={10}
+              strokeWidth={12}
               strokeLinecap="round"
               opacity={0.92}
             />
@@ -227,7 +231,7 @@ export function DiaryTrackViewport({
               d={pathFromPoints(points.slice(0, selIx + 1))}
               fill="none"
               stroke={`url(#${focusGradId})`}
-              strokeWidth={7}
+              strokeWidth={8}
               strokeLinecap="round"
               opacity={0.88}
             />
@@ -261,6 +265,7 @@ export function DiaryTrackViewport({
                 prepareJump={jumpPhase === 'preparing_jump' && selectedDate === d.date}
                 onSelect={() => onSelectDate(d.date)}
               />
+              <span className="pointer-events-none absolute left-1/2 top-12 h-7 w-px -translate-x-1/2 bg-gradient-to-b from-violet-200/80 to-transparent" />
               <span className="pointer-events-none absolute -bottom-6 left-1/2 w-max -translate-x-1/2 text-[9px] font-medium uppercase tracking-wide text-slate-400">
                 {new Date(y, mo - 1, day).toLocaleDateString(undefined, { weekday: 'short' })}
               </span>

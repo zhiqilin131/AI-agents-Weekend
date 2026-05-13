@@ -34,6 +34,15 @@ def _sample_lines(previews: list[str], max_items: int, max_chars: int) -> list[s
     return out
 
 
+def _time_line(timestamp: str, text: str, *, max_chars: int = 280) -> str:
+    body = (text or "").strip()
+    ts = (timestamp or "").strip()
+    if not body:
+        return ""
+    line = f"{ts} | {body}" if ts else body
+    return line[:max_chars]
+
+
 def _distill_payload(cleaned: DiarySourceBundle, meta: CleanDiaryBundleMeta) -> dict[str, Any]:
     return {
         "date": cleaned.date,
@@ -43,10 +52,13 @@ def _distill_payload(cleaned: DiarySourceBundle, meta: CleanDiaryBundleMeta) -> 
             "duplicates_collapsed": meta.duplicate_collapsed,
             "offensive_redacted": meta.offensive_redacted,
         },
-        "chat_lines": _sample_lines([m.preview for m in cleaned.chat_messages], 56, 260),
-        "voice_lines": _sample_lines([v.preview for v in cleaned.voice_turns], 32, 260),
-        "decisions": [d.preview[:400] for d in cleaned.decision_reports[:10]],
-        "calendar": [f"{c.kind}:{c.title}" for c in cleaned.calendar_items[:12]],
+        "chat_lines": _sample_lines([_time_line(m.created_at, m.preview) for m in cleaned.chat_messages], 56, 300),
+        "voice_lines": _sample_lines([_time_line(v.created_at, v.preview) for v in cleaned.voice_turns], 32, 300),
+        "decisions": [_time_line(d.timestamp, d.preview, max_chars=420) for d in cleaned.decision_reports[:10]],
+        "calendar": [
+            _time_line(c.start, f"{c.kind}:{c.title}{f' until {c.end}' if c.end else ''}", max_chars=220)
+            for c in cleaned.calendar_items[:12]
+        ],
         "memory_lines": _sample_lines([m.text_preview for m in cleaned.approved_memories], 28, 220),
         "imported_lines": _sample_lines([i.preview for i in cleaned.imported_context], 14, 220),
     }

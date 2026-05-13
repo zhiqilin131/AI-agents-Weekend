@@ -9,11 +9,13 @@ import pytest
 from foresight_x.diary.diary_clean import clean_diary_source_bundle
 from foresight_x.diary.diary_quality import validate_diary_quality
 from foresight_x.diary.diary_clean import clean_diary_source_bundle
+from foresight_x.diary.diary_two_stage import _distill_payload
 from foresight_x.diary.generator import _heuristic_diary_entry, _plan_to_entry
 from foresight_x.diary.heuristic_hints import collect_concrete_hints
 from foresight_x.diary.schemas import (
     CalendarItemRef,
     ChatMessageRef,
+    CleanDiaryBundleMeta,
     DiaryLLMPlan,
     DiarySourceBundle,
     DiarySourceRefs,
@@ -98,6 +100,42 @@ def test_plan_to_entry_keeps_links_from_original_bundle() -> None:
     assert "m1" in entry.linked_message_ids
     assert "Calendar planning" in entry.highlights
     assert "chat messages" not in entry.summary.lower()
+
+
+def test_distill_payload_preserves_source_timestamps() -> None:
+    bundle = DiarySourceBundle(
+        date="2026-05-09",
+        timezone="UTC",
+        chat_messages=[
+            ChatMessageRef(
+                thread_id="t1",
+                message_id="m1",
+                created_at="2026-05-09T09:15:00Z",
+                preview="Asked how to connect diary memories into a clearer daily record.",
+            )
+        ],
+        voice_turns=[
+            VoiceTurnRef(
+                thread_id="t1",
+                message_id="m2",
+                created_at="2026-05-09T10:30:00Z",
+                preview="Talked through the slime companion design.",
+            )
+        ],
+        calendar_items=[
+            CalendarItemRef(
+                kind="event",
+                id="cal1",
+                title="Prototype review",
+                start="2026-05-09T14:00:00Z",
+                end="2026-05-09T14:30:00Z",
+            )
+        ],
+    )
+    payload = _distill_payload(bundle, CleanDiaryBundleMeta())
+    assert "2026-05-09T09:15:00Z | Asked how" in payload["chat_lines"][0]
+    assert "2026-05-09T10:30:00Z | Talked through" in payload["voice_lines"][0]
+    assert "2026-05-09T14:00:00Z | event:Prototype review" in payload["calendar"][0]
 
 
 def test_collect_concrete_hints_from_chat() -> None:

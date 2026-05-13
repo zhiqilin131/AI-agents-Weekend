@@ -27,10 +27,12 @@ export function DiaryTrackNode({
 }: DiaryTrackNodeProps) {
   const toneHue =
     tone === 'stressed'
-      ? 'from-rose-200 to-orange-100'
+      ? 'from-rose-200 via-orange-100 to-white'
       : tone === 'excited'
-        ? 'from-amber-100 to-lime-50'
-        : 'from-violet-100 to-cyan-50';
+        ? 'from-amber-100 via-lime-50 to-white'
+        : tone === 'focused'
+          ? 'from-cyan-100 via-sky-50 to-white'
+          : 'from-violet-100 via-cyan-50 to-white';
 
   return (
     <button
@@ -40,7 +42,7 @@ export function DiaryTrackNode({
       data-selected={selected ? 'true' : 'false'}
       onClick={onSelect}
       className={cn(
-        'relative flex flex-col items-center outline-none transition-transform focus-visible:ring-2 focus-visible:ring-violet-400/70',
+        'group relative flex flex-col items-center outline-none transition-transform focus-visible:ring-2 focus-visible:ring-violet-400/70',
         selected ? 'z-20 scale-110' : 'z-10',
         hasEntry ? '' : 'opacity-[0.82]',
       )}
@@ -49,11 +51,11 @@ export function DiaryTrackNode({
     >
       <span
         className={cn(
-          'relative z-[1] flex h-9 w-9 items-center justify-center rounded-full border text-[11px] font-semibold shadow-md backdrop-blur-sm sm:h-10 sm:w-10 sm:text-xs',
+          'relative z-[1] flex h-11 w-11 items-center justify-center rounded-full border text-xs font-semibold shadow-lg backdrop-blur-sm transition sm:h-12 sm:w-12 sm:text-sm',
           hasEntry
-            ? 'border-violet-200/90 bg-gradient-to-br text-slate-900 shadow-violet-400/25 ring-1 ring-white/80 ' + toneHue
-            : 'border-slate-300/90 bg-white text-slate-700',
-          selected && 'ring-2 ring-violet-400/90 ring-offset-2 ring-offset-transparent',
+            ? 'border-white/90 bg-gradient-to-br text-slate-950 shadow-violet-400/25 ring-1 ring-white/80 ' + toneHue
+            : 'border-slate-200/90 bg-white/82 text-slate-500 shadow-slate-200/50',
+          selected && 'shadow-[0_18px_44px_rgba(124,58,237,0.22)] ring-2 ring-violet-400/90 ring-offset-4 ring-offset-white/45',
           prepareJump && selected && 'ring-violet-300 shadow-[0_0_22px_rgba(167,139,250,0.65)]',
         )}
       >
@@ -64,6 +66,12 @@ export function DiaryTrackNode({
           />
         ) : null}
         <span className="relative z-[2] drop-shadow-[0_1px_0_rgba(255,255,255,0.85)]">{label}</span>
+        {hasEntry ? (
+          <span
+            aria-hidden
+            className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border border-white bg-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.75)]"
+          />
+        ) : null}
       </span>
       {!reducedMotion && landingRipple ? (
         <motion.span

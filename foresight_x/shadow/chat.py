@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -114,6 +115,11 @@ def _schedule_shadow_memory_persist(
         daemon=True,
         name=f"shadow-persist-{settings.foresight_user_id}",
     ).start()
+
+
+def _extract_atomic_claims_for_turn(settings: Settings, last_user_text: str) -> list[Any]:
+    llm_claims = build_openai_llm(settings, temperature=0.12)
+    return run_atomic_claims(last_user_text, llm_claims, max_claims=12)
 
 
 class ShadowMemoryFactDraft(BaseModel):
@@ -347,7 +353,13 @@ FAITHFUL LANGUAGE (strict):
 - Read Foresight decision context when they refer to saved runs or external stakes.
 - Read profile fields when they ask what is saved about priorities — unless they clearly mean "just now in chat".
 - If durable stored memory answers a direct either-or preference question, say that preference explicitly, then nuance.
-- Short paragraphs. No numbered homework or life plans. No picking their decision for them.
+- If they ask for your view, taste, ranking, or "should I X?", answer directly first:
+  "My take: yes/no", "I'd choose A", or "I like X more." Then give the reason and caveat.
+- Do not hide behind "both are valid" unless the user truly has not given enough context; even then, state a provisional pick
+  and what would change it.
+- For medical, legal, safety, finance, or irreversible high-stakes choices, stay careful — but still say the direction you
+  lean and what evidence/constraint matters most.
+- Short paragraphs. No numbered homework or life plans unless asked.
 
 --- ATOMIC CLAIMS (latest user message only; one proposition per line) ---
 {atomic_claims_block}
@@ -418,7 +430,13 @@ PRACTICAL VS PSYCHOLOGY:
 
 VOICE:
 - Direct address (you) for the human. Stay concrete and useful; playful is OK if it doesn't obscure accuracy.
-- Short paragraphs. No numbered homework or life plans. No picking their decision for them unless they asked directly for a pick.
+- If they ask for your opinion, taste, ranking, or "should I X?", answer directly first:
+  "My take: yes/no", "I'd choose A", or "I like X more." Then give the reason and caveat.
+- Do not hide behind "both are valid" unless the user truly has not given enough context; even then, state a provisional pick
+  and what would change it.
+- For medical, legal, safety, finance, or irreversible high-stakes choices, stay careful — but still say the direction you
+  lean and what evidence/constraint matters most.
+- Short paragraphs. No numbered homework or life plans unless asked.
 
 --- ATOMIC CLAIMS (latest user message only; one proposition per line) ---
 {atomic_claims_block}
@@ -501,39 +519,47 @@ def run_shadow_turn(
     ]
 
     last_user_text = str(last.get("content", "") or "").strip()
-    prof = load_user_profile(settings=s)
-    mem_active = rank_memory_facts_for_query(
-        user_scope_memory_facts(active_memory_facts(list(prof.memory_facts))),
-        last_user_text,
-        limit=32,
-    )
-    mem_owner_note = ""
-    if synthesis_frame == "slime_buddy":
-        mem_owner_note = (
-            "[memory_owner=user — retrieved structured facts describe the USER, not the Slime. "
-            "Use them only to personalize help for the user; never speak as if these are the slime's own life.]\n\n"
+    atomic_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shadow-atomic-claims")
+    atomic_future = atomic_executor.submit(_extract_atomic_claims_for_turn, s, last_user_text)
+    try:
+        prof = load_user_profile(settings=s)
+        mem_active = rank_memory_facts_for_query(
+            user_scope_memory_facts(active_memory_facts(list(prof.memory_facts))),
+            last_user_text,
+            limit=32,
         )
-    if mem_active:
-        memory_block = mem_owner_note + "\n".join(format_stored_fact_bullet(x) for x in mem_active[-32:])
-    else:
-        memory_block = mem_owner_note + "(none yet.)"
-    profile_block = _format_profile_block(prof)
+        mem_owner_note = ""
+        if synthesis_frame == "slime_buddy":
+            mem_owner_note = (
+                "[memory_owner=user — retrieved structured facts describe the USER, not the Slime. "
+                "Use them only to personalize help for the user; never speak as if these are the slime's own life.]\n\n"
+            )
+        if mem_active:
+            memory_block = mem_owner_note + "\n".join(format_stored_fact_bullet(x) for x in mem_active[-32:])
+        else:
+            memory_block = mem_owner_note + "(none yet.)"
+        profile_block = _format_profile_block(prof)
 
-    prioritize_local = is_local_context_question(last_user_text)
-    decision_context_block = build_shadow_decision_context_block(
-        settings=s,
-        profile=prof,
-        last_user_message=last_user_text,
-        thread_id=thread_id,
-        retrieval_mode=retrieval_mode,
-        minimal_long_term_context=prioritize_local,
-    )
+        prioritize_local = is_local_context_question(last_user_text)
+        decision_context_block = build_shadow_decision_context_block(
+            settings=s,
+            profile=prof,
+            last_user_message=last_user_text,
+            thread_id=thread_id,
+            retrieval_mode=retrieval_mode,
+            minimal_long_term_context=prioritize_local,
+        )
 
-    working_summary_block = (working_summary or "").strip() or "(none yet — start of thread.)"
-    temporary_context_block = (temporary_context_prompt or "").strip() or "(none)"
+        working_summary_block = (working_summary or "").strip() or "(none yet — start of thread.)"
+        temporary_context_block = (temporary_context_prompt or "").strip() or "(none)"
 
-    llm_claims = build_openai_llm(s, temperature=0.12)
-    atomic_claims = run_atomic_claims(last_user_text, llm_claims, max_claims=12)
+        try:
+            atomic_claims = atomic_future.result()
+        except Exception:
+            _log.debug("atomic claim extraction failed", exc_info=True)
+            atomic_claims = []
+    finally:
+        atomic_executor.shutdown(wait=False, cancel_futures=False)
     atomic_claims_block = _format_atomic_claims_block(atomic_claims)
 
     tmpl = SLIME_BUDDY_INSTRUCTIONS if synthesis_frame == "slime_buddy" else SHADOW_INSTRUCTIONS

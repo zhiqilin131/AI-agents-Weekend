@@ -47,3 +47,13 @@ def test_structured_clarification_suffix_triggers_decision() -> None:
     )
     assert out.intent == "decision_candidate"
 
+
+def test_roulette_pick_request_triggers_decision() -> None:
+    out = detect_chat_intent(
+        "red or black I need a winning number for roulette",
+        [],
+        llm_enabled=False,
+    )
+    assert out.intent == "decision_candidate"
+    assert out.confidence >= 0.86
+    assert out.suggested_action == "show_decision_report_prompt"

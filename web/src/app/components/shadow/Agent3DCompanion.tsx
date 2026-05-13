@@ -144,9 +144,8 @@ function StudioScene({ mood }: { mood: StudioMood }) {
     <div className="slime-studio-frame" style={cssVars}>
       <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[#fff7fd] via-[#f6f3ff] to-[#eff9ff]" />
       <div className="absolute left-6 top-6 h-12 w-12 rounded-full bg-white/45" aria-hidden="true" />
-      <div className="absolute right-9 top-7 h-9 w-12 rounded-xl bg-white/55" aria-hidden="true">
-        <span className="absolute left-3 right-3 top-4 h-1 rounded-full bg-indigo-300/55" />
-      </div>
+      <div className="absolute right-10 top-8 h-5 w-5 rounded-full bg-white/45 blur-[1px]" aria-hidden="true" />
+      <div className="absolute right-16 top-12 h-2.5 w-2.5 rounded-full bg-violet-200/55" aria-hidden="true" />
       <div className={`slime-studio-aura slime-studio-aura-${mood.aura}`} aria-hidden="true" />
       <QuestionMarks show={mood.aura === 'questions'} />
       {mood.aura === 'rings' ? (

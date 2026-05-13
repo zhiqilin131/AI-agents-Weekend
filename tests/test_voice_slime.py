@@ -438,6 +438,35 @@ def test_route_slime_voice_rename_skips_when_call_me_present() -> None:
     assert r.tool_name == "no_op"
 
 
+def test_route_slime_voice_opinion_skips_router_llm() -> None:
+    settings = Settings(openai_api_key="sk-test")
+    ctx = SlimeVoiceContext(user_id="demo_user")
+    with patch(
+        "foresight_x.voice.slime_voice_router.structured_predict",
+        side_effect=AssertionError("router LLM should be skipped"),
+    ):
+        r = route_slime_voice_command("Do you like Messi?", ctx, settings=settings)
+    assert r.tool_name == "no_op"
+    assert r.intent == "general_chat"
+    assert r.arguments["reason"] == "fast_conversation"
+
+
+def test_route_slime_voice_memory_question_keeps_router_llm() -> None:
+    settings = Settings(openai_api_key="sk-test")
+    ctx = SlimeVoiceContext(user_id="demo_user")
+    fake_route = types.SimpleNamespace(
+        tool_name="search_memory",
+        arguments={"query": "who is my girlfriend", "scope": "all"},
+        requires_confirmation=False,
+        assistant_hint=None,
+    )
+    with patch("foresight_x.voice.slime_voice_router.structured_predict", return_value=fake_route) as sp:
+        r = route_slime_voice_command("Who is my girlfriend?", ctx, settings=settings)
+    sp.assert_called_once()
+    assert r.tool_name == "search_memory"
+    assert r.arguments["scope"] == "all"
+
+
 def test_is_safe_hyphenated_apostrophe_slime_display_name() -> None:
     from foresight_x.voice.slime_text_safety import is_safe_slime_display_name
 

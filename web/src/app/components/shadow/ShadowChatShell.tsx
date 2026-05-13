@@ -64,6 +64,7 @@ export function ShadowChatShell({
   }, [slimeModels.ready, slimeModels.defaultModel, modelOptionId]);
   const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
   const [threads, setThreads] = useState<ShadowThread[]>([]);
+  const [threadsLoaded, setThreadsLoaded] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ShadowMessage[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
@@ -91,6 +92,7 @@ export function ShadowChatShell({
   const bottomRef = useRef<HTMLDivElement>(null);
   /** Hold decision_suggestion until `done` + thread reload so the card does not flash then disappear. */
   const lastDecisionSuggestionRef = useRef<ShadowSuggestion | null>(null);
+  const autoCreateThreadRef = useRef(false);
   const reportGeneratingRef = useRef(false);
   const streamTurnSeqRef = useRef(0);
   const messagesRef = useRef(messages);
@@ -146,6 +148,7 @@ export function ShadowChatShell({
     if (!res.ok) return;
     const data = (await res.json()) as { threads: ShadowThread[] };
     setThreads(data.threads || []);
+    setThreadsLoaded(true);
   }, []);
 
   const loadThread = async (id: string, opts?: { preservePendingSuggestion?: boolean }) => {
@@ -192,7 +195,8 @@ export function ShadowChatShell({
     }
   };
 
-  const newChat = async () => {
+  const newChat = async (opts?: { fromAuto?: boolean }) => {
+    if (autoCreateThreadRef.current && !opts?.fromAuto) return;
     const res = await apiFetch('/api/shadow-chat/threads', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -232,6 +236,8 @@ export function ShadowChatShell({
     if (prev !== undefined && prev !== key) {
       setActiveThreadId(null);
       setMessages([]);
+      setThreadsLoaded(false);
+      autoCreateThreadRef.current = false;
       setSuggestion(null);
       lastDecisionSuggestionRef.current = null;
       profileMemoryToastThreadRef.current = null;
@@ -265,7 +271,9 @@ export function ShadowChatShell({
     if (threads.length > 0 && !activeThreadId) {
       const prefer = initialThreadId && threads.some((t) => t.thread_id === initialThreadId) ? initialThreadId : threads[0].thread_id;
       void loadThread(prefer);
-    } else if (threads.length === 0 && !activeThreadId) {
+    } else if (threadsLoaded && threads.length === 0 && !activeThreadId) {
+      if (autoCreateThreadRef.current) return;
+      autoCreateThreadRef.current = true;
       setMessages([]);
       setSuggestion(null);
       lastDecisionSuggestionRef.current = null;
@@ -274,8 +282,12 @@ export function ShadowChatShell({
       profileMemoryToastTimersRef.current.forEach((tid) => window.clearTimeout(tid));
       profileMemoryToastTimersRef.current.clear();
       setProfileMemoryToasts([]);
+      void (async () => {
+        await newChat({ fromAuto: true });
+        autoCreateThreadRef.current = false;
+      })();
     }
-  }, [threads, activeThreadId, initialThreadId]);
+  }, [threadsLoaded, threads, activeThreadId, initialThreadId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -854,7 +866,7 @@ export function ShadowChatShell({
                 ) : null}
                 {!activeThreadId ? (
                   <p className="rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-900">
-                    Click <span className="font-semibold">New Chat</span> to start. Threads are only created manually now.
+                    Starting a fresh chat for you…
                   </p>
                 ) : null}
                 {clarifyOpen && clarifyPayload ? (

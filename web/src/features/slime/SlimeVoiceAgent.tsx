@@ -893,13 +893,10 @@ export function SlimeVoiceAgent({
         }
 
         const phases = data.voice_ui?.memory_phases ?? [];
-        if (phases.includes('searching_memory')) {
-          setVoiceState('searching_memory');
-          await new Promise((r) => setTimeout(r, 400));
-        }
-        if (phases.includes('synthesizing')) {
+        const hadServerMemorySearch =
+          phases.includes('searching_memory') || data.tool_call?.name === 'search_memory';
+        if (hadServerMemorySearch) {
           setVoiceState('synthesizing');
-          await new Promise((r) => setTimeout(r, 420));
         }
 
         const evidenceItems = readEvidenceItems(data);
@@ -908,9 +905,7 @@ export function SlimeVoiceAgent({
           Boolean(evidenceItems.length && (data.voice_ui?.should_show_evidence_drawer ?? true)),
         );
 
-        const hadMemorySearch =
-          phases.includes('searching_memory') || data.tool_call?.name === 'search_memory';
-        if (hadMemorySearch && evidenceItems.length > 0) {
+        if (hadServerMemorySearch && evidenceItems.length > 0) {
           onMemoryEvidenceRetrieved?.(evidenceItems.length);
         }
 
@@ -1107,8 +1102,8 @@ export function SlimeVoiceAgent({
         data-slime-avoid
         className={cn(
           voiceLane,
-          /* Slightly lower than before; stay above mic stack (~8px bottom + ~92px tall → keep panel floor ≥ ~108px) */
-          'bottom-[108px] z-[32] flex flex-col items-center gap-2 pointer-events-auto sm:bottom-[110px]',
+          /* Keep transcript/reply controls clearly above the mic stack to avoid overlap in Buddy/Calendar layouts. */
+          'bottom-[132px] z-[32] flex flex-col items-center gap-2 pointer-events-auto sm:bottom-[136px]',
           className,
         )}
       >

@@ -18,3 +18,8 @@ def test_normal_message_stays_normal() -> None:
     assert out.intent == "normal"
     assert out.suggested_action == "continue"
 
+
+def test_roulette_choice_triggers_decision_candidate() -> None:
+    out = detect_chat_mode_intent("red or black I need a winning number for roulette")
+    assert out.intent == "decision_candidate"
+    assert out.suggested_action == "show_decision_report_prompt"

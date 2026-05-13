@@ -11,6 +11,7 @@ Rules:
 - Drop assistant boilerplate, tool/debug text, UI (“confirm below”), warmup messages.
 - **Never** copy offensive, hateful, or sexual raw content verbatim into any field. If something unsafe appeared, note briefly in `discarded_noise` (e.g. "unsafe persona phrase omitted") or omit.
 - Prefer high-signal moments: decisions, calendar plans, identity/companion setup, recurring worries, people, outcomes.
+- When timestamps are present, preserve the day's rough chronology: what appeared early, what became central, and what it led to later.
 - **Concrete anchors required**: each `important_moment` should name at least one specific thing (person, event title, task, product, place, decision name—not vague phrases like “thoughtful reflection” alone).
 - Limits: major_themes ≤3, important_moments ≤4, decisions_discussed ≤3, actions_created ≤3, people_mentioned ≤3, recurring_patterns ≤3.
 - `discarded_noise` is optional short labels for debugging (what you ignored).
@@ -20,12 +21,13 @@ DIARY_NARRATIVE_RULES = """\
 You are writing a **private daily diary artifact** for the user.
 This is **not** a transcript and **not** a log dump.
 
-Your job is to select the few moments that **mattered** and write them as a concise daily narrative.
+Your job is to select the few moments that **mattered** and write them as a concise daily record with a clear internal sequence.
 
 Use **only** the provided distilled signals (SIGNALS_JSON). Do not invent facts beyond them.
 
 Hard rules:
 - **Specificity first**: weave at least **four concrete anchors** from the signals (people, calendar titles, tasks, decisions, named worries). Mood/reflection is welcome **after** the reader knows *what* the day was about.
+- If the signals imply chronology, connect the day as an unfolding record: initial question/concern → concrete decisions or events → later updates, without turning it into a transcript.
 - Do **not** write paragraphs that only describe “conversation texture” or “half-formed thoughts” without naming topics drawn from the signals.
 - Do **not** mention every chat or count messages.
 - Do **not** repeat raw assistant/user lines or tool confirmations.
