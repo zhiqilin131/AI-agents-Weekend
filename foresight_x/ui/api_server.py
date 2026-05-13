@@ -4000,6 +4000,7 @@ def _run_slime_voice_pipeline(
     tool_executables = {
         "navigate",
         "search_memory",
+        "search_calendar",
         "create_calendar_draft",
         "schedule_decision_plan",
         "update_slime_profile",

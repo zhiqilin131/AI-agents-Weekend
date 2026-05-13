@@ -21,16 +21,74 @@ _ROUTER_SLIME_KEYS = frozenset({"name", "color_theme", "shape"})
 
 _QUICK_COLOR_THEME_TOKENS = frozenset({"aurora", "violet", "mint", "sunset", "lime", "silver"})
 
+_COLOR_THEME_ALIASES: dict[str, str] = {
+    "aurora": "aurora",
+    "northern lights": "aurora",
+    "blue": "aurora",
+    "cyan": "aurora",
+    "teal": "aurora",
+    "violet": "violet",
+    "purple": "violet",
+    "lavender": "violet",
+    "mint": "mint",
+    "minty": "mint",
+    "lime": "lime",
+    "green": "lime",
+    "sunset": "sunset",
+    "orange": "sunset",
+    "pink": "sunset",
+    "warm": "sunset",
+    "silver": "silver",
+    "grey": "silver",
+    "gray": "silver",
+    "white": "silver",
+}
+
+_ZH_COLOR_THEME_ALIASES: tuple[tuple[str, str], ...] = (
+    ("极光", "aurora"),
+    ("蓝", "aurora"),
+    ("青", "aurora"),
+    ("紫", "violet"),
+    ("薰衣草", "violet"),
+    ("薄荷", "mint"),
+    ("浅绿", "mint"),
+    ("绿", "lime"),
+    ("柠檬", "lime"),
+    ("日落", "sunset"),
+    ("橙", "sunset"),
+    ("粉", "sunset"),
+    ("银", "silver"),
+    ("灰", "silver"),
+    ("白", "silver"),
+)
+
 _RENAME_VOICE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\b(?:from\s+now\s+on\s+)?your\s+name\s+is\s+(.+)$"),
+    re.compile(r"(?i)\bchange\s+your\s+name\s+to\s+(.+)$"),
     re.compile(r"(?i)^(?:i'?ll|i\s+will)\s+call\s+you\s+(.+)$"),
+    re.compile(r"(?i)^(?:can|could)\s+i\s+call\s+you\s+(.+)$"),
     re.compile(r"(?i)^let'?s\s+call\s+you\s+(.+)$"),
     re.compile(r"(?i)^rename\s+(?:yourself|you)\s+to\s+(.+)$"),
     re.compile(r"(?i)^you(?:'re|\s+are)\s+(?:now\s+)?called\s+(.+)$"),
     re.compile(r"(?i)^i\s+(?:want\s+to\s+)?name\s+you\s+(.+)$"),
     # Chinese: explicit rename phrasing only (avoid matching 你叫什么).
     re.compile(r"^(?:以后\s*)?你就叫\s*(.+)$"),
+    re.compile(r"^(?:以后\s*)?你叫\s*(.+)$"),
+    re.compile(r"^你(?:的)?名字(?:改成|改为|换成|是)\s*(.+)$"),
+    re.compile(r"^把你(?:的)?名字(?:改成|改为|换成)\s*(.+)$"),
+    re.compile(r"^给你(?:取名|起名)\s*(.+)$"),
     re.compile(r"^我叫你\s*(.+)$"),
+)
+
+_USER_NICKNAME_VOICE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)^(?:please\s+)?call\s+me\s+(.+)$"),
+    re.compile(r"(?i)^(?:from\s+now\s+on\s+)?(?:call|address)\s+me\s+as\s+(.+)$"),
+    re.compile(r"(?i)^refer\s+to\s+me\s+as\s+(.+)$"),
+    re.compile(r"(?i)^you\s+can\s+call\s+me\s+(.+)$"),
+    re.compile(r"^(?:以后\s*)?(?:你)?叫我\s*(.+)$"),
+    re.compile(r"^(?:以后\s*)?(?:你)?称呼我(?:为|叫)?\s*(.+)$"),
+    re.compile(r"^把我叫(?:做|成)?\s*(.+)$"),
+    re.compile(r"^你可以叫我\s*(.+)$"),
 )
 
 
@@ -88,6 +146,45 @@ def _try_slime_rename_voice_patch(transcript: str) -> dict[str, Any] | None:
     return None
 
 
+def _try_user_nickname_voice_patch(transcript: str) -> dict[str, Any] | None:
+    """Deterministic "call me X" handling so Buddy address changes work without router LLM."""
+    raw = (transcript or "").strip()
+    if not raw or len(raw) > 200:
+        return None
+    low = raw.lower()
+    if any(
+        b in low
+        for b in (
+            "your name is",
+            "change your name",
+            "rename yourself",
+            "rename you",
+        )
+    ) or any(b in raw for b in ("你就叫", "你名字", "你的名字", "把你名字", "把你的名字")):
+        return None
+    for rx in _USER_NICKNAME_VOICE_PATTERNS:
+        m = rx.search(raw)
+        if not m:
+            continue
+        nick = _clean_extracted_slime_voice_name(m.group(1))
+        if not nick:
+            continue
+        return {"patch": {"persona": {"user_nickname": nick}}}
+    return None
+
+
+def _extract_color_theme(transcript: str) -> str | None:
+    raw = (transcript or "").strip()
+    low = raw.lower()
+    for zh, theme in _ZH_COLOR_THEME_ALIASES:
+        if zh in raw:
+            return theme
+    for token, theme in sorted(_COLOR_THEME_ALIASES.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", low):
+            return theme
+    return None
+
+
 def _quick_slime_color_theme_patch(transcript: str) -> dict[str, Any] | None:
     """
     Deterministic routing for short spoken theme picks when the LLM router is flaky.
@@ -113,6 +210,22 @@ def _quick_slime_color_theme_patch(transcript: str) -> dict[str, Any] | None:
         return None
     if _explicit_report_schedule_intent(transcript):
         return None
+
+    explicit_color_request = any(
+        marker in low
+        for marker in (
+            "color",
+            "theme",
+            "palette",
+            "switch to",
+            "change to",
+            "make yourself",
+            "turn",
+        )
+    ) or any(marker in raw for marker in ("颜色", "主题", "配色", "换成", "改成", "变成"))
+    theme = _extract_color_theme(raw)
+    if explicit_color_request and theme:
+        return {"patch": {"color_theme": theme}}
 
     parts = low.split()
     if len(parts) == 1 and parts[0] in _QUICK_COLOR_THEME_TOKENS:
@@ -176,6 +289,11 @@ def _routing_context_json(ctx: SlimeVoiceContext) -> str:
             hints["decision_id_in_ui_context"] = did[:80]
         if tz:
             hints["timezone"] = str(tz)[:80]
+        cal = ruc.get("calendar_context")
+        if isinstance(cal, dict):
+            brief = str(cal.get("brief") or cal.get("headline") or "").strip()
+            if brief:
+                hints["calendar_context"] = brief[:1200]
         if hints:
             d["routing_hints"] = hints
     return json.dumps(d, ensure_ascii=False)[:12000]
@@ -197,12 +315,15 @@ class SlimeVoiceRouteResult(BaseModel):
     assistant_hint: str | None = None
     #: Heuristic ASR slime rename (``_try_slime_rename_voice_patch``) — safe to persist without a second tap.
     auto_apply_voice_rename: bool = False
+    #: Heuristic ASR persona patch such as "call me X" — safe to persist without a second tap.
+    auto_apply_voice_persona: bool = False
 
 
 class _LLMRoute(BaseModel):
     tool_name: Literal[
         "navigate",
         "search_memory",
+        "search_calendar",
         "create_calendar_draft",
         "schedule_decision_plan",
         "open_decision_report_flow",
@@ -223,12 +344,14 @@ Allowed tools:
    home, profile (same page as settings/account/user_profile/my_profile), shadow_chat or chat, execution_calendar or calendar or planner,
    history, diary or journal, buddy or slime_buddy, reflect (legacy shadow UI).
 2) search_memory — arguments: {{"query": "<string>", "scope": "profile|chat_history|decision_reports|all"}}
-3) create_calendar_draft — arguments: {{"title": "<string>", "duration_minutes": <number|null>, "date_hint": "<string|null>", "time_hint": "<string|null>", "description": "<string|null>"}}
+3) search_calendar — arguments: {{"query": "<string>", "range": "today|tomorrow|week|all"}}
+   Use when the user asks what is on their calendar, schedule, availability, day/week plan, or asks whether they are free.
+4) create_calendar_draft — arguments: {{"title": "<string>", "duration_minutes": <number|null>, "date_hint": "<string|null>", "time_hint": "<string|null>", "description": "<string|null>"}}
    DEFAULT for “add / put / schedule something on my calendar or execution calendar” when the user describes tasks, plans, blocks, or reminders WITHOUT tying them to an existing decision report.
    Put multi-step natural-language plans into **description** when helpful; title can be short (e.g. “Relationship plan”).
-4) schedule_decision_plan — arguments: {{"decision_id": "<string|null>"}} — ONLY when scheduling **next_actions / execution plan copied FROM an existing decision report** (user mentions the report, report next steps, or routing_hints.decision_id_in_ui_context is set).
-5) open_decision_report_flow — arguments: {{"decision_prompt": "<string>"}}
-6) update_slime_profile — arguments: {{"patch": {{ ... partial Slime Studio fields (same as Personalize UI) }}}}
+5) schedule_decision_plan — arguments: {{"decision_id": "<string|null>"}} — ONLY when scheduling **next_actions / execution plan copied FROM an existing decision report** (user mentions the report, report next steps, or routing_hints.decision_id_in_ui_context is set).
+6) open_decision_report_flow — arguments: {{"decision_prompt": "<string>"}}
+7) update_slime_profile — arguments: {{"patch": {{ ... partial Slime Studio fields (same as Personalize UI) }}}}
    Top-level patch keys: name, color_theme (aurora|violet|mint|sunset|lime|silver|custom), custom_colors {{primary,secondary,glow}} hex,
    personality (calm|direct|encouraging|analytical|playful|cautious), shape (classic|orb|robot|crystal|ghost),
    accessory (none|glasses|halo|antenna|scarf|spark), motion (subtle|normal|expressive),
@@ -242,8 +365,8 @@ Allowed tools:
    - Example change how Slime talks to the user: {{"patch": {{"persona": {{"user_nickname": "boss"}}}}}}
    - Example theme + voice: {{"patch": {{"color_theme": "mint", "voice": {{"rate": 0.9}}}}}}
    Context slime_profile may include user_nickname_saved = current saved user address form; patch.name must never duplicate that intent.
-7) open_shadow_chat — arguments: {{"prefill_message": "<string or null>"}}
-8) no_op — arguments: {{"reason": "<string>"}} — use for chit-chat, unsafe, or unknown commands. **Always set assistant_hint** to a short, friendly line you would say out loud (1–2 sentences), e.g. greetings get a warm reply.
+8) open_shadow_chat — arguments: {{"prefill_message": "<string or null>"}}
+9) no_op — arguments: {{"reason": "<string>"}} — use for chit-chat, unsafe, or unknown commands. **Always set assistant_hint** to a short, friendly line you would say out loud (1–2 sentences), e.g. greetings get a warm reply.
 
 Rules:
 - If the user is asking what they should do, whether to accept an offer, or for help deciding (including Chinese equivalents like "我该怎么办"), use **no_op** with a thoughtful assistant_hint — do **not** use open_decision_report_flow. The conversational pipeline will offer Decision Mode with explicit confirmation.
@@ -253,6 +376,7 @@ Rules:
   "buddy / slime / this page" → route buddy when they want Slime Buddy home.
 - Memory: use search_memory with a concrete query; scope "all" when user asks generally about what they said.
 - Calendar (important):
+  • **search_calendar** — Use for “what do I have today/tomorrow/this week”, “am I free”, “what is on my calendar”, or reviewing the existing plan.
   • **create_calendar_draft** — Use for almost all “add to calendar / execution calendar / planner / schedule a block” requests, including vague “put this plan there” or long spoken plans. Do **not** require a decision report.
   • **schedule_decision_plan** — Use **only** when the user clearly wants events generated **from an existing decision report** (mentions report/next steps from report) **or** routing_hints include decision_id_in_ui_context and they ask to schedule that report’s plan. If no decision_id is available and they did not anchor to a report, prefer **create_calendar_draft**.
   • **open_decision_report_flow** — Only when they want to **start a new** structured decision analysis in chat—not for putting arbitrary plans on the calendar.
@@ -278,6 +402,17 @@ def route_slime_voice_command(
     settings: Settings,
     llm_model: str | None = None,
 ) -> SlimeVoiceRouteResult:
+    nickname = _try_user_nickname_voice_patch(transcript.strip())
+    if nickname is not None:
+        return SlimeVoiceRouteResult(
+            intent="profile_update",
+            tool_name="update_slime_profile",
+            arguments=nickname,
+            requires_confirmation=False,
+            assistant_hint=None,
+            auto_apply_voice_persona=True,
+        )
+
     rename = _try_slime_rename_voice_patch(transcript.strip())
     if rename is not None:
         return SlimeVoiceRouteResult(
@@ -343,6 +478,7 @@ def route_slime_voice_command(
     intent_map = {
         "navigate": "navigate",
         "search_memory": "memory_search",
+        "search_calendar": "calendar_search",
         "create_calendar_draft": "calendar_create",
         "schedule_decision_plan": "calendar_plan",
         "open_decision_report_flow": "decision_report",

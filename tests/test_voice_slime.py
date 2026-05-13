@@ -16,7 +16,9 @@ from fastapi.testclient import TestClient
 from foresight_x.config import Settings
 from foresight_x.ui.api_server import _run_slime_voice_pipeline
 from foresight_x.voice.asr import TranscriptionResult, transcribe_audio
-from foresight_x.voice.slime_tools import execute_slime_tool, tool_navigate
+from foresight_x.calendar_agent.schemas import CalendarEvent
+from foresight_x.calendar_agent.store import upsert_event
+from foresight_x.voice.slime_tools import execute_slime_tool, tool_navigate, tool_search_calendar
 from foresight_x.voice.slime_voice_router import SlimeVoiceContext, SlimeVoiceRouteResult, route_slime_voice_command
 
 
@@ -223,6 +225,35 @@ def test_navigate_tool_validates_route() -> None:
     assert fe_bad["type"] == "none"
 
 
+def test_search_calendar_tool_summarizes_today(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_calendar_search",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="",
+    )
+    upsert_event(
+        settings,
+        "u_calendar_search",
+        CalendarEvent(
+            id="evt-1",
+            title="Lab meeting",
+            start="2026-05-12T14:00:00+00:00",
+            end="2026-05-12T15:00:00+00:00",
+            source="manual",
+        ),
+    )
+    tr, fe = tool_search_calendar(
+        {"query": "what do I have today", "range": "today"},
+        settings=settings,
+        now=datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc),
+    )
+    assert tr["ok"] is True
+    assert tr["total"] == 1
+    assert tr["events"][0]["title"] == "Lab meeting"
+    assert fe["type"] == "show_calendar_result"
+
+
 def test_schedule_decision_plan_without_id_falls_back_to_calendar_draft(tmp_path: Path) -> None:
     """Router sometimes picks schedule_decision_plan without a trace id; user meant a normal calendar add."""
     settings = Settings(
@@ -317,6 +348,15 @@ def test_route_slime_voice_your_name_is_without_openai_key() -> None:
     assert r.tool_name == "update_slime_profile"
     assert r.arguments["patch"]["name"] == "Luna"
     assert r.requires_confirmation is False
+    assert r.auto_apply_voice_rename is True
+
+
+def test_route_slime_voice_chinese_rename_without_openai_key() -> None:
+    settings = Settings(openai_api_key="")
+    ctx = SlimeVoiceContext(user_id="demo_user")
+    r = route_slime_voice_command("把你的名字改成团子", ctx, settings=settings)
+    assert r.tool_name == "update_slime_profile"
+    assert r.arguments["patch"]["name"] == "团子"
     assert r.auto_apply_voice_rename is True
 
 
@@ -507,6 +547,76 @@ def test_profile_update_user_nickname_uses_persona_patch_requires_confirmation(t
     assert fe.get("type") == "confirm"
     pending = fe.get("payload", {}).get("patch", {})
     assert pending.get("persona", {}).get("user_nickname") == "boss"
+
+
+def test_route_voice_call_me_persists_without_confirm(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_voice_nick",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_nick.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_voice_nick",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_voice_nick")
+    route = route_slime_voice_command("以后叫我老板", ctx, settings=settings)
+    assert route.tool_name == "update_slime_profile"
+    assert route.auto_apply_voice_persona is True
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="以后叫我老板")
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
+    from foresight_x.profile.store import load_user_profile
+
+    loaded = load_user_profile(settings)
+    assert loaded.slime_profile is not None
+    assert loaded.slime_profile.persona is not None
+    assert loaded.slime_profile.persona.user_nickname == "老板"
+
+
+def test_route_voice_ni_jiao_wo_persists_without_confirm(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_voice_nick_cn",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_nick_cn.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_voice_nick_cn",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_voice_nick_cn")
+    route = route_slime_voice_command("以后你叫我老板", ctx, settings=settings)
+    assert route.tool_name == "update_slime_profile"
+    assert route.auto_apply_voice_persona is True
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="以后你叫我老板")
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
+    from foresight_x.profile.store import load_user_profile
+
+    loaded = load_user_profile(settings)
+    assert loaded.slime_profile is not None
+    assert loaded.slime_profile.persona is not None
+    assert loaded.slime_profile.persona.user_nickname == "老板"
 
 
 def test_calendar_draft_is_not_final_event(tmp_path) -> None:
