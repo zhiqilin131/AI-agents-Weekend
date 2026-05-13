@@ -99,6 +99,30 @@ class Settings(BaseSettings):
         le=180.0,
         validation_alias=AliasChoices("openai_request_timeout_sec", "OPENAI_REQUEST_TIMEOUT_SEC"),
     )
+    fx_llm_primary: str = Field(
+        default="",
+        validation_alias=AliasChoices("fx_llm_primary", "FX_LLM_PRIMARY"),
+    )
+    fx_llm_fallback: str = Field(
+        default="",
+        validation_alias=AliasChoices("fx_llm_fallback", "FX_LLM_FALLBACK"),
+    )
+    fx_llm_failover_order: str = Field(
+        default="",
+        validation_alias=AliasChoices("fx_llm_failover_order", "FX_LLM_FAILOVER_ORDER"),
+    )
+    fx_llm_request_timeout_s: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=180.0,
+        validation_alias=AliasChoices("fx_llm_request_timeout_s", "FX_LLM_REQUEST_TIMEOUT_S"),
+    )
+    fx_llm_max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        validation_alias=AliasChoices("fx_llm_max_retries", "FX_LLM_MAX_RETRIES"),
+    )
     #: Optional secondary OpenAI-compatible model for failover when primary repeatedly fails.
     resilience_secondary_openai_model: str = Field(
         default="",
@@ -389,6 +413,9 @@ class Settings(BaseSettings):
         "resilience_secondary_openai_api_key",
         "resilience_secondary_openai_api_base",
         "resilience_secondary_openai_model",
+        "fx_llm_primary",
+        "fx_llm_fallback",
+        "fx_llm_failover_order",
         "tavily_api_key",
         mode="before",
     )

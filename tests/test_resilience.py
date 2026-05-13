@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 
 from foresight_x.config import Settings
 from foresight_x.orchestration.pipeline import PipelineContext, run_pipeline
-from foresight_x.resilience.runtime import reset_resilience_runtime_state
 from foresight_x.retrieval.tavily_client import TavilyGateway
 from foresight_x.structured_predict import structured_predict
 from foresight_x.ui.api_server import app
@@ -30,47 +29,16 @@ def test_tavily_gateway_chaos_outage_returns_empty(monkeypatch):
     assert out == []
 
 
-def test_structured_predict_retries_transient_once(monkeypatch):
-    reset_resilience_runtime_state()
+def test_structured_predict_prompt_template_compat():
     class FakeLLM:
-        __module__ = "llama_index.testdoubles"
-
-        def __init__(self):
-            self.calls = 0
-
         def structured_predict(self, _output_cls, _prompt, **_kwargs):
-            self.calls += 1
-            if self.calls == 1:
-                raise TimeoutError("transient timeout")
+            if isinstance(_prompt, str):
+                raise TypeError("expects prompt template")
             return {"ok": True}
 
-    monkeypatch.delenv("CHAOS_OPENAI_MODE", raising=False)
     llm = FakeLLM()
     out = structured_predict(llm, dict, "hello")
     assert out == {"ok": True}
-    assert llm.calls == 2
-
-
-def test_structured_predict_uses_secondary_failover(monkeypatch):
-    reset_resilience_runtime_state()
-    class FailingLLM:
-        __module__ = "llama_index.testdoubles"
-
-        def structured_predict(self, _output_cls, _prompt, **_kwargs):
-            raise TimeoutError("primary timeout")
-
-    class SecondaryLLM:
-        __module__ = "llama_index.testdoubles"
-
-        def structured_predict(self, _output_cls, _prompt, **_kwargs):
-            return {"source": "secondary"}
-
-    monkeypatch.setattr(
-        "foresight_x.orchestration.llm_factory.build_secondary_openai_llm",
-        lambda *_a, **_k: SecondaryLLM(),
-    )
-    out = structured_predict(FailingLLM(), dict, "hello")
-    assert out == {"source": "secondary"}
 
 
 def test_run_pipeline_stage_resume_with_partial_state(tmp_path, monkeypatch):

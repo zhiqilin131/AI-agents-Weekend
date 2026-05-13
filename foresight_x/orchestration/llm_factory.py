@@ -8,6 +8,7 @@ from typing import Any
 from llama_index.llms.openai import OpenAI, OpenAIResponses
 
 from foresight_x.config import Settings, load_settings
+from foresight_x.orchestration.llm_gateway import LLMGateway, LLMProviderClient
 
 
 class _OpenAIResponsesReasoningCompat(OpenAIResponses):
@@ -37,7 +38,7 @@ def provider_model_uses_openai_responses_api(model: str) -> bool:
     return any(low.startswith(p) for p in _REASONING_PREFIXES)
 
 
-def build_openai_llm(
+def _build_openai_client(
     settings: Settings | None = None,
     *,
     temperature: float | None = None,
@@ -97,6 +98,35 @@ def build_openai_llm(
     return OpenAI(**kwargs)
 
 
+def _parse_provider_model(spec: str) -> tuple[str, str]:
+    s = (spec or "").strip()
+    if ":" not in s:
+        return "", s
+    p, m = s.split(":", 1)
+    return p.strip().lower(), m.strip()
+
+
+def _build_provider_client(
+    provider: str,
+    model: str,
+    settings: Settings,
+    *,
+    temperature: float | None = None,
+    **extra: Any,
+) -> Any:
+    p = (provider or "openai").strip().lower()
+    if p == "openai":
+        return _build_openai_client(settings, temperature=temperature, model=model, **extra)
+    if p == "anthropic":
+        try:
+            from llama_index.llms.anthropic import Anthropic
+        except Exception as exc:  # pragma: no cover - optional dependency path
+            raise RuntimeError("anthropic provider requires llama-index-llms-anthropic") from exc
+        key = (settings.resilience_secondary_openai_api_key or "").strip() or None
+        return Anthropic(model=model, api_key=key, temperature=0.2 if temperature is None else float(temperature))
+    raise RuntimeError(f"unsupported provider in FX_LLM_*: {provider}")
+
+
 def build_secondary_openai_llm(
     settings: Settings | None = None,
     *,
@@ -116,4 +146,72 @@ def build_secondary_openai_llm(
     api_base = (s.resilience_secondary_openai_api_base or "").strip()
     if api_base:
         extra_kw["api_base"] = api_base
-    return build_openai_llm(s, temperature=temperature, model=model, **extra_kw)
+    return _build_openai_client(s, temperature=temperature, model=model, **extra_kw)
+
+
+def build_openai_llm(
+    settings: Settings | None = None,
+    *,
+    temperature: float | None = None,
+    model: str | None = None,
+    **extra: Any,
+) -> Any:
+    """Build unified LLM gateway (primary + optional fallback providers)."""
+    s = settings or load_settings()
+
+    p_provider = "openai"
+    p_model = ((model or "").strip() or s.openai_model).strip()
+    spec_provider, spec_model = _parse_provider_model(s.fx_llm_primary)
+    if not model and spec_provider and spec_model:
+        p_provider, p_model = spec_provider, spec_model
+    primary = LLMProviderClient(
+        provider=p_provider,
+        model=p_model,
+        client=_build_provider_client(p_provider, p_model, s, temperature=temperature, **extra),
+    )
+
+    providers: list[LLMProviderClient] = [primary]
+    fb_spec = (s.fx_llm_fallback or "").strip()
+    fb_provider, fb_model = _parse_provider_model(fb_spec)
+    if fb_provider and fb_model:
+        try:
+            providers.append(
+                LLMProviderClient(
+                    provider=fb_provider,
+                    model=fb_model,
+                    client=_build_provider_client(fb_provider, fb_model, s, temperature=temperature, **extra),
+                )
+            )
+        except Exception:
+            pass
+
+    if len(providers) == 1:
+        secondary = build_secondary_openai_llm(s, temperature=temperature, **extra)
+        if secondary is not None:
+            providers.append(
+                LLMProviderClient(
+                    provider="openai_secondary",
+                    model=(s.resilience_secondary_openai_model or "").strip() or s.openai_model,
+                    client=secondary,
+                )
+            )
+
+    order_raw = (s.fx_llm_failover_order or "").strip()
+    if order_raw:
+        order = [x.strip().lower() for x in order_raw.split(",") if x.strip()]
+        if order:
+            bucket = {p.provider.lower(): p for p in providers}
+            reordered: list[LLMProviderClient] = []
+            for key in order:
+                p = bucket.pop(key, None)
+                if p is not None:
+                    reordered.append(p)
+            reordered.extend(bucket.values())
+            if reordered:
+                providers = reordered
+
+    return LLMGateway(
+        providers,
+        request_timeout_s=float(s.fx_llm_request_timeout_s or s.openai_request_timeout_sec),
+        max_retries=int(s.fx_llm_max_retries or s.resilience_retry_attempts),
+    )
