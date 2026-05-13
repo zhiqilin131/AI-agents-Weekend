@@ -40,9 +40,15 @@ describe('ics parser/export and action mapping', () => {
     const tasks = mapRecommendationActionsToTasks([
       { action: 'Draft proposal', deadline: 'Tonight' },
       { action: 'Review with mentor', deadline: null },
+      { action: 'Email advisor', deadline: null },
+      { action: 'Prepare checklist', deadline: null },
+      { action: 'Extra step should not be scheduled', deadline: null },
     ]);
-    expect(tasks.length).toBe(2);
-    expect(tasks[0].duration_minutes).toBe(60);
+    expect(tasks.length).toBe(4);
+    expect(tasks[0].duration_minutes).toBe(90);
+    expect(tasks[1].duration_minutes).toBe(45);
+    expect(tasks[2].duration_minutes).toBe(30);
     expect(tasks[0].title).toBe('Draft proposal');
+    expect(tasks[0].description).toBe('Decision report step 1');
   });
 });

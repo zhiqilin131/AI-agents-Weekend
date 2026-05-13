@@ -5,7 +5,12 @@ export type EvidenceRefType =
   | 'past_decision'
   | 'current_constraint'
   | 'memory'
-  | 'user_statement';
+  | 'user_statement'
+  | 'world_evidence'
+  | 'tradeoff'
+  | 'assumption';
+export type GroundingStrength = 'strong' | 'mixed' | 'thin';
+export type GroundingSignalType = 'user_context' | 'personal_memory' | 'external_evidence' | 'uncertainty';
 
 export interface EvidenceReference {
   type: EvidenceRefType;
@@ -29,6 +34,13 @@ export interface PersonalizedFitReason {
   basedOn: EvidenceReference[];
 }
 
+export interface GroundingSignal {
+  type: GroundingSignalType;
+  label: string;
+  text: string;
+  strength: GroundingStrength;
+}
+
 export interface PrimaryNextAction {
   text: string;
   durationEstimate: string;
@@ -38,6 +50,8 @@ export interface PrimaryNextAction {
 /** Concise surface mapped from backend `report_surface` or derived client-side for legacy traces. */
 export interface ReportSurface {
   groundingNote: string;
+  groundingStrength: GroundingStrength;
+  groundingSignals: GroundingSignal[];
   personalizedReasons: PersonalizedFitReason[];
   futurePaths: FuturePath[];
   keyAssumptions: string[];

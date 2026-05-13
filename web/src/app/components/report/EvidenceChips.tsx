@@ -13,6 +13,12 @@ function labelFor(t: EvidenceRefType): string {
       return 'Memory';
     case 'user_statement':
       return 'What you said';
+    case 'world_evidence':
+      return 'External evidence';
+    case 'tradeoff':
+      return 'Tradeoff';
+    case 'assumption':
+      return 'Assumption';
     default:
       return 'Note';
   }

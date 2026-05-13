@@ -5,18 +5,41 @@ import type { SlimePersona } from '../app/model';
 const BUBBLE_MAX = 160;
 const BODY_COLLAPSE_AT = 420;
 
+function completeShortSentence(text: string, max: number): string {
+  const t = text.trim().replace(/\s+/g, ' ');
+  if (t.length <= max) return t;
+  const window = t.slice(0, max);
+  const boundaries = [
+    ...[' by ', ' which ', ' while ', ' because ', ' so that ', ' for ', ' with ']
+      .map((needle) => {
+        const idx = window.toLowerCase().lastIndexOf(needle);
+        return idx > 56 ? idx : -1;
+      }),
+    ...[',', ';', ':', ' — ', ' – ', ' - ']
+      .map((needle) => {
+        const idx = window.lastIndexOf(needle);
+        return idx > 56 ? idx : -1;
+      }),
+  ].filter((idx) => idx > 0);
+  const cut = boundaries.length ? Math.max(...boundaries) : window.lastIndexOf(' ');
+  let out = (cut > 56 ? window.slice(0, cut) : window).trim();
+  out = out.replace(/[,:;—–-]\s*$/, '').trim();
+  out = out.replace(/\b(and|or|but|by|with|for|to|of|in|on|at|which|because|while)$/i, '').trim();
+  return /[.!?]$/.test(out) ? out : `${out}.`;
+}
+
 function firstSentence(text: string): string {
   const t = text.trim();
   if (!t) return '';
   const m = t.match(/^[\s\S]{1,400}?[.!?](?=\s|$)/);
   if (m) return m[0].trim();
-  return t.length > BUBBLE_MAX ? `${t.slice(0, BUBBLE_MAX - 1).trimEnd()}…` : t;
+  return completeShortSentence(t, BUBBLE_MAX);
 }
 
 export function bubbleTextFromReasoning(reasoning: string, titleFallback: string): string {
   const s = firstSentence(reasoning);
   if (s) {
-    return s.length > BUBBLE_MAX ? `${s.slice(0, BUBBLE_MAX - 1).trimEnd()}…` : s;
+    return completeShortSentence(s, BUBBLE_MAX);
   }
   const t = titleFallback.trim();
   return t || 'Your recommendation is ready — review the details below.';
@@ -32,7 +55,7 @@ export function bubbleTextFromReasoningWithPersona(
   if (!persona) return base;
   const max =
     persona.replyLength === 'short' ? 110 : persona.replyLength === 'detailed' ? 200 : BUBBLE_MAX;
-  let out = base.length > max ? `${base.slice(0, max - 1).trimEnd()}…` : base;
+  let out = completeShortSentence(base, max);
   const nick = (persona.userNickname || '').trim();
   if (nick && persona.warmth >= 2 && !out.toLowerCase().includes(nick.toLowerCase())) {
     const rest = out.length ? `${out.charAt(0).toLowerCase()}${out.slice(1)}` : out;

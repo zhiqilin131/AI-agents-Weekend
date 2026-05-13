@@ -8,6 +8,7 @@ from foresight_x.decision.recommender import composite_score, recommend, DEFAULT
 from foresight_x.schemas import (
     EvidenceBundle,
     MemoryBundle,
+    NextAction,
     Option,
     OptionEvaluation,
     Recommendation,
@@ -146,6 +147,45 @@ def test_recommend_invalid_chosen_id_snapped() -> None:
     )
     rec = recommend(evaluations, options, ev, mem, user_state=st, llm=FakeLLM(bad))
     assert rec.chosen_option_id == "ok"
+
+
+def test_recommend_caps_and_dedupes_execution_actions() -> None:
+    st, mem, ev = _ctx()
+    options = [
+        Option(option_id="ok", name="OK", description="", key_assumptions=[], cost_of_reversal="low"),
+    ]
+    evaluations = [
+        OptionEvaluation(
+            option_id="ok",
+            expected_value_score=5.0,
+            risk_score=5.0,
+            regret_score=5.0,
+            uncertainty_score=5.0,
+            goal_alignment_score=5.0,
+            rationale="",
+        ),
+    ]
+    raw_actions = [
+        NextAction(action=" Draft a comparison table for the top two options "),
+        NextAction(action="Draft a comparison table for the top two options"),
+        NextAction(action="Email one mentor for feedback"),
+        NextAction(action="List three assumptions to validate"),
+        NextAction(action="Prepare the application checklist"),
+        NextAction(action="Research"),
+    ]
+    rec_obj = Recommendation(
+        chosen_option_id="ok",
+        reasoning="x",
+        next_actions=raw_actions,
+        reassessment_triggers=[],
+    )
+    rec = recommend(evaluations, options, ev, mem, user_state=st, llm=FakeLLM(rec_obj))
+    assert [a.action for a in rec.next_actions] == [
+        "Draft a comparison table for the top two options",
+        "Email one mentor for feedback",
+        "List three assumptions to validate",
+        "Prepare the application checklist",
+    ]
 
 
 def test_recommend_requires_options() -> None:

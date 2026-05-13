@@ -66,6 +66,21 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("openai_embedding_model", "OPENAI_EMBEDDING_MODEL"),
     )
     openai_api_base: str | None = Field(default=None, validation_alias=AliasChoices("openai_api_base", "OPENAI_API_BASE"))
+    openai_tts_model: str = Field(
+        default="gpt-4o-mini-tts",
+        validation_alias=AliasChoices("openai_tts_model", "OPENAI_TTS_MODEL"),
+    )
+    openai_tts_voice: str = Field(
+        default="coral",
+        validation_alias=AliasChoices("openai_tts_voice", "OPENAI_TTS_VOICE"),
+    )
+    openai_tts_instructions: str = Field(
+        default=(
+            "Speak like a tiny friendly slime companion: warm, cute, lightly bouncy, curious, "
+            "and emotionally expressive, but still clear and not childish."
+        ),
+        validation_alias=AliasChoices("openai_tts_instructions", "OPENAI_TTS_INSTRUCTIONS"),
+    )
     #: GPT-5 / reasoning models use OpenAI ``/v1/responses`` via LlamaIndex ``OpenAIResponses`` (see ``llm_factory``).
     openai_responses_reasoning_effort: str = Field(
         default="low",
@@ -410,6 +425,9 @@ class Settings(BaseSettings):
         "supabase_anon_key",
         "supabase_service_role_key",
         "openai_api_key",
+        "openai_tts_model",
+        "openai_tts_voice",
+        "openai_tts_instructions",
         "resilience_secondary_openai_api_key",
         "resilience_secondary_openai_api_base",
         "resilience_secondary_openai_model",

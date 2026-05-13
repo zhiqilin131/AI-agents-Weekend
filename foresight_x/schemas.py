@@ -754,7 +754,18 @@ class Reflection(BaseModel):
     self_improvement_signal: str
 
 
-EvidenceRefType = Literal["profile", "past_decision", "current_constraint", "memory", "user_statement"]
+EvidenceRefType = Literal[
+    "profile",
+    "past_decision",
+    "current_constraint",
+    "memory",
+    "user_statement",
+    "world_evidence",
+    "tradeoff",
+    "assumption",
+]
+GroundingStrength = Literal["strong", "mixed", "thin"]
+GroundingSignalType = Literal["user_context", "personal_memory", "external_evidence", "uncertainty"]
 
 
 class EvidenceReference(BaseModel):
@@ -783,6 +794,15 @@ class PersonalizedFitReason(BaseModel):
     based_on: list[EvidenceReference]
 
 
+class GroundingSignal(BaseModel):
+    """Short audit line explaining what kind of evidence supports the recommendation."""
+
+    type: GroundingSignalType
+    label: str
+    text: str
+    strength: GroundingStrength = "mixed"
+
+
 class NextActionSurface(BaseModel):
     text: str
     duration_estimate: str
@@ -796,6 +816,11 @@ class ReportSurface(BaseModel):
         ...,
         description="Explains whether futures lean on personal history vs current context alone.",
     )
+    grounding_strength: GroundingStrength = Field(
+        default="mixed",
+        description="Quick confidence label for whether the recommendation is strongly, partially, or thinly grounded.",
+    )
+    grounding_signals: list[GroundingSignal] = Field(default_factory=list)
     personalized_reasons: list[PersonalizedFitReason] = Field(default_factory=list)
     future_paths: list[FuturePath] = Field(default_factory=list)
     key_assumptions: list[str] = Field(default_factory=list)

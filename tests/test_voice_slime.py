@@ -216,6 +216,45 @@ def test_slime_tts_requires_openai_key(monkeypatch, tmp_path: Path) -> None:
     assert r.status_code == 503
 
 
+def test_slime_tts_uses_configured_openai_voice(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ENABLE_CREDIT_LIMITS", "false")
+    monkeypatch.setenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+    monkeypatch.setenv("OPENAI_TTS_VOICE", "coral")
+    monkeypatch.setenv("OPENAI_TTS_INSTRUCTIONS", "Sound like a warm tiny slime.")
+    from foresight_x.ui import api_server
+
+    calls: list[dict[str, object]] = []
+
+    class FakeSpeech:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(read=lambda: b"fake-mp3")
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key: str, base_url: str | None = None):
+            assert api_key == "sk-test"
+            assert base_url is None
+            self.audio = types.SimpleNamespace(speech=FakeSpeech())
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+
+    c = TestClient(api_server.app)
+    r = c.post("/api/slime/tts", json={"text": "Hello, decision buddy."})
+
+    assert r.status_code == 200
+    assert r.content == b"fake-mp3"
+    assert calls == [
+        {
+            "model": "gpt-4o-mini-tts",
+            "voice": "coral",
+            "input": "Hello, decision buddy.",
+            "instructions": "Sound like a warm tiny slime.",
+        }
+    ]
+
+
 def test_navigate_tool_validates_route() -> None:
     tr, fe = tool_navigate({"route": "execution_calendar"})
     assert tr["ok"] is True
