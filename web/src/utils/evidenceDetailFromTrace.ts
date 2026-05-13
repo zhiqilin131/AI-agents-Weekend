@@ -126,6 +126,33 @@ export function resolveEvidenceDetail(
     };
   }
 
+  if (type === 'world_evidence') {
+    return {
+      title: 'External evidence',
+      subtitle: ref.id ? ref.id : undefined,
+      sections: [
+        { label: 'Source line', value: ref.text },
+        ...(typeof ref.confidence === 'number'
+          ? [{ label: 'Source confidence', value: `${Math.round(ref.confidence * 100)}%` }]
+          : []),
+      ],
+    };
+  }
+
+  if (type === 'tradeoff') {
+    return {
+      title: 'Tradeoff rationale',
+      sections: [{ label: 'Reasoning used', value: ref.text }],
+    };
+  }
+
+  if (type === 'assumption') {
+    return {
+      title: 'Assumption',
+      sections: [{ label: 'Assumption to verify', value: ref.text }],
+    };
+  }
+
   /* memory — patterns, evaluation snippets, or memory_evidence rows */
   const evRows = mem?.memory_evidence ?? [];
   let ev = ref.id ? evRows.find((e) => e.decision_id === ref.id) : undefined;

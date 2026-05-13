@@ -11,6 +11,16 @@ describe('recommendationNarration', () => {
     expect(bubbleTextFromReasoning('First part. Second part.', 'T')).toBe('First part.');
   });
 
+  it('bubbleTextFromReasoning shortens long first sentence as a complete sentence', () => {
+    const text =
+      "Exploring startup incubator programs aligns with Bo's goal of potentially doing a startup by providing hands-on experience and mentorship, which are crucial for entrepreneurial success.";
+    const bubble = bubbleTextFromReasoning(text, 'T');
+    expect(bubble).toBe(
+      "Exploring startup incubator programs aligns with Bo's goal of potentially doing a startup by providing hands-on experience and mentorship.",
+    );
+    expect(bubble.endsWith('…')).toBe(false);
+  });
+
   it('speechTextFromRecommendation joins title, bubble, and first action', () => {
     expect(speechTextFromRecommendation('Pick A', 'Because reasons.', 'Do the thing')).toBe(
       'Pick A. Because reasons. Next step: Do the thing',

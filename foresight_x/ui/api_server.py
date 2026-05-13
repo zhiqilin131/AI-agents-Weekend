@@ -4041,8 +4041,14 @@ def slime_tts(body: SlimeTtsBody, request: Request):
 
     text = body.text.strip()[:4096]
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_api_base or None)
+    tts_model = (settings.openai_tts_model or "gpt-4o-mini-tts").strip()
+    tts_voice = (settings.openai_tts_voice or "coral").strip()
+    tts_instructions = (settings.openai_tts_instructions or "").strip()
+    speech_kwargs: dict[str, Any] = {"model": tts_model, "voice": tts_voice, "input": text}
+    if tts_instructions and tts_model not in {"tts-1", "tts-1-hd"}:
+        speech_kwargs["instructions"] = tts_instructions
     try:
-        resp = client.audio.speech.create(model="tts-1", voice="alloy", input=text)
+        resp = client.audio.speech.create(**speech_kwargs)
     except Exception as e:
         _log.exception("slime TTS OpenAI call failed")
         if tx is not None:

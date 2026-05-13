@@ -8,6 +8,8 @@ from foresight_x.schemas import (
     DecisionTrace,
     EvidenceReference,
     FuturePath,
+    GroundingSignal,
+    GroundingStrength,
     NextActionSurface,
     Option,
     PersonalizedFitReason,
@@ -118,7 +120,143 @@ def _shared_evidence_pool(trace: DecisionTrace) -> list[EvidenceReference]:
         pat = pat.strip()
         if pat:
             pool.append(EvidenceReference(type="memory", text=pat))
+    world_facts = trace.evidence.base_rates + trace.evidence.facts + trace.evidence.recent_events
+    for fact in world_facts[:3]:
+        t = fact.text.strip()
+        if t:
+            pool.append(
+                EvidenceReference(
+                    type="world_evidence",
+                    id=fact.source_url or None,
+                    text=_truncate(t, 240),
+                    confidence=fact.confidence,
+                )
+            )
     return _dedupe_refs(pool)
+
+
+def _refs_of_type(pool: list[EvidenceReference], types: set[str]) -> list[EvidenceReference]:
+    return [r for r in pool if r.type in types]
+
+
+def _grounding_strength(pool: list[EvidenceReference]) -> GroundingStrength:
+    user_refs = _refs_of_type(pool, {"user_statement", "current_constraint"})
+    personal_refs = _refs_of_type(pool, {"profile", "past_decision", "memory"})
+    world_refs = _refs_of_type(pool, {"world_evidence"})
+    if user_refs and len(personal_refs) >= 2:
+        return "strong"
+    if user_refs and (personal_refs or world_refs):
+        return "mixed"
+    return "thin"
+
+
+def _grounding_note(strength: GroundingStrength, has_history: bool, has_world: bool) -> str:
+    if strength == "strong":
+        return (
+            "These futures tie what you said today to retrieved memories and tradeoffs—"
+            "not a generic three-story forecast."
+        )
+    if strength == "mixed":
+        if has_history:
+            return (
+                "Grounded in your current context plus some personal history and memories; treat the recommendation "
+                "as a strong-fit hypothesis, then verify the open questions."
+            )
+        if has_world:
+            return (
+                "Based mostly on current context plus external evidence; personal history is light, "
+                "so verify fit before committing."
+            )
+        return "Based mostly on current context, with limited personal history behind the recommendation."
+    return (
+        "Based mostly on current context, not past behavior. Evidence is thin, so verify the missing facts "
+        "before treating this as a final call."
+    )
+
+
+def _grounding_signals(
+    trace: DecisionTrace,
+    pool: list[EvidenceReference],
+    strength: GroundingStrength,
+) -> list[GroundingSignal]:
+    us = trace.user_state
+    refl = trace.reflection
+    user_refs = _refs_of_type(pool, {"user_statement", "current_constraint"})
+    personal_refs = _refs_of_type(pool, {"profile", "past_decision", "memory"})
+    world_refs = _refs_of_type(pool, {"world_evidence"})
+    gaps = [x.strip() for x in (refl.information_gaps + refl.uncertainty_sources) if x.strip()]
+
+    signals: list[GroundingSignal] = []
+    if user_refs:
+        signals.append(
+            GroundingSignal(
+                type="user_context",
+                label="User context",
+                text=_truncate(user_refs[0].text, 180),
+                strength="strong",
+            )
+        )
+    elif us.current_behavior.strip():
+        signals.append(
+            GroundingSignal(
+                type="user_context",
+                label="User context",
+                text=_truncate(us.current_behavior, 180),
+                strength="mixed",
+            )
+        )
+
+    if personal_refs:
+        signals.append(
+            GroundingSignal(
+                type="personal_memory",
+                label="Personal memory",
+                text=_truncate(personal_refs[0].text, 180),
+                strength="strong" if len(personal_refs) >= 2 else "mixed",
+            )
+        )
+    else:
+        signals.append(
+            GroundingSignal(
+                type="personal_memory",
+                label="Personal memory",
+                text="No similar past decision or durable profile memory was found for this recommendation.",
+                strength="thin",
+            )
+        )
+
+    if world_refs:
+        signals.append(
+            GroundingSignal(
+                type="external_evidence",
+                label="External evidence",
+                text=_truncate(world_refs[0].text, 180),
+                strength="mixed",
+            )
+        )
+    else:
+        signals.append(
+            GroundingSignal(
+                type="external_evidence",
+                label="External evidence",
+                text="No strong web or source-backed fact was attached to this report surface.",
+                strength="thin",
+            )
+        )
+
+    signals.append(
+        GroundingSignal(
+            type="uncertainty",
+            label="Check before acting",
+            text=(
+                _truncate(gaps[0], 180)
+                if gaps
+                else "No major missing fact was surfaced, but this is still a decision aid, not final authority."
+            ),
+            strength="thin" if gaps else strength,
+        )
+    )
+    return signals[:4]
 
 
 def _scenario_map(sf: SimulatedFuture) -> dict[str, Scenario]:
@@ -190,7 +328,7 @@ def _build_path(
             if d:
                 based.append(EvidenceReference(type="memory", text=_truncate(d, 160)))
     if eval_rationale:
-        based.append(EvidenceReference(type="memory", text=_truncate(eval_rationale, 200)))
+        based.append(EvidenceReference(type="tradeoff", text=_truncate(eval_rationale, 200)))
     based = _dedupe_refs(based)
     if not based:
         based = [
@@ -272,7 +410,7 @@ def _personalized_reasons(trace: DecisionTrace, pool: list[EvidenceReference]) -
         reasons.append(
             PersonalizedFitReason(
                 text="The recommendation matches how your options score against goals, risk, and regret—see detailed tradeoffs if you want the numbers.",
-                based_on=[EvidenceReference(type="memory", text=snippet)],
+                based_on=[EvidenceReference(type="tradeoff", text=snippet)],
             )
         )
 
@@ -312,14 +450,13 @@ def build_report_surface(trace: DecisionTrace) -> ReportSurface:
     pool = _shared_evidence_pool(trace)
     eval_row = next((e for e in trace.evaluations if e.option_id == chosen_id), None)
     eval_rationale = (eval_row.rationale.strip() if eval_row else "") or None
-
-    if not _has_history_memory(trace):
-        grounding = "Based mostly on current context, not past behavior."
-    else:
-        grounding = (
-            "These futures tie what you said today to retrieved memories and tradeoffs—"
-            "not a generic three-story forecast."
-        )
+    grounding_strength = _grounding_strength(pool)
+    grounding = _grounding_note(
+        grounding_strength,
+        has_history=_has_history_memory(trace),
+        has_world=bool(_refs_of_type(pool, {"world_evidence"})),
+    )
+    grounding_signals = _grounding_signals(trace, pool, grounding_strength)
 
     fallback_body = trace.recommendation.reasoning.strip() or trace.user_state.raw_input.strip()
     fb_expected = fallback_body or "If things progress steadily, this choice compounds quietly over time."
@@ -440,6 +577,8 @@ def build_report_surface(trace: DecisionTrace) -> ReportSurface:
 
     return ReportSurface(
         grounding_note=grounding,
+        grounding_strength=grounding_strength,
+        grounding_signals=grounding_signals,
         personalized_reasons=reasons,
         future_paths=paths,
         key_assumptions=assumptions,

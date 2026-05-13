@@ -92,6 +92,47 @@ const COACH_QUICK_ACTIONS: { label: string; text: string }[] = [
   { label: 'Gap', text: 'more buffer between blocks' },
 ];
 
+function dedupeExecutionTasks(tasks: ExecutionTask[], limit = 8): ExecutionTask[] {
+  const seen = new Set<string>();
+  const out: ExecutionTask[] = [];
+  for (const task of tasks) {
+    const key = task.title.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(task);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function dedupeAiEventsByTitle(events: CalendarEvent[]): CalendarEvent[] {
+  const seenAiTitles = new Set<string>();
+  const out: CalendarEvent[] = [];
+  for (const event of events) {
+    const key = event.title.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (event.source === 'ai' && key) {
+      if (seenAiTitles.has(key)) continue;
+      seenAiTitles.add(key);
+    }
+    out.push(event);
+  }
+  return out;
+}
+
+function dedupeEventsForTaskTitles(events: CalendarEvent[], tasks: ExecutionTask[]): CalendarEvent[] {
+  const taskTitles = new Set(
+    tasks.map((task) => task.title.trim().toLowerCase().replace(/\s+/g, ' ')).filter(Boolean),
+  );
+  const seenTaskEvents = new Set<string>();
+  return events.filter((event) => {
+    const key = event.title.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!taskTitles.has(key)) return true;
+    if (seenTaskEvents.has(key)) return false;
+    seenTaskEvents.add(key);
+    return true;
+  });
+}
+
 export default function ExecutionPlannerPage() {
   const { slimeProfile } = useSlimeProfile();
   const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
@@ -215,8 +256,9 @@ export default function ExecutionPlannerPage() {
         setPreview(resolvedPreview);
         const fromActions = mapRecommendationActionsToTasks(t.recommendation?.next_actions ?? []);
         const fromPreview = mapPreviewStepsToTasks(resolvedPreview);
-        const merged = [...fromActions, ...fromPreview].slice(0, 8);
+        const merged = dedupeExecutionTasks([...fromActions, ...fromPreview], 8);
         setTasks(merged);
+        setEvents((prev) => dedupeEventsForTaskTitles(prev, merged));
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load trace');
       } finally {
@@ -332,15 +374,16 @@ export default function ExecutionPlannerPage() {
       const rawEvents = localStorage.getItem(storageKeys.events);
       if (rawEvents) {
         const parsed = JSON.parse(rawEvents) as CalendarEvent[];
-        if (Array.isArray(parsed)) setEvents(parsed);
+        if (Array.isArray(parsed)) setEvents(dedupeAiEventsByTitle(parsed));
       } else {
         setEvents([]);
       }
       const rawTasks = localStorage.getItem(storageKeys.tasks);
       if (rawTasks) {
         const parsed = JSON.parse(rawTasks) as ExecutionTask[];
-        if (Array.isArray(parsed)) setTasks(parsed);
-      } else {
+        if (Array.isArray(parsed) && parsed.length > 0) setTasks(parsed);
+        else if (!decisionId) setTasks([]);
+      } else if (!decisionId) {
         setTasks([]);
       }
     } catch {
@@ -375,14 +418,14 @@ export default function ExecutionPlannerPage() {
               locked: Boolean(raw.locked),
             };
           };
-          if (prev.length === 0) return list.map(toPlanner);
+          if (prev.length === 0) return dedupeAiEventsByTitle(list.map(toPlanner));
           const ids = new Set(prev.map((p) => p.id));
           const merged = [...prev];
           for (const raw of list) {
             const e = toPlanner(raw);
             if (!ids.has(e.id)) merged.push(e);
           }
-          return merged;
+          return dedupeAiEventsByTitle(merged);
         });
       } catch {
         /* offline */

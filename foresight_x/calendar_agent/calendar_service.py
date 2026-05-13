@@ -31,6 +31,8 @@ from foresight_x.profile.store import load_user_profile
 from foresight_x.schemas import DecisionTrace, NextAction
 from foresight_x.voice.calendar_command_parser import CalendarDraft as VoiceCalendarDraft
 
+REPORT_EXECUTION_TASK_LIMIT = 4
+
 
 def _trace_tasks(
     trace: DecisionTrace,
@@ -39,7 +41,7 @@ def _trace_tasks(
     thread_id: str | None,
 ) -> list[CalendarTask]:
     tasks: list[CalendarTask] = []
-    for i, na in enumerate(trace.recommendation.next_actions[:12]):
+    for i, na in enumerate(trace.recommendation.next_actions[:REPORT_EXECUTION_TASK_LIMIT]):
         dur = _infer_duration(na)
         pri: str = "high" if i == 0 else "medium"
         energy = _infer_energy(na.action)

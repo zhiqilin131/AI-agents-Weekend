@@ -46,6 +46,8 @@ def test_grounding_note_without_history() -> None:
     trace = _make_trace(mem=mem, us=us)
     surf = build_report_surface(trace)
     assert "Based mostly on current context" in surf.grounding_note
+    assert surf.grounding_strength in {"mixed", "thin"}
+    assert {s.type for s in surf.grounding_signals} >= {"user_context", "personal_memory", "external_evidence"}
     assert not _has_history_memory(trace)
 
 
@@ -67,6 +69,7 @@ def test_grounding_note_with_similar_past() -> None:
     assert _has_history_memory(trace)
     surf = build_report_surface(trace)
     assert "memories" in surf.grounding_note.lower()
+    assert surf.grounding_signals
 
 
 def test_future_paths_three_kinds() -> None:

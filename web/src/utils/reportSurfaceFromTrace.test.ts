@@ -5,6 +5,10 @@ describe('reportSurfaceFromTrace', () => {
   it('parses backend report_surface snake_case', () => {
     const raw = {
       grounding_note: 'Based mostly on current context, not past behavior.',
+      grounding_strength: 'thin',
+      grounding_signals: [
+        { type: 'user_context', label: 'User context', text: 'Hello', strength: 'strong' },
+      ],
       personalized_reasons: [{ text: 'Because you prefer stability.', based_on: [{ type: 'profile', text: 'Stability' }] }],
       future_paths: [
         {
@@ -40,6 +44,8 @@ describe('reportSurfaceFromTrace', () => {
     };
     const s = parseReportSurface(raw);
     expect(s?.groundingNote).toContain('past behavior');
+    expect(s?.groundingStrength).toBe('thin');
+    expect(s?.groundingSignals[0]?.label).toBe('User context');
     expect(s?.futurePaths).toHaveLength(3);
     expect(s?.primaryNextAction.text).toBe('Do X');
   });
@@ -84,6 +90,8 @@ describe('reportSurfaceFromTrace', () => {
     };
     const s = deriveReportSurfaceFromTrace(trace);
     expect(s).not.toBeNull();
+    expect(s!.groundingStrength).toBe('thin');
+    expect(s!.groundingSignals.map((x) => x.type)).toContain('external_evidence');
     expect(s!.futurePaths.map((p) => p.pathType).sort()).toEqual(['expected', 'friction', 'pivot']);
     expect(s!.primaryNextAction.durationEstimate).toContain('Target');
   });

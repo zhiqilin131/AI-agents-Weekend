@@ -1,7 +1,25 @@
 import { useMemo, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Anchor, Brain, HeartHandshake, History, Lock, MessageCircle, Sparkles } from 'lucide-react';
-import type { EvidenceReference, EvidenceRefType, ReportSurface } from '../../model';
+import {
+  Anchor,
+  Brain,
+  CheckCircle2,
+  Globe2,
+  HeartHandshake,
+  HelpCircle,
+  History,
+  Lock,
+  MessageCircle,
+  Scale,
+  Sparkles,
+} from 'lucide-react';
+import type {
+  EvidenceReference,
+  EvidenceRefType,
+  GroundingSignal,
+  GroundingStrength,
+  ReportSurface,
+} from '../../model';
 import {
   resolveEvidenceDetail,
   type TraceMemoryBlockLite,
@@ -17,6 +35,9 @@ const TYPE_ICONS: Partial<Record<EvidenceRefType, LucideIcon>> = {
   memory: Brain,
   current_constraint: Lock,
   user_statement: MessageCircle,
+  world_evidence: Globe2,
+  tradeoff: Scale,
+  assumption: HelpCircle,
 };
 
 const TYPE_LABELS: Partial<Record<EvidenceRefType, string>> = {
@@ -25,6 +46,9 @@ const TYPE_LABELS: Partial<Record<EvidenceRefType, string>> = {
   memory: 'Memory',
   current_constraint: 'Constraints',
   user_statement: 'Your words',
+  world_evidence: 'External',
+  tradeoff: 'Tradeoffs',
+  assumption: 'Assumptions',
 };
 
 function countByType(refs: EvidenceReference[]): Map<EvidenceRefType, number> {
@@ -36,6 +60,25 @@ function countByType(refs: EvidenceReference[]): Map<EvidenceRefType, number> {
 }
 
 const MAX_VISIBLE_REASONS = 3;
+
+const SIGNAL_ICONS: Record<GroundingSignal['type'], LucideIcon> = {
+  user_context: MessageCircle,
+  personal_memory: Brain,
+  external_evidence: Globe2,
+  uncertainty: HelpCircle,
+};
+
+const STRENGTH_COPY: Record<GroundingStrength, string> = {
+  strong: 'Strong grounding',
+  mixed: 'Mixed grounding',
+  thin: 'Thin grounding',
+};
+
+const STRENGTH_STYLES: Record<GroundingStrength, string> = {
+  strong: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+  mixed: 'border-amber-200 bg-amber-50 text-amber-800',
+  thin: 'border-rose-200 bg-rose-50 text-rose-800',
+};
 
 export function PersonalizedFitCard({
   surface,
@@ -70,6 +113,9 @@ export function PersonalizedFitCard({
     'profile',
     'current_constraint',
     'user_statement',
+    'world_evidence',
+    'tradeoff',
+    'assumption',
   ];
 
   return (
@@ -81,9 +127,18 @@ export function PersonalizedFitCard({
           </div>
           <div className="min-w-0">
             <h3 className="text-base font-bold tracking-tight text-gray-900">Why this fits you</h3>
-            <p className="mt-0.5 text-xs text-gray-500">Signals we leaned on — tap a chip to see the full memory or quote.</p>
+            <p className="mt-0.5 text-xs text-gray-500">Signals we leaned on, and what still needs checking.</p>
           </div>
         </div>
+        <span
+          className={cn(
+            'inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold',
+            STRENGTH_STYLES[surface.groundingStrength],
+          )}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+          {STRENGTH_COPY[surface.groundingStrength]}
+        </span>
       </div>
 
       <div className="mt-4 rounded-2xl border border-rose-100/90 bg-white/80 px-4 py-3 shadow-inner">
@@ -92,6 +147,46 @@ export function PersonalizedFitCard({
           <p className="text-sm font-medium leading-relaxed text-gray-800">{surface.groundingNote}</p>
         </div>
       </div>
+
+      {surface.groundingSignals.length > 0 ? (
+        <div className="mt-4 grid gap-2 md:grid-cols-4">
+          {surface.groundingSignals.map((signal) => {
+            const Icon = SIGNAL_ICONS[signal.type] ?? Anchor;
+            return (
+              <div
+                key={`${signal.type}-${signal.label}`}
+                className={cn(
+                  'min-w-0 rounded-xl border bg-white/85 p-3',
+                  signal.strength === 'thin'
+                    ? 'border-rose-100'
+                    : signal.strength === 'strong'
+                      ? 'border-emerald-100'
+                      : 'border-amber-100',
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <div
+                    className={cn(
+                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
+                      signal.strength === 'thin'
+                        ? 'bg-rose-50 text-rose-600'
+                        : signal.strength === 'strong'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-amber-50 text-amber-700',
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" aria-hidden />
+                  </div>
+                  <p className="truncate text-[10px] font-bold uppercase tracking-wide text-gray-500">
+                    {signal.label}
+                  </p>
+                </div>
+                <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-gray-700">{signal.text}</p>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       {typeCounts.size > 0 ? (
         <div className="mt-4">

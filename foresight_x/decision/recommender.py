@@ -38,6 +38,8 @@ DEFAULT_EVALUATION_WEIGHTS: dict[str, float] = {
     "goal_alignment_score": 0.25,
 }
 
+MAX_EXECUTION_READY_ACTIONS = 4
+
 
 def composite_score(evaluation: OptionEvaluation, weights: dict[str, float]) -> float:
     total = 0.0
@@ -84,6 +86,35 @@ def _fallback_recommendation(
             "Stress or workload spikes",
         ],
     )
+
+
+def _execution_ready_actions(actions: list[NextAction]) -> list[NextAction]:
+    """Keep report-derived actions short, deduped, and realistic for the execution surface."""
+    cleaned: list[NextAction] = []
+    seen: set[str] = set()
+    vague_exact = {
+        "research",
+        "research more",
+        "think about it",
+        "network",
+        "make a plan",
+        "consider options",
+        "look into it",
+    }
+    for action in actions:
+        text = " ".join(action.action.split())
+        if not text:
+            continue
+        key = text.lower().rstrip(".")
+        if key in seen:
+            continue
+        seen.add(key)
+        if key in vague_exact and cleaned:
+            continue
+        cleaned.append(action.model_copy(update={"action": text}))
+        if len(cleaned) >= MAX_EXECUTION_READY_ACTIONS:
+            break
+    return cleaned
 
 
 def recommend(
@@ -141,7 +172,12 @@ def recommend(
         rec = raw if isinstance(raw, Recommendation) else Recommendation.model_validate(raw)
         # Always use the composite-score winner so UI ordering (same weights in mapTrace) matches the highlight.
         # The LLM only supplies reasoning and next_actions; it may mis-emit chosen_option_id.
-        rec = rec.model_copy(update={"chosen_option_id": chosen.option_id})
+        rec = rec.model_copy(
+            update={
+                "chosen_option_id": chosen.option_id,
+                "next_actions": _execution_ready_actions(rec.next_actions),
+            }
+        )
         return normalize_recommendation_deadlines(rec, anchor)
     except Exception:
         return normalize_recommendation_deadlines(

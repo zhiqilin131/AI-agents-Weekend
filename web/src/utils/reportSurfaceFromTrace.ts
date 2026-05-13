@@ -5,6 +5,8 @@ import type {
   EvidenceReference,
   EvidenceRefType,
   FuturePath,
+  GroundingSignal,
+  GroundingStrength,
   PersonalizedFitReason,
   PrimaryNextAction,
   ReportSurface,
@@ -47,10 +49,38 @@ function parseEvidenceRef(raw: Record<string, unknown>): EvidenceReference | nul
   return { type, id, text, confidence };
 }
 
+function parseGroundingSignal(raw: Record<string, unknown>): GroundingSignal | null {
+  const type = raw.type as GroundingSignal['type'] | undefined;
+  const label = typeof raw.label === 'string' ? raw.label.trim() : '';
+  const text = typeof raw.text === 'string' ? raw.text.trim() : '';
+  const strength = raw.strength as GroundingStrength | undefined;
+  if (!type || !label || !text) return null;
+  return {
+    type,
+    label,
+    text,
+    strength: strength === 'strong' || strength === 'thin' || strength === 'mixed' ? strength : 'mixed',
+  };
+}
+
 export function parseReportSurface(raw: unknown): ReportSurface | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
   const groundingNote = typeof o.grounding_note === 'string' ? o.grounding_note.trim() : '';
+  const rawStrength = o.grounding_strength as GroundingStrength | undefined;
+  const groundingStrength =
+    rawStrength === 'strong' || rawStrength === 'thin' || rawStrength === 'mixed'
+      ? rawStrength
+      : groundingNote.toLowerCase().includes('thin')
+        ? 'thin'
+        : 'mixed';
+  const parsedGroundingSignals = Array.isArray(o.grounding_signals)
+    ? o.grounding_signals
+        .map((x) =>
+          x && typeof x === 'object' ? parseGroundingSignal(x as Record<string, unknown>) : null,
+        )
+        .filter((x): x is GroundingSignal => Boolean(x))
+    : [];
   const keyAssumptions = Array.isArray(o.key_assumptions)
     ? o.key_assumptions.map((x) => String(x || '').trim()).filter(Boolean)
     : [];
@@ -122,8 +152,19 @@ export function parseReportSurface(raw: unknown): ReportSurface | undefined {
 
   if (!groundingNote || !primaryNextAction || futurePaths.length !== 3) return undefined;
 
+  const allRefs = dedupeRefs([
+    ...personalizedReasons.flatMap((r) => r.basedOn),
+    ...futurePaths.flatMap((p) => p.basedOn),
+  ]);
+  const groundingSignals =
+    parsedGroundingSignals.length > 0
+      ? parsedGroundingSignals
+      : fallbackGroundingSignalsFromRefs(allRefs, groundingNote, groundingStrength);
+
   return {
     groundingNote,
+    groundingStrength,
+    groundingSignals,
     personalizedReasons,
     futurePaths,
     keyAssumptions,
@@ -164,7 +205,8 @@ function sharedEvidencePool(trace: Record<string, unknown>): EvidenceReference[]
     const r = row as Record<string, unknown>;
     const blob = String(r.memory_summary || r.source_excerpt || '').trim();
     if (!blob) continue;
-    const id = typeof r.decision_id === 'string' && r.decision_id.trim() ? r.decision_id.trim() : undefined;
+    const id =
+      typeof r.decision_id === 'string' && r.decision_id.trim() ? r.decision_id.trim() : undefined;
     pool.push({ type: 'memory', id, text: truncate(blob, 220) });
   }
   const spd = mem && Array.isArray(mem.similar_past_decisions) ? mem.similar_past_decisions : [];
@@ -196,7 +238,171 @@ function sharedEvidencePool(trace: Record<string, unknown>): EvidenceReference[]
     const t = String(pat || '').trim();
     if (t) pool.push({ type: 'memory', text: t });
   }
+  const evidence = trace.evidence as Record<string, unknown> | undefined;
+  const worldRows = [
+    ...(Array.isArray(evidence?.base_rates) ? evidence.base_rates : []),
+    ...(Array.isArray(evidence?.facts) ? evidence.facts : []),
+    ...(Array.isArray(evidence?.recent_events) ? evidence.recent_events : []),
+  ];
+  for (const row of worldRows.slice(0, 3)) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const text = String(r.text || '').trim();
+    if (!text) continue;
+    const id =
+      typeof r.source_url === 'string' && r.source_url.trim() ? r.source_url.trim() : undefined;
+    const confidence = typeof r.confidence === 'number' ? r.confidence : undefined;
+    pool.push({ type: 'world_evidence', id, text: truncate(text, 240), confidence });
+  }
   return dedupeRefs(pool);
+}
+
+function refsOfType(pool: EvidenceReference[], types: EvidenceRefType[]): EvidenceReference[] {
+  return pool.filter((r) => types.includes(r.type));
+}
+
+function groundingStrengthFor(pool: EvidenceReference[]): GroundingStrength {
+  const userRefs = refsOfType(pool, ['user_statement', 'current_constraint']);
+  const personalRefs = refsOfType(pool, ['profile', 'past_decision', 'memory']);
+  const worldRefs = refsOfType(pool, ['world_evidence']);
+  if (userRefs.length > 0 && personalRefs.length >= 2) return 'strong';
+  if (userRefs.length > 0 && (personalRefs.length > 0 || worldRefs.length > 0)) return 'mixed';
+  return 'thin';
+}
+
+function groundingNoteFor(strength: GroundingStrength, hasHistory: boolean, hasWorld: boolean): string {
+  if (strength === 'strong') {
+    return 'These futures tie what you said today to retrieved memories and tradeoffs—not a generic three-story forecast.';
+  }
+  if (strength === 'mixed') {
+    if (hasHistory) {
+      return 'Grounded in your current context plus some personal history and memories; treat the recommendation as a strong-fit hypothesis, then verify the open questions.';
+    }
+    if (hasWorld) {
+      return 'Based mostly on current context plus external evidence; personal history is light, so verify fit before committing.';
+    }
+    return 'Based mostly on current context, with limited personal history behind the recommendation.';
+  }
+  return 'Based mostly on current context, not past behavior. Evidence is thin, so verify the missing facts before treating this as a final call.';
+}
+
+function groundingSignalsFor(
+  trace: Record<string, unknown>,
+  pool: EvidenceReference[],
+  strength: GroundingStrength,
+): GroundingSignal[] {
+  const us = trace.user_state as Record<string, unknown> | undefined;
+  const refl = (trace.reflection as Record<string, unknown>) || {};
+  const userRefs = refsOfType(pool, ['user_statement', 'current_constraint']);
+  const personalRefs = refsOfType(pool, ['profile', 'past_decision', 'memory']);
+  const worldRefs = refsOfType(pool, ['world_evidence']);
+  const gaps = [
+    ...(Array.isArray(refl.information_gaps) ? refl.information_gaps : []),
+    ...(Array.isArray(refl.uncertainty_sources) ? refl.uncertainty_sources : []),
+  ]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+
+  const signals: GroundingSignal[] = [];
+  if (userRefs[0]) {
+    signals.push({
+      type: 'user_context',
+      label: 'User context',
+      text: truncate(userRefs[0].text, 180),
+      strength: 'strong',
+    });
+  } else {
+    const currentBehavior = String(us?.current_behavior || '').trim();
+    if (currentBehavior) {
+      signals.push({
+        type: 'user_context',
+        label: 'User context',
+        text: truncate(currentBehavior, 180),
+        strength: 'mixed',
+      });
+    }
+  }
+
+  signals.push(
+    personalRefs[0]
+      ? {
+          type: 'personal_memory',
+          label: 'Personal memory',
+          text: truncate(personalRefs[0].text, 180),
+          strength: personalRefs.length >= 2 ? 'strong' : 'mixed',
+        }
+      : {
+          type: 'personal_memory',
+          label: 'Personal memory',
+          text: 'No similar past decision or durable profile memory was found for this recommendation.',
+          strength: 'thin',
+        },
+  );
+
+  signals.push(
+    worldRefs[0]
+      ? {
+          type: 'external_evidence',
+          label: 'External evidence',
+          text: truncate(worldRefs[0].text, 180),
+          strength: 'mixed',
+        }
+      : {
+          type: 'external_evidence',
+          label: 'External evidence',
+          text: 'No strong web or source-backed fact was attached to this report surface.',
+          strength: 'thin',
+        },
+  );
+
+  signals.push({
+    type: 'uncertainty',
+    label: 'Check before acting',
+    text: gaps[0]
+      ? truncate(gaps[0], 180)
+      : 'No major missing fact was surfaced, but this is still a decision aid, not final authority.',
+    strength: gaps[0] ? 'thin' : strength,
+  });
+
+  return signals.slice(0, 4);
+}
+
+function fallbackGroundingSignalsFromRefs(
+  refs: EvidenceReference[],
+  groundingNote: string,
+  strength: GroundingStrength,
+): GroundingSignal[] {
+  const userRefs = refsOfType(refs, ['user_statement', 'current_constraint']);
+  const personalRefs = refsOfType(refs, ['profile', 'past_decision', 'memory']);
+  const worldRefs = refsOfType(refs, ['world_evidence']);
+  return [
+    {
+      type: 'user_context',
+      label: 'User context',
+      text: userRefs[0]?.text || groundingNote,
+      strength: userRefs[0] ? 'strong' : strength,
+    },
+    {
+      type: 'personal_memory',
+      label: 'Personal memory',
+      text:
+        personalRefs[0]?.text ||
+        'No similar past decision or durable profile memory was attached to this report.',
+      strength: personalRefs.length >= 2 ? 'strong' : personalRefs.length ? 'mixed' : 'thin',
+    },
+    {
+      type: 'external_evidence',
+      label: 'External evidence',
+      text: worldRefs[0]?.text || 'No strong web or source-backed fact was attached to this report surface.',
+      strength: worldRefs[0] ? 'mixed' : 'thin',
+    },
+    {
+      type: 'uncertainty',
+      label: 'Check before acting',
+      text: groundingNote,
+      strength,
+    },
+  ];
 }
 
 type ScenarioRow = {
@@ -302,7 +508,7 @@ function buildPath(args: {
     }
   }
   if (args.evalRationale) {
-    based.push({ type: 'memory', text: truncate(args.evalRationale, 200) });
+    based.push({ type: 'tradeoff', text: truncate(args.evalRationale, 200) });
   }
   based = dedupeRefs(based);
   if (!based.length) {
@@ -374,7 +580,7 @@ function personalizedReasons(
   if (reasons.length < 2 && reasoning) {
     reasons.push({
       text: 'The recommendation matches how your options score against goals, risk, and regret—open detailed tradeoffs if you want the numbers.',
-      basedOn: [{ type: 'memory', text: truncate(reasoning, 220) }],
+      basedOn: [{ type: 'tradeoff', text: truncate(reasoning, 220) }],
     });
   }
 
@@ -427,9 +633,13 @@ export function deriveReportSurfaceFromTrace(trace: Record<string, unknown>): Re
   const pool = sharedEvidencePool(trace);
   const refl = (trace.reflection as Record<string, unknown>) || {};
 
-  const groundingNote = hasHistoryMemory(trace)
-    ? 'These futures tie what you said today to retrieved memories and tradeoffs—not a generic three-story forecast.'
-    : 'Based mostly on current context, not past behavior.';
+  const groundingStrength = groundingStrengthFor(pool);
+  const groundingNote = groundingNoteFor(
+    groundingStrength,
+    hasHistoryMemory(trace),
+    refsOfType(pool, ['world_evidence']).length > 0,
+  );
+  const groundingSignals = groundingSignalsFor(trace, pool, groundingStrength);
 
   const reasoning = typeof rec?.reasoning === 'string' ? rec.reasoning.trim() : '';
   const us = trace.user_state as Record<string, unknown> | undefined;
@@ -552,6 +762,8 @@ export function deriveReportSurfaceFromTrace(trace: Record<string, unknown>): Re
 
   return {
     groundingNote,
+    groundingStrength,
+    groundingSignals,
     personalizedReasons: personalizedReasonsOut,
     futurePaths,
     keyAssumptions,
