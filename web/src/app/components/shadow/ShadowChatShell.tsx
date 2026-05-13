@@ -15,13 +15,19 @@ import { useDecisionReportStream } from '../../../hooks/useDecisionReportStream'
 import { ModelSelector } from '../../../features/models/ModelSelector';
 import { buildCheaperModelHint } from '../../../features/models/slimeModelsApi';
 import { useSlimeModelCatalog } from '../../../features/models/useSlimeModelCatalog';
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 import type { SlimeCreditFeature } from '../../../features/models/types';
 import { AgentPresence3DPanel } from './AgentPresence3DPanel';
 import { ChatMessageList } from './ChatMessageList';
 import { ChatSidebar } from './ChatSidebar';
 import { DecisionReportStreamingPanel } from './DecisionReportStreamingPanel';
 import { DecisionSuggestionCard } from './DecisionSuggestionCard';
-import { ProfileMemoryToastStack, type ProfileMemoryToast, profileMemoryEventDedupeKey } from './ProfileMemoryToastStack';
+import {
+  ProfileMemoryToastStack,
+  type ProfileMemoryDetail,
+  type ProfileMemoryToast,
+  profileMemoryEventDedupeKey,
+} from './ProfileMemoryToastStack';
 import { ShadowChatInput } from './ShadowChatInput';
 import type { AgentStatus, ShadowMessage, ShadowSuggestion, ShadowThread } from './types';
 import { detectCalendarFeedbackIntent } from '../../../utils/calendarFeedbackIntent';
@@ -109,12 +115,12 @@ export function ShadowChatShell({
   }, []);
 
   const scheduleProfileMemoryToast = useCallback(
-    (ev: { items: string[]; at: string }) => {
+    (ev: { items: string[]; at: string; details?: ProfileMemoryDetail[] }) => {
       const id =
         typeof crypto !== 'undefined' && 'randomUUID' in crypto
           ? crypto.randomUUID()
           : `pm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-      setProfileMemoryToasts((prev) => [...prev.slice(-4), { id, items: ev.items, at: ev.at }]);
+      setProfileMemoryToasts((prev) => [...prev.slice(-4), { id, items: ev.items, at: ev.at, details: ev.details }]);
       const timer = window.setTimeout(() => dismissProfileMemoryToast(id), 6200);
       profileMemoryToastTimersRef.current.set(id, timer);
     },
@@ -159,7 +165,7 @@ export function ShadowChatShell({
     const data = (await res.json()) as { thread: ShadowThread };
     const tid = data.thread.thread_id;
     const mem = Array.isArray(data.thread.memory_events)
-      ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string }>)
+      ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string; details?: ProfileMemoryDetail[] }>)
       : [];
     const profileEvents = mem.filter(
       (ev) => ev.kind === 'profile_update' && Array.isArray(ev.items) && ev.items.length > 0,
@@ -174,7 +180,7 @@ export function ShadowChatShell({
         const k = profileMemoryEventDedupeKey(ev);
         if (profileMemoryToastKeysRef.current.has(k)) continue;
         profileMemoryToastKeysRef.current.add(k);
-        scheduleProfileMemoryToast({ items: ev.items, at: ev.at });
+        scheduleProfileMemoryToast({ items: ev.items, at: ev.at, details: ev.details });
       }
     }
 
@@ -197,6 +203,26 @@ export function ShadowChatShell({
     await refreshThreads();
     await loadThread(data.thread.thread_id);
   };
+
+  const deleteProfileMemoryFromToast = useCallback(
+    async (factId: string, toastId: string) => {
+      if (!factId) return;
+      try {
+        const res = await apiFetch(`/api/profile/memory-fact/${encodeURIComponent(factId)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(await res.text());
+        dismissProfileMemoryToast(toastId);
+        if (activeThreadId) void loadThread(activeThreadId, { preservePendingSuggestion: true });
+      } catch {
+        pushTimeline('Could not delete that memory');
+      }
+    },
+    [activeThreadId, dismissProfileMemoryToast],
+  );
+
+  const openProfileMemoryEditor = useCallback((factId?: string) => {
+    const suffix = factId ? `?memory=${encodeURIComponent(factId)}` : '';
+    navigate(`/profile${suffix}`);
+  }, [navigate]);
 
   const prevAuthUserRef = useRef<string | undefined>(undefined);
 
@@ -568,6 +594,12 @@ export function ShadowChatShell({
         saveClarificationToProfile,
         modelOptionId: modelOptionId || undefined,
       });
+      if (streamError === 'insufficient_credits') {
+        setReportOpen(false);
+        setAgentStatus('idle');
+        pushTimeline('Not enough Slime Credits — add credits in Profile, then try again.');
+        return;
+      }
       if (streamError && streamError !== 'cancelled') {
         setAgentStatus('error');
         pushTimeline(streamError.length > 80 ? `${streamError.slice(0, 80)}…` : streamError);
@@ -756,14 +788,16 @@ export function ShadowChatShell({
                 />
                 {calendarCoachHint ? (
                   <div className="relative overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-white/95 via-indigo-50/40 to-violet-50/50 px-3 py-3 shadow-[0_8px_30px_rgba(99,102,241,0.12)]">
-                    <button
-                      type="button"
-                      className="absolute right-2 top-2 rounded-full p-1 text-slate-400 hover:bg-white/80 hover:text-slate-700"
-                      aria-label="Dismiss calendar hint"
-                      onClick={() => setCalendarCoachHint(null)}
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    <BuddyTooltip content="Dismiss this calendar hint card.">
+                      <button
+                        type="button"
+                        className="absolute right-2 top-2 rounded-full p-1 text-slate-400 hover:bg-white/80 hover:text-slate-700"
+                        aria-label="Dismiss calendar hint"
+                        onClick={() => setCalendarCoachHint(null)}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </BuddyTooltip>
                     <div className="flex items-center gap-2 pr-8 text-indigo-900">
                       <Sparkles className="h-4 w-4 shrink-0 text-indigo-600" aria-hidden />
                       <span className="text-xs font-semibold uppercase tracking-wide">Calendar insight</span>
@@ -777,38 +811,44 @@ export function ShadowChatShell({
                           {plannerSelectionContext.titles.slice(0, 4).join(' · ')}
                           {plannerSelectionContext.titles.length > 4 ? '…' : ''}
                         </p>
-                        <button
-                          type="button"
-                          className="mt-1 text-[10px] font-medium text-violet-800 underline hover:text-violet-950"
-                          onClick={() => {
-                            clearSelectedBlocksContext();
-                            setPlannerSelectionContext(null);
-                          }}
-                        >
-                          Clear selection scope
-                        </button>
+                        <BuddyTooltip content="Clear the narrowed planner scope and apply hints to the whole calendar again.">
+                          <button
+                            type="button"
+                            className="mt-1 text-[10px] font-medium text-violet-800 underline hover:text-violet-950"
+                            onClick={() => {
+                              clearSelectedBlocksContext();
+                              setPlannerSelectionContext(null);
+                            }}
+                          >
+                            Clear selection scope
+                          </button>
+                        </BuddyTooltip>
                       </div>
                     ) : null}
                     <div className="mt-2.5 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={calendarCoachBusy}
-                        onClick={() => void applyCalendarCoachFromChat()}
-                        className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50"
-                      >
-                        {calendarCoachBusy ? 'Applying…' : 'Apply to execution calendar'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={calendarCoachBusy}
-                        onClick={() => {
-                          sessionStorage.setItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY, calendarCoachHint.trim());
-                          navigate('/execution?from=shadow');
-                        }}
-                        className="rounded-full border border-indigo-200/90 bg-white/80 px-3 py-2 text-xs font-medium text-indigo-900 hover:bg-white"
-                      >
-                        Open planner
-                      </button>
+                      <BuddyTooltip content="Apply this calendar suggestion to your execution planner storage.">
+                        <button
+                          type="button"
+                          disabled={calendarCoachBusy}
+                          onClick={() => void applyCalendarCoachFromChat()}
+                          className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50"
+                        >
+                          {calendarCoachBusy ? 'Applying…' : 'Apply to execution calendar'}
+                        </button>
+                      </BuddyTooltip>
+                      <BuddyTooltip content="Open the execution planner in another view with this hint prefilled.">
+                        <button
+                          type="button"
+                          disabled={calendarCoachBusy}
+                          onClick={() => {
+                            sessionStorage.setItem(EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY, calendarCoachHint.trim());
+                            navigate('/execution?from=shadow');
+                          }}
+                          className="rounded-full border border-indigo-200/90 bg-white/80 px-3 py-2 text-xs font-medium text-indigo-900 hover:bg-white"
+                        >
+                          Open planner
+                        </button>
+                      </BuddyTooltip>
                     </div>
                   </div>
                 ) : null}
@@ -923,6 +963,10 @@ export function ShadowChatShell({
         progressStep={reportStream.progressStep}
         isStreaming={reportStream.isStreaming}
         error={reportStream.error}
+        degradedWarnings={reportStream.degradedWarnings}
+        onRetryStage={() => {
+          void reportStream.retryFromCurrentStage();
+        }}
         onClose={() => {
           setReportOpen(false);
           setAgentStatus('idle');
@@ -939,7 +983,12 @@ export function ShadowChatShell({
         onReviseReport={(decisionId) => void onReviseFromArtifactOrPanel(decisionId)}
         shadowThreadId={activeThreadId}
       />
-      <ProfileMemoryToastStack toasts={profileMemoryToasts} onDismiss={dismissProfileMemoryToast} />
+      <ProfileMemoryToastStack
+        toasts={profileMemoryToasts}
+        onDismiss={dismissProfileMemoryToast}
+        onDelete={deleteProfileMemoryFromToast}
+        onEdit={openProfileMemoryEditor}
+      />
     </div>
   );
 }

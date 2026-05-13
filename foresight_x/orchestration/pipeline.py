@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator
@@ -23,6 +24,14 @@ from foresight_x.memory_graph import TemporalGraphMemory
 from foresight_x.retrieval.memory import UserMemory
 from foresight_x.retrieval.user_recent_context import merge_user_context_into_evidence
 from foresight_x.retrieval.world_cache import WorldKnowledge
+from foresight_x.resilience.runtime import (
+    chaos_mode,
+    current_run_events,
+    degrade,
+    end_resilience_run,
+    probe_linear_mcp,
+    start_resilience_run,
+)
 from foresight_x.schemas import (
     DecisionTrace,
     EvidenceBundle,
@@ -38,6 +47,50 @@ from foresight_x.schemas import (
 from foresight_x.decision.report_surface import build_report_surface
 from foresight_x.simulation.evaluator import evaluate_options
 from foresight_x.simulation.future_simulator import simulate_futures
+
+_PIPELINE_STAGE_ORDER = ["enhance", "perceive", "retrieve", "infer", "simulate", "evaluate", "finalize"]
+
+
+def _stage_index(stage: str | None) -> int:
+    s = (stage or "").strip().lower()
+    if s not in _PIPELINE_STAGE_ORDER:
+        return 0
+    return _PIPELINE_STAGE_ORDER.index(s)
+
+
+def _resume_get_obj(resume_partial: dict[str, Any] | None, key: str) -> Any:
+    if not resume_partial:
+        return None
+    val = resume_partial.get(key)
+    if val is not None:
+        return val
+    trace = resume_partial.get("trace")
+    if isinstance(trace, dict):
+        return trace.get(key)
+    return None
+
+
+def _resume_model(cls: Any, resume_partial: dict[str, Any] | None, key: str) -> Any | None:
+    raw = _resume_get_obj(resume_partial, key)
+    if raw is None:
+        return None
+    try:
+        return cls.model_validate(raw)
+    except Exception:
+        return None
+
+
+def _resume_model_list(cls: Any, resume_partial: dict[str, Any] | None, key: str) -> list[Any] | None:
+    raw = _resume_get_obj(resume_partial, key)
+    if not isinstance(raw, list):
+        return None
+    out: list[Any] = []
+    for x in raw:
+        try:
+            out.append(cls.model_validate(x))
+        except Exception:
+            return None
+    return out
 
 
 @dataclass
@@ -121,7 +174,47 @@ def retrieve_bundles_parallel(
     with ThreadPoolExecutor(max_workers=2) as pool:
         fut_m = pool.submit(mem)
         fut_e = pool.submit(ev)
-        memory_bundle, evidence_bundle = fut_m.result(), fut_e.result()
+        timeout_s = float(max(1.0, settings.retrieve_parallel_timeout_sec))
+        try:
+            memory_bundle = fut_m.result(timeout=timeout_s)
+        except FuturesTimeout:
+            memory_bundle = _empty_memory()
+            degrade(
+                component="user_memory",
+                reason="memory retrieval timed out; continuing with empty memory bundle",
+                stage="retrieve",
+                retryable=True,
+                error_kind="timeout",
+            )
+        except Exception as exc:
+            memory_bundle = _empty_memory()
+            degrade(
+                component="user_memory",
+                reason="memory retrieval failed; continuing with empty memory bundle",
+                stage="retrieve",
+                retryable=True,
+                error_kind=type(exc).__name__,
+            )
+        try:
+            evidence_bundle = fut_e.result(timeout=timeout_s)
+        except FuturesTimeout:
+            evidence_bundle = _empty_evidence()
+            degrade(
+                component="world_knowledge",
+                reason="world retrieval timed out; continuing with empty world evidence",
+                stage="retrieve",
+                retryable=True,
+                error_kind="timeout",
+            )
+        except Exception as exc:
+            evidence_bundle = _empty_evidence()
+            degrade(
+                component="world_knowledge",
+                reason="world retrieval failed; continuing with empty world evidence",
+                stage="retrieve",
+                retryable=True,
+                error_kind=type(exc).__name__,
+            )
     memory_bundle = _augment_memory_with_graph(
         memory_bundle,
         user_state,
@@ -232,6 +325,7 @@ def finalize_trace(
     user_memory: UserMemory | None = None,
     original_user_input: str = "",
     anchor_now_iso: str | None = None,
+    resilience_events: list[dict[str, Any]] | None = None,
 ) -> DecisionTrace:
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
     recommendation = recommend(
@@ -263,6 +357,14 @@ def finalize_trace(
         evaluations=evaluations,
         recommendation=recommendation,
         reflection=placeholder,
+        resilience={
+            "fallback_mode": bool(resilience_events),
+            "brownout_signal": any(
+                str((e or {}).get("error_kind") or "").strip().lower() == "brownout"
+                for e in (resilience_events or [])
+            ),
+            "events": list(resilience_events or []),
+        },
     )
     reflection = reflect(trace, llm)
     trace = trace.model_copy(update={"reflection": reflection})
@@ -291,110 +393,156 @@ def iter_pipeline_events(
     save_clarification_to_profile: bool = False,
     preserve_raw_input: bool = False,
     clarification_profile_merge_done_externally: bool = False,
+    resume_from_stage: str | None = None,
+    resume_partial: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield meta, partial trace fragments per stage, then ``complete`` (SSE)."""
     settings = ctx.settings or load_settings()
+    run_token = start_resilience_run()
+    probe_linear_mcp()
+    for provider in ("openai", "tavily"):
+        mode = chaos_mode(provider)
+        if mode:
+            degrade(
+                component=provider,
+                reason=f"chaos injection enabled ({mode})",
+                stage="infra_probe",
+                retryable=True,
+                error_kind=mode,
+            )
     did = decision_id or str(uuid.uuid4())
     ts = timestamp or utc_timestamp()
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
+    resume_idx = _stage_index(resume_from_stage)
+    resumed = resume_idx > 0
 
-    yield {"event": "meta", "decision_id": did, "timestamp": ts}
+    try:
+        yield {"event": "meta", "decision_id": did, "timestamp": ts}
+        if resumed:
+            yield {
+                "event": "degraded",
+                "degraded": degrade(
+                    component="pipeline",
+                    reason=f"resuming run from stage {resume_from_stage}",
+                    stage=resume_from_stage or "unknown",
+                    retryable=True,
+                    error_kind="stage_resume",
+                ),
+            }
 
-    yield {"event": "stage", "stage": "enhance"}
-    profile = load_user_profile(settings)
-    user_raw = raw_input.strip()
-    effective = merge_clarification_answers(user_raw, clarification_answers)
-    if preserve_raw_input:
-        original, enhanced = user_raw, user_raw
-    else:
-        original, enhanced = prepare_decision_text(
-            effective,
-            ctx.llm,
-            profile=profile,
-            original_override=user_raw,
+        profile = load_user_profile(settings)
+        user_raw = raw_input.strip()
+        original = str(_resume_get_obj(resume_partial, "original_user_input") or "").strip()
+        enhanced = str(_resume_get_obj(resume_partial, "enhanced_preview") or "").strip()
+        if resume_idx <= 0 or not original or not enhanced:
+            yield {"event": "stage", "stage": "enhance"}
+            effective = merge_clarification_answers(user_raw, clarification_answers)
+            if preserve_raw_input:
+                original, enhanced = user_raw, user_raw
+            else:
+                original, enhanced = prepare_decision_text(
+                    effective,
+                    ctx.llm,
+                    profile=profile,
+                    original_override=user_raw,
+                )
+            yield {
+                "event": "partial",
+                "stage": "enhance",
+                "data": {"original_user_input": original, "enhanced_preview": enhanced},
+            }
+
+        user_state = _resume_model(UserState, resume_partial, "user_state")
+        if resume_idx <= 1 or user_state is None:
+            yield {"event": "stage", "stage": "perceive"}
+            user_state = build_user_state(enhanced, ctx.llm, profile=profile)
+            user_state = merge_profile_into_user_state(user_state, profile)
+            user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
+            yield {
+                "event": "partial",
+                "stage": "perceive",
+                "data": {"user_state": user_state.model_dump(mode="json")},
+            }
+
+        memory_bundle = _resume_model(MemoryBundle, resume_partial, "memory")
+        evidence_bundle = _resume_model(EvidenceBundle, resume_partial, "evidence")
+        if resume_idx <= 2 or memory_bundle is None or evidence_bundle is None:
+            yield {"event": "stage", "stage": "retrieve"}
+            memory_bundle, evidence_bundle = retrieve_bundles_parallel(
+                user_state, ctx, exclude_decision_id=did
+            )
+            yield {
+                "event": "partial",
+                "stage": "retrieve",
+                "data": {
+                    "memory": memory_bundle.model_dump(mode="json"),
+                    "evidence": evidence_bundle.model_dump(mode="json"),
+                },
+            }
+
+        rationality = _resume_model(RationalityReport, resume_partial, "rationality")
+        options = _resume_model_list(Option, resume_partial, "options")
+        if resume_idx <= 3 or rationality is None or options is None:
+            yield {"event": "stage", "stage": "infer"}
+            rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
+            yield {
+                "event": "partial",
+                "stage": "infer",
+                "data": {
+                    "rationality": rationality.model_dump(mode="json"),
+                    "options": [o.model_dump(mode="json") for o in options],
+                },
+            }
+
+        futures = _resume_model_list(SimulatedFuture, resume_partial, "futures")
+        if resume_idx <= 4 or futures is None:
+            yield {"event": "stage", "stage": "simulate"}
+            futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
+            yield {
+                "event": "partial",
+                "stage": "simulate",
+                "data": {"futures": [f.model_dump(mode="json") for f in futures]},
+            }
+
+        evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
+        if resume_idx <= 5 or evaluations is None:
+            yield {"event": "stage", "stage": "evaluate"}
+            evaluations = evaluate_options(futures, user_state, ctx.llm)
+            yield {
+                "event": "partial",
+                "stage": "evaluate",
+                "data": {"evaluations": [e.model_dump(mode="json") for e in evaluations]},
+            }
+
+        yield {"event": "stage", "stage": "finalize"}
+        trace = finalize_trace(
+            decision_id=did,
+            timestamp=ts,
+            user_state=user_state,
+            memory_bundle=memory_bundle,
+            evidence_bundle=evidence_bundle,
+            rationality=rationality,
+            options=options,
+            futures=futures,
+            evaluations=evaluations,
+            llm=ctx.llm,
+            persist_trace=persist_trace,
+            settings=settings,
+            user_memory=ctx.user_memory,
+            original_user_input=original,
+            anchor_now_iso=anchor,
+            resilience_events=current_run_events(),
         )
-    yield {
-        "event": "partial",
-        "stage": "enhance",
-        "data": {"original_user_input": original, "enhanced_preview": enhanced},
-    }
-
-    yield {"event": "stage", "stage": "perceive"}
-    user_state = build_user_state(enhanced, ctx.llm, profile=profile)
-    user_state = merge_profile_into_user_state(user_state, profile)
-    user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
-    yield {
-        "event": "partial",
-        "stage": "perceive",
-        "data": {"user_state": user_state.model_dump(mode="json")},
-    }
-
-    yield {"event": "stage", "stage": "retrieve"}
-    memory_bundle, evidence_bundle = retrieve_bundles_parallel(
-        user_state, ctx, exclude_decision_id=did
-    )
-    yield {
-        "event": "partial",
-        "stage": "retrieve",
-        "data": {
-            "memory": memory_bundle.model_dump(mode="json"),
-            "evidence": evidence_bundle.model_dump(mode="json"),
-        },
-    }
-
-    yield {"event": "stage", "stage": "infer"}
-    rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
-    yield {
-        "event": "partial",
-        "stage": "infer",
-        "data": {
-            "rationality": rationality.model_dump(mode="json"),
-            "options": [o.model_dump(mode="json") for o in options],
-        },
-    }
-
-    yield {"event": "stage", "stage": "simulate"}
-    futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
-    yield {
-        "event": "partial",
-        "stage": "simulate",
-        "data": {"futures": [f.model_dump(mode="json") for f in futures]},
-    }
-
-    yield {"event": "stage", "stage": "evaluate"}
-    evaluations = evaluate_options(futures, user_state, ctx.llm)
-    yield {
-        "event": "partial",
-        "stage": "evaluate",
-        "data": {"evaluations": [e.model_dump(mode="json") for e in evaluations]},
-    }
-
-    yield {"event": "stage", "stage": "finalize"}
-    trace = finalize_trace(
-        decision_id=did,
-        timestamp=ts,
-        user_state=user_state,
-        memory_bundle=memory_bundle,
-        evidence_bundle=evidence_bundle,
-        rationality=rationality,
-        options=options,
-        futures=futures,
-        evaluations=evaluations,
-        llm=ctx.llm,
-        persist_trace=persist_trace,
-        settings=settings,
-        user_memory=ctx.user_memory,
-        original_user_input=original,
-        anchor_now_iso=anchor,
-    )
-    if (
-        save_clarification_to_profile
-        and clarification_answers
-        and not clarification_profile_merge_done_externally
-    ):
-        p = append_clarification_to_profile(load_user_profile(settings), clarification_answers)
-        save_user_profile(p, settings=settings)
-    yield {"event": "complete", "trace": trace.model_dump(mode="json")}
+        if (
+            save_clarification_to_profile
+            and clarification_answers
+            and not clarification_profile_merge_done_externally
+        ):
+            p = append_clarification_to_profile(load_user_profile(settings), clarification_answers)
+            save_user_profile(p, settings=settings)
+        yield {"event": "complete", "trace": trace.model_dump(mode="json")}
+    finally:
+        end_resilience_run(run_token)
 
 
 def run_pipeline(
@@ -408,59 +556,96 @@ def run_pipeline(
     save_clarification_to_profile: bool = False,
     preserve_raw_input: bool = False,
     clarification_profile_merge_done_externally: bool = False,
+    resume_from_stage: str | None = None,
+    resume_partial: dict[str, Any] | None = None,
 ) -> DecisionTrace:
     """Execute the full RIS stack and return a ``DecisionTrace``; optionally save JSON under ``data/traces/``."""
     settings = ctx.settings or load_settings()
+    run_token = start_resilience_run()
+    probe_linear_mcp()
+    for provider in ("openai", "tavily"):
+        mode = chaos_mode(provider)
+        if mode:
+            degrade(
+                component=provider,
+                reason=f"chaos injection enabled ({mode})",
+                stage="infra_probe",
+                retryable=True,
+                error_kind=mode,
+            )
     did = decision_id or str(uuid.uuid4())
     ts = utc_timestamp()
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
 
-    profile = load_user_profile(settings)
-    user_raw = raw_input.strip()
-    effective = merge_clarification_answers(user_raw, clarification_answers)
-    if preserve_raw_input:
-        original, enhanced = user_raw, user_raw
-    else:
-        original, enhanced = prepare_decision_text(
-            effective,
-            ctx.llm,
-            profile=profile,
-            original_override=user_raw,
+    try:
+        profile = load_user_profile(settings)
+        user_raw = raw_input.strip()
+        resume_idx = _stage_index(resume_from_stage)
+        original = str(_resume_get_obj(resume_partial, "original_user_input") or "").strip()
+        enhanced = str(_resume_get_obj(resume_partial, "enhanced_preview") or "").strip()
+        if resume_idx <= 0 or not original or not enhanced:
+            effective = merge_clarification_answers(user_raw, clarification_answers)
+            if preserve_raw_input:
+                original, enhanced = user_raw, user_raw
+            else:
+                original, enhanced = prepare_decision_text(
+                    effective,
+                    ctx.llm,
+                    profile=profile,
+                    original_override=user_raw,
+                )
+
+        user_state = _resume_model(UserState, resume_partial, "user_state")
+        if resume_idx <= 1 or user_state is None:
+            user_state = build_user_state(enhanced, ctx.llm, profile=profile)
+            user_state = merge_profile_into_user_state(user_state, profile)
+            user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
+
+        memory_bundle = _resume_model(MemoryBundle, resume_partial, "memory")
+        evidence_bundle = _resume_model(EvidenceBundle, resume_partial, "evidence")
+        if resume_idx <= 2 or memory_bundle is None or evidence_bundle is None:
+            memory_bundle, evidence_bundle = retrieve_bundles_parallel(
+                user_state, ctx, exclude_decision_id=did
+            )
+
+        rationality = _resume_model(RationalityReport, resume_partial, "rationality")
+        options = _resume_model_list(Option, resume_partial, "options")
+        if resume_idx <= 3 or rationality is None or options is None:
+            rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
+
+        futures = _resume_model_list(SimulatedFuture, resume_partial, "futures")
+        if resume_idx <= 4 or futures is None:
+            futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
+
+        evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
+        if resume_idx <= 5 or evaluations is None:
+            evaluations = evaluate_options(futures, user_state, ctx.llm)
+
+        trace = finalize_trace(
+            decision_id=did,
+            timestamp=ts,
+            user_state=user_state,
+            memory_bundle=memory_bundle,
+            evidence_bundle=evidence_bundle,
+            rationality=rationality,
+            options=options,
+            futures=futures,
+            evaluations=evaluations,
+            llm=ctx.llm,
+            persist_trace=persist_trace,
+            settings=settings,
+            user_memory=ctx.user_memory,
+            original_user_input=original,
+            anchor_now_iso=anchor,
+            resilience_events=current_run_events(),
         )
-    user_state = build_user_state(enhanced, ctx.llm, profile=profile)
-    user_state = merge_profile_into_user_state(user_state, profile)
-    user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
-    memory_bundle, evidence_bundle = retrieve_bundles_parallel(
-        user_state, ctx, exclude_decision_id=did
-    )
-
-    rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
-
-    futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
-    evaluations = evaluate_options(futures, user_state, ctx.llm)
-
-    trace = finalize_trace(
-        decision_id=did,
-        timestamp=ts,
-        user_state=user_state,
-        memory_bundle=memory_bundle,
-        evidence_bundle=evidence_bundle,
-        rationality=rationality,
-        options=options,
-        futures=futures,
-        evaluations=evaluations,
-        llm=ctx.llm,
-        persist_trace=persist_trace,
-        settings=settings,
-        user_memory=ctx.user_memory,
-        original_user_input=original,
-        anchor_now_iso=anchor,
-    )
-    if (
-        save_clarification_to_profile
-        and clarification_answers
-        and not clarification_profile_merge_done_externally
-    ):
-        p = append_clarification_to_profile(load_user_profile(settings), clarification_answers)
-        save_user_profile(p, settings=settings)
-    return trace
+        if (
+            save_clarification_to_profile
+            and clarification_answers
+            and not clarification_profile_merge_done_externally
+        ):
+            p = append_clarification_to_profile(load_user_profile(settings), clarification_answers)
+            save_user_profile(p, settings=settings)
+        return trace
+    finally:
+        end_resilience_run(run_token)

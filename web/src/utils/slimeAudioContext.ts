@@ -21,6 +21,7 @@ export function unlockSlimeAudioContext(): AudioContext | null {
 }
 
 export type PlayMp3WithWebAudioHooks = {
+  onStart?: () => void;
   onEnded: () => void;
   trackSource?: (node: AudioBufferSourceNode | null) => void;
 };
@@ -54,6 +55,7 @@ export async function playMp3BlobWithWebAudio(blob: Blob, hooks: PlayMp3WithWebA
   };
   try {
     src.start(0);
+    hooks.onStart?.();
     return true;
   } catch {
     hooks.trackSource?.(null);

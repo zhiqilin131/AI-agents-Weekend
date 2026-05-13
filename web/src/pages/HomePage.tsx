@@ -41,6 +41,15 @@ type StreamOpts = {
   clarification_answers?: Record<string, string>;
   save_clarification_to_profile?: boolean;
   preserve_raw_input?: boolean;
+  resume_from_stage?: string;
+  resume_partial?: Record<string, unknown>;
+};
+
+type DegradeNotice = {
+  at: string;
+  message: string;
+  stage?: string;
+  retryable?: boolean;
 };
 
 type Tier3ProfileView = {
@@ -91,7 +100,14 @@ export default function HomePage() {
   const [clarifyPayload, setClarifyPayload] = useState<{ questions: ClarifyQuestion[]; note: string } | null>(null);
   /** Shown only when clarify fails or LLM is missing — not when the model simply says no extra questions. */
   const [clarifyGateHint, setClarifyGateHint] = useState<string | null>(null);
+  const [degradeNotices, setDegradeNotices] = useState<DegradeNotice[]>([]);
+  const [lastFailedStage, setLastFailedStage] = useState<string | null>(null);
+  const loadingStageRef = useRef<string | null>(null);
+  useEffect(() => {
+    loadingStageRef.current = loadingStage;
+  }, [loadingStage]);
   const prevTraceIdRef = useRef<string | undefined>(undefined);
+  const retrySnapshotRef = useRef<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     const prev = prevTraceIdRef.current;
@@ -180,10 +196,14 @@ export default function HomePage() {
       setRunStageLabel('Connecting to pipeline…');
       setLiveTrace(null);
       setFullTrace(null);
+      setLastFailedStage(null);
+      setDegradeNotices([]);
+      if (!opts?.resume_from_stage) retrySnapshotRef.current = null;
 
       const controller = new AbortController();
       const RUN_TIMEOUT_MS = 300_000;
       const timeoutId = window.setTimeout(() => controller.abort(), RUN_TIMEOUT_MS);
+      let streamTrace: Record<string, unknown> | null = opts?.resume_partial ?? null;
 
       try {
         const body: Record<string, unknown> = {
@@ -196,6 +216,12 @@ export default function HomePage() {
         }
         if (opts?.preserve_raw_input) {
           body.preserve_raw_input = true;
+        }
+        if (opts?.resume_from_stage) {
+          body.resume_from_stage = opts.resume_from_stage;
+          if (opts.resume_partial && typeof opts.resume_partial === 'object') {
+            body.resume_partial = opts.resume_partial;
+          }
         }
         if (runModelOptionId) {
           body.model_option_id = runModelOptionId;
@@ -263,21 +289,42 @@ export default function HomePage() {
           }
           if (data.event === 'meta') {
             if (typeof data.decision_id === 'string') {
-              setLiveTrace((prev) => ({
-                ...(prev ?? {}),
+              streamTrace = {
+                ...(streamTrace ?? {}),
                 decision_id: data.decision_id,
                 ...(typeof data.timestamp === 'string' ? { timestamp: data.timestamp } : {}),
-              }));
+              };
+              retrySnapshotRef.current = streamTrace;
+              setLiveTrace(streamTrace);
             }
           }
           if (data.event === 'partial' && data.data && typeof data.data === 'object') {
-            setLiveTrace((prev) => mergeStreamingPartial(prev, data.data as Record<string, unknown>));
+            streamTrace = mergeStreamingPartial(streamTrace, data.data as Record<string, unknown>);
+            retrySnapshotRef.current = streamTrace;
+            setLiveTrace(streamTrace);
           }
           if (data.event === 'stage' && typeof data.stage === 'string') {
             const st = data.stage;
             setLoadingStage(st);
             setRunProgress(stageToProgress(st));
             setRunStageLabel(STAGE_LABEL[st] ?? st);
+          }
+          if (data.event === 'degraded' && data.degraded && typeof data.degraded === 'object') {
+            const d = data.degraded as Record<string, unknown>;
+            const msg = String(d.reason || 'Running in degraded mode');
+            const key = `${String(d.at || '')}:${msg}`;
+            setDegradeNotices((prev) => {
+              if (prev.some((x) => `${x.at}:${x.message}` === key)) return prev;
+              return [
+                ...prev.slice(-3),
+                {
+                  at: String(d.at || new Date().toISOString()),
+                  message: msg,
+                  stage: String(d.stage || ''),
+                  retryable: Boolean(d.retryable),
+                },
+              ];
+            });
           }
           if (data.event === 'complete' && data.trace && typeof data.trace === 'object') {
             trace = data.trace as Record<string, unknown>;
@@ -305,6 +352,7 @@ export default function HomePage() {
         setTracePath(path);
         setClarifyGateHint(null);
         setState('result');
+        retrySnapshotRef.current = null;
         void loadTier3Profile();
         const tid = trace.decision_id;
         if (typeof tid === 'string' && tid) {
@@ -317,8 +365,10 @@ export default function HomePage() {
             'Run timed out (5 min). Ensure API is on 8765 (`npm run dev:all` from web/ or `python -m uvicorn …`), OPENAI_API_KEY is set, and `.env.development` has VITE_API_ORIGIN=http://127.0.0.1:8765 for streaming.';
         }
         setError(msg);
+        setLastFailedStage(loadingStageRef.current);
         setClarifyGateHint(null);
         setState('empty');
+        if (streamTrace) retrySnapshotRef.current = streamTrace;
         setLiveTrace(null);
       } finally {
         window.clearTimeout(timeoutId);
@@ -506,6 +556,17 @@ export default function HomePage() {
 
       <DecisionQuestionStrip decisionInput={decisionInput} report={displayReport} />
 
+      {degradeNotices.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-200/90 bg-amber-50/95 px-4 py-2.5 text-xs text-amber-950">
+          <p className="font-semibold">Degraded mode detected</p>
+          <ul className="mt-1 space-y-1">
+            {degradeNotices.slice(-2).map((n) => (
+              <li key={`${n.at}:${n.message}`}>{n.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {clarifyGateHint && state === 'loading' && (
         <div className="mb-4 text-xs text-amber-950 bg-amber-50/95 border border-amber-200/80 rounded-xl px-4 py-2.5 leading-relaxed">
           {clarifyGateHint}
@@ -614,6 +675,25 @@ export default function HomePage() {
                 {error && (
                   <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>
                 )}
+                {error && lastFailedStage ? (
+                  <div className="mb-6 rounded-2xl border border-amber-200/90 bg-amber-50/95 p-3 text-sm text-amber-950">
+                    <p className="font-medium">
+                      Last failed stage: {STAGE_LABEL[lastFailedStage] ?? lastFailedStage}
+                    </p>
+                    <button
+                      type="button"
+                      className="mt-2 rounded-full border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                      onClick={() => {
+                        void runPipelineStream({
+                          resume_from_stage: lastFailedStage,
+                          resume_partial: retrySnapshotRef.current ?? undefined,
+                        });
+                      }}
+                    >
+                      Retry this stage
+                    </button>
+                  </div>
+                ) : null}
 
                 <div className="mx-auto max-w-xl text-center">
                   <SlimeLandingCta profile={slimeProfile} onClick={() => navigate('/buddy')} />

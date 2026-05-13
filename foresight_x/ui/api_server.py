@@ -54,6 +54,7 @@ from foresight_x.perception.personalized_clarify import (
     persist_clarification_followup,
     run_personalized_clarify_gate,
 )
+from foresight_x.resilience.runtime import current_run_events, resilience_health_report
 from foresight_x.profile.merge import (
     append_profile_memory_records,
     delete_memory_fact_by_id,
@@ -406,6 +407,8 @@ def _auth_exempt_path(path: str) -> bool:
         return True
     if p == "/api/health":
         return True
+    if p == "/api/health/resilience":
+        return True
     return False
 
 
@@ -597,6 +600,10 @@ class RunRequest(BaseModel):
     save_clarification_to_profile: bool = Field(default=False)
     #: When true, skip query-enhancement rewrite and use user's raw input verbatim.
     preserve_raw_input: bool = Field(default=False)
+    #: Resume streaming from a failed stage (enhance|perceive|retrieve|infer|simulate|evaluate|finalize).
+    resume_from_stage: str | None = Field(default=None, max_length=32)
+    #: Partial trace/state snapshot from client for true stage resume.
+    resume_partial: dict[str, Any] | None = Field(default=None)
 
 
 class ExternalEventRequest(BaseModel):
@@ -671,6 +678,35 @@ def health() -> dict[str, str]:
     }
 
 
+@app.get("/api/health/resilience")
+def resilience_health() -> dict[str, Any]:
+    """Operational resilience report card for chaos/demo checks."""
+    from foresight_x import __version__
+
+    report = resilience_health_report()
+    providers = report.get("providers") if isinstance(report, dict) else {}
+    p = providers if isinstance(providers, dict) else {}
+    openai_calls = float(((p.get("openai") or {}) if isinstance(p.get("openai"), dict) else {}).get("calls_total", 0.0))
+    openai_errors = float(((p.get("openai") or {}) if isinstance(p.get("openai"), dict) else {}).get("error_total", 0.0))
+    tavily_calls = float(((p.get("tavily") or {}) if isinstance(p.get("tavily"), dict) else {}).get("calls_total", 0.0))
+    tavily_errors = float(((p.get("tavily") or {}) if isinstance(p.get("tavily"), dict) else {}).get("error_total", 0.0))
+    completed = max(1.0, openai_calls + tavily_calls)
+    fallback_rate = min(1.0, max(0.0, (openai_errors + tavily_errors) / completed))
+    return {
+        "status": "ok",
+        "version": __version__,
+        "api": "foresight-x",
+        "report_card": {
+            "p0_slo": "No uncaught 500 during provider outages in decision paths",
+            "p1_slo": "Graceful degradation with user-visible warning",
+            "fallback_completion_rate": round(1.0 - fallback_rate, 4),
+            "fallback_mode_rate": round(fallback_rate, 4),
+            "mttr_seconds_estimate": 30,
+        },
+        "runtime": report,
+    }
+
+
 @app.get("/")
 def root() -> dict[str, object]:
     return {
@@ -678,6 +714,7 @@ def root() -> dict[str, object]:
         "status": "ok",
         "routes": [
             "/api/health",
+            "/api/health/resilience",
             "/api/me",
             "/api/usage/credits",
             "/api/usage/transactions",
@@ -961,6 +998,8 @@ def run_decision(body: RunRequest, request: Request):
             save_clarification_to_profile=body.save_clarification_to_profile,
             preserve_raw_input=body.preserve_raw_input,
             clarification_profile_merge_done_externally=merge_done,
+            resume_from_stage=body.resume_from_stage,
+            resume_partial=body.resume_partial,
         )
         _try_create_decision_followup(settings, trace, None)
         trace_path = settings.traces_dir / f"{trace.decision_id}.json"
@@ -999,6 +1038,7 @@ def run_decision_stream(body: RunRequest, request: Request):
         try:
             yield _sse_chunk({"event": "notes", "notes": notes})
             merge_done = False
+            sent_degrade = 0
             if body.clarification_answers:
                 persist_clarification_followup(
                     settings,
@@ -1018,13 +1058,25 @@ def run_decision_stream(body: RunRequest, request: Request):
                 save_clarification_to_profile=body.save_clarification_to_profile,
                 preserve_raw_input=body.preserve_raw_input,
                 clarification_profile_merge_done_externally=merge_done,
+                resume_from_stage=body.resume_from_stage,
+                resume_partial=body.resume_partial,
             ):
+                run_degrade = current_run_events()
+                if sent_degrade < len(run_degrade):
+                    for d in run_degrade[sent_degrade:]:
+                        yield _sse_chunk({"event": "degraded", "degraded": d})
+                    sent_degrade = len(run_degrade)
                 if ev.get("event") == "complete" and isinstance(ev.get("trace"), dict):
                     tid = ev["trace"].get("decision_id")
                     if isinstance(tid, str) and tid:
                         ev = {**ev, "trace_path": str(settings.traces_dir / f"{tid}.json")}
                     _try_create_decision_followup(settings, ev["trace"], None)
                 yield _sse_chunk(ev)
+            run_degrade = current_run_events()
+            if sent_degrade < len(run_degrade):
+                for d in run_degrade[sent_degrade:]:
+                    yield _sse_chunk({"event": "degraded", "degraded": d})
+                sent_degrade = len(run_degrade)
         except Exception as e:
             if tx is not None:
                 refund_for_transaction(tx, "Decision stream failed", settings=settings)
@@ -1908,6 +1960,8 @@ class ShadowDecisionReportStreamRequest(BaseModel):
     save_clarification_to_profile: bool = Field(default=False)
     credit_request_id: str | None = Field(default=None, max_length=200)
     model_option_id: str | None = Field(default=None, max_length=64)
+    resume_from_stage: str | None = Field(default=None, max_length=32)
+    resume_partial: dict[str, Any] | None = Field(default=None)
 
 
 class ShadowReportContextRequest(BaseModel):
@@ -2404,6 +2458,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         append_temporary_context_items(thread, out.thread_only_items)
         thread_context_kept = bool(out.thread_only_items)
         profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
+        profile_update_details = list(out.profile_memory_events or [])
         append_message(
             thread,
             role="assistant",
@@ -2415,7 +2470,12 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         )
         if profile_updates:
             thread.setdefault("memory_events", []).append(
-                {"kind": "profile_update", "items": profile_updates[:4], "at": _utc_now()}
+                {
+                    "kind": "profile_update",
+                    "items": profile_updates[:4],
+                    "details": profile_update_details[:4],
+                    "at": _utc_now(),
+                }
             )
         _finalize_shadow_thread_turn(thread, settings=settings)
         suggestion = _build_shadow_suggestion(
@@ -2716,9 +2776,10 @@ def stream_shadow_chat_message(
             for chunk in _chunk_text(text):
                 yield _sse_chunk({"type": "delta", "content": chunk})
             profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
+            profile_update_details = list(out.profile_memory_events or [])
             if profile_updates:
                 yield _sse_chunk({"type": "status", "status": "updating_profile", "label": "Updating profile..."})
-                yield _sse_chunk({"type": "profile_update", "items": profile_updates[:4]})
+                yield _sse_chunk({"type": "profile_update", "items": profile_updates[:4], "details": profile_update_details[:4]})
             elif out.thread_only_items and not out.memory_confirmation_question:
                 yield _sse_chunk(
                     {
@@ -2737,7 +2798,12 @@ def stream_shadow_chat_message(
             )
             if profile_updates:
                 thread.setdefault("memory_events", []).append(
-                    {"kind": "profile_update", "items": profile_updates[:4], "at": _utc_now()}
+                    {
+                        "kind": "profile_update",
+                        "items": profile_updates[:4],
+                        "details": profile_update_details[:4],
+                        "at": _utc_now(),
+                    }
                 )
             _finalize_shadow_thread_turn(thread, settings=settings)
 
@@ -2956,6 +3022,7 @@ def stream_shadow_decision_report(
                     llm=ctx.llm,
                 )
             first_meta_at: datetime | None = None
+            sent_degrade = 0
             for ev in iter_pipeline_events(
                 ctx,
                 prompt,
@@ -2963,7 +3030,21 @@ def stream_shadow_decision_report(
                 clarification_answers=body.clarification_answers,
                 save_clarification_to_profile=body.save_clarification_to_profile,
                 clarification_profile_merge_done_externally=bool(body.clarification_answers),
+                resume_from_stage=body.resume_from_stage,
+                resume_partial=body.resume_partial,
             ):
+                run_degrade = current_run_events()
+                if sent_degrade < len(run_degrade):
+                    for d in run_degrade[sent_degrade:]:
+                        yield _sse_chunk(
+                            {
+                                "type": "warning",
+                                "kind": "degraded_mode",
+                                "message": str(d.get("reason") or "Running in degraded mode"),
+                                "degraded": d,
+                            }
+                        )
+                    sent_degrade = len(run_degrade)
                 if ev.get("event") == "meta":
                     first_meta_at = datetime.now(timezone.utc)
                     yield _sse_chunk({"type": "status", "status": "report_generating", "label": "Structuring decision"})
@@ -3021,6 +3102,18 @@ def stream_shadow_decision_report(
                         }
                     )
                     return
+            run_degrade = current_run_events()
+            if sent_degrade < len(run_degrade):
+                for d in run_degrade[sent_degrade:]:
+                    yield _sse_chunk(
+                        {
+                            "type": "warning",
+                            "kind": "degraded_mode",
+                            "message": str(d.get("reason") or "Running in degraded mode"),
+                            "degraded": d,
+                        }
+                    )
+                sent_degrade = len(run_degrade)
             if credit_tx is not None:
                 refund_for_transaction(credit_tx, "Decision report stream incomplete", settings=settings)
             yield _sse_chunk({"type": "error", "message": "Pipeline ended without a complete report."})
@@ -3753,6 +3846,7 @@ def _run_slime_voice_pipeline(
         process_conversation_turn,
     )
     from foresight_x.chat.thread_store import append_message
+    from foresight_x.profile.proactive_memory import capture_turn_memory
     from foresight_x.shadow.thread_summary import maybe_update_thread_summary
     from foresight_x.voice.asr import transcribe_audio
     from foresight_x.voice.slime_voice_router import SlimeVoiceContext, route_slime_voice_command
@@ -3920,12 +4014,21 @@ def _run_slime_voice_pipeline(
         timing["tool_execute_ms"] = tool_ms
         timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
 
-        append_message(
+        user_row = append_message(
             thread,
             role="user",
             content=transcript,
             mode="normal",
             metadata_extra={"interaction_source": "slime_voice", "modality": "voice"},
+        )
+        memory_capture = capture_turn_memory(
+            settings=settings,
+            user_text=transcript,
+            assistant_text=assistant_text,
+            source_chat="slime_voice",
+            source_thread_id=resolved_tid,
+            source_message_id=str(user_row.get("id") or ""),
+            llm_model=llm_model,
         )
         append_message(
             thread,
@@ -3933,7 +4036,27 @@ def _run_slime_voice_pipeline(
             content=assistant_text,
             mode="normal",
             memory_used=route.tool_name == "search_memory",
+            profile_updated=bool(memory_capture.saved_texts),
         )
+        if memory_capture.saved_texts:
+            thread.setdefault("memory_events", []).append(
+                {
+                    "kind": "profile_update",
+                    "items": memory_capture.saved_texts[:4],
+                    "details": memory_capture.events[:4],
+                    "at": _utc_now(),
+                }
+            )
+            try:
+                from foresight_x.memory_graph import TemporalGraphMemory
+
+                if settings.graph_enabled:
+                    TemporalGraphMemory(settings.foresight_user_id, settings=settings).record_shadow_event(
+                        transcript,
+                        assistant_text,
+                    )
+            except Exception:
+                pass
         maybe_update_thread_summary(thread, settings=settings)
 
         voice_ui: dict[str, Any] = {
@@ -3954,7 +4077,8 @@ def _run_slime_voice_pipeline(
             "thread_id": resolved_tid,
             "intent": route.intent,
             "decision_suggestion": None,
-            "memory_updates": [],
+            "memory_updates": memory_capture.saved_texts,
+            "memory_update_details": memory_capture.events,
             "tool_call": {"name": route.tool_name, "arguments": route.arguments},
             "tool_result": tool_result,
             "frontend_action": fe,
@@ -4000,6 +4124,7 @@ def _run_slime_voice_pipeline(
         "intent": str(turn.get("intent") or route.intent),
         "decision_suggestion": ds,
         "memory_updates": turn.get("memory_updates") or [],
+        "memory_update_details": turn.get("memory_update_details") or [],
         "tool_call": {"name": route.tool_name, "arguments": route.arguments},
         "tool_result": {"ok": True, "conversation_turn": True},
         "frontend_action": fe_out,

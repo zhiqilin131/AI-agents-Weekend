@@ -53,10 +53,11 @@ def evidence_items_from_hits(hits: list[dict[str, Any]]) -> list[MemoryEvidenceI
             or h.get("thread_id")
             or f"{i}"
         )
+        score = h.get("rank_score", h.get("score"))
         eid = f"ev-{i}-{uuid.uuid4().hex[:8]}"
         if kind in ("about_me", "priority_line", "memory_fact"):
             typ: MemoryEvidenceType = "profile"
-            label = "Profile clue"
+            label = "Profile fact" if kind == "memory_fact" else "Profile note"
         elif kind in ("chat_message", "thread_summary"):
             typ = "chat_history"
             label = "Past chat"
@@ -77,7 +78,7 @@ def evidence_items_from_hits(hits: list[dict[str, Any]]) -> list[MemoryEvidenceI
                 shortText=short or label,
                 fullText=text[:4000] if text else None,
                 sourceId=sid[:120],
-                confidence=None,
+                confidence=float(score) if isinstance(score, int | float) else None,
             )
         )
     return out
@@ -90,6 +91,74 @@ def _prefix_for_persona(eff: EffectiveSlimePersona | None) -> str:
     if not nick or nick == "you":
         return ""
     return f"{nick}, "
+
+
+_EVIDENCE_STOPWORDS = {
+    "about",
+    "because",
+    "category",
+    "evidence",
+    "fact",
+    "from",
+    "identity",
+    "memory",
+    "note",
+    "profile",
+    "said",
+    "saved",
+    "structured",
+    "that",
+    "their",
+    "there",
+    "this",
+    "user",
+    "with",
+    "your",
+}
+
+
+def _evidence_texts(items: list[MemoryEvidenceItem]) -> list[str]:
+    return [
+        (it.fullText or it.shortText or "").replace("\n", " ").strip()
+        for it in items
+        if (it.fullText or it.shortText or "").strip()
+    ]
+
+
+def _clean_evidence_line(text: str, max_chars: int = 180) -> str:
+    t = " ".join((text or "").replace(" | ", ". ").split())
+    t = re.sub(r"\bstructured:\s*", "stored as ", t, flags=re.I)
+    t = re.sub(r"\bevidence:\s*", "evidence says ", t, flags=re.I)
+    t = t.strip(" .")
+    if len(t) > max_chars:
+        t = t[: max_chars - 1].rstrip() + "…"
+    return t
+
+
+def _meaningful_tokens(text: str) -> set[str]:
+    raw = re.findall(r"[a-zA-Z][a-zA-Z']{3,}|[\u4e00-\u9fff]{2,}", text or "")
+    return {t.lower().strip("'") for t in raw if t.lower().strip("'") not in _EVIDENCE_STOPWORDS}
+
+
+def _answer_uses_concrete_evidence(answer: str, items: list[MemoryEvidenceItem]) -> bool:
+    evidence_tokens: set[str] = set()
+    for text in _evidence_texts(items):
+        evidence_tokens.update(_meaningful_tokens(text))
+    if not evidence_tokens:
+        return True
+    answer_tokens = _meaningful_tokens(answer)
+    return bool(evidence_tokens & answer_tokens)
+
+
+def _is_direct_memory_question(query: str) -> bool:
+    q = (query or "").strip().lower()
+    return bool(
+        re.search(
+            r"\b(who is|who's|what is|what's|what do you know|do you remember|remember who|my life|about me)\b",
+            q,
+        )
+        or re.search(r"谁是|是谁|记得.*吗|关于我|我的生活|我是谁", query or "")
+    )
 
 
 def _heuristic_answer(
@@ -119,18 +188,21 @@ def _heuristic_answer(
             used_sources=[],
             should_show_evidence_drawer=False,
         )
-    bits = [it.shortText for it in items[:2] if it.shortText]
-    glue = " ".join(bits)
-    if playful and prefix:
-        mid = f"from what I’ve got saved, it looks like: {glue}"
+    lines = [_clean_evidence_line(x) for x in _evidence_texts(items[:4])]
+    lines = [x for x in lines if x]
+    glue = "; ".join(lines[:3])
+    if _is_direct_memory_question(user_query):
+        mid = f"I found this saved: {glue}"
+    elif playful and prefix:
+        mid = f"from what I’ve got saved, the concrete bits are: {glue}"
     else:
-        mid = f"I found a few clues in your saved stuff: {glue}"
-    tail = (" …" if len(items) > 2 else "") + " Open “View evidence” if you want the exact lines."
+        mid = f"I found these concrete notes: {glue}"
+    tail = (" …" if len(items) > 3 else "") + " Open “View evidence” for the exact lines."
     body = mid + tail
     msg = prefix + (body[0].lower() + body[1:] if prefix else body)
     return SlimeSynthesizedAnswer(
         assistant_text=msg,
-        confidence=0.45,
+        confidence=0.55,
         used_sources=sorted({it.type for it in items}),
         should_show_evidence_drawer=True,
     )
@@ -147,10 +219,13 @@ Evidence JSON (trusted; do not invent facts not supported here):
 {evidence_json}
 
 Rules:
-- Answer the question directly; match the persona's warmth, humor, tone, and reply length — stay grounded, not cutesy.
+- Answer the question directly with concrete details from Evidence JSON; match the persona's warmth, humor, tone, and reply length — stay grounded, not cutesy.
+- If the user asks a direct memory question ("who is my girlfriend?", "what is my life like?", "what do you know about me?"), the first sentence must state the specific remembered name/detail(s) or say exactly which part is missing.
+- For broad "what is my life like" questions, synthesize 2–4 concrete remembered details instead of giving advice.
 - If the persona specifies how to address the user, use it naturally once or twice, not every sentence.
 - If reply length is short, at most two short sentences.
 - Use only this evidence. If evidence is thin or conflicting, say so honestly and hedge.
+- Do NOT give generic relationship/life advice unless it is clearly tied to a retrieved fact.
 - Do NOT paste bullet lists, labels like "Profile memory:", or long quotes.
 - Do NOT say "from your profile memory" repeatedly or describe retrieval mechanics.
 - Keep it speakable (no markdown). Use at most one catchphrase if it fits naturally.
@@ -211,7 +286,7 @@ def synthesize_memory_answer(
         query=user_query.strip()[:2000],
         evidence_json=evidence_json,
     )
-    llm = build_openai_llm(settings, temperature=0.35)
+    llm = build_openai_llm(settings, temperature=0.2)
     try:
         raw = structured_predict(llm, _SynthOut, prompt)
     except Exception as e:
@@ -223,6 +298,8 @@ def synthesize_memory_answer(
         return _heuristic_answer(user_query, retrieved_evidence, eff=eff)
     # Strip accidental “From profile:” prefixes
     text = re.sub(r"^(from your profile|from profile|profile memory)\s*:?\s*", "", text, flags=re.I)
+    if not _answer_uses_concrete_evidence(text, retrieved_evidence):
+        return _heuristic_answer(user_query, retrieved_evidence, eff=eff)
     return SlimeSynthesizedAnswer(
         assistant_text=text[:1400],
         confidence=float(raw.confidence),

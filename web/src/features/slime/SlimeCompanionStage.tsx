@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { animate, motion, useMotionValue } from 'motion/react';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
+import { TypewriterText } from '../../app/components/TypewriterText';
 import { cn } from '../../app/components/ui/utils';
 import type { SlimeProfile } from '../../app/model';
+import type { SlimeSpeechOutput } from './SlimeVoiceAgent';
 
 /** Approximate radius of the slime “body” for obstacle clearance (viewport px). */
 const SLIME_FOOTPRINT_RADIUS = 78;
 const AVOID_RECT_PADDING = 10;
 const ROAM_SAMPLE_TRIES = 28;
-/** Buddy stays in upper–middle band: anchor height as fraction of stage (from top). */
-const SLIME_ANCHOR_Y_FRAC = 0.36;
+/** Buddy anchor: vertical fraction of stage (from top). 0.5 = centered in the stage; roam offsets apply from here. */
+const SLIME_ANCHOR_Y_FRAC = 0.5;
 /** Roam step default (px); larger for hide/pop teleport. */
 const ROAM_STEP_DEFAULT = 62;
 const ROAM_STEP_TELEPORT = 130;
@@ -55,7 +57,7 @@ function clampOffsetToStage(stageEl: HTMLElement | null, ox: number, oy: number)
 
 function computeDragLimits(stageEl: HTMLElement | null, roamXv: number, roamYv: number) {
   if (!stageEl || typeof window === 'undefined') {
-    return { left: -175, right: 175, top: -155, bottom: 52 };
+    return { left: -175, right: 175, top: -175, bottom: 175 };
   }
   const S = stageEl.getBoundingClientRect();
   const margin = SLIME_FOOTPRINT_RADIUS + 12;
@@ -110,16 +112,18 @@ function pickSafeRoamDelta(
 export function SlimeCompanionStage({
   profile,
   advisorState = 'idle',
+  speechOutput,
   className,
 }: {
   profile: SlimeProfile;
   advisorState?: SlimeAdvisorState;
+  speechOutput?: SlimeSpeechOutput | null;
   /** Merged onto the stage root (e.g. z-index vs voice UI layers). */
   className?: string;
 }) {
   const roamX = useMotionValue(0);
-  /** Start slightly above neutral so first paint matches “upper band” roam. */
-  const roamY = useMotionValue(-18);
+  /** Offset from stage anchor; 0 = anchor center (see SLIME_ANCHOR_Y_FRAC). */
+  const roamY = useMotionValue(0);
   const dragX = useMotionValue(0);
   const dragY = useMotionValue(0);
   const fade = useMotionValue(1);
@@ -129,7 +133,7 @@ export function SlimeCompanionStage({
   const draggingRef = useRef(false);
   const cancelledRef = useRef(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const [dragLim, setDragLim] = useState({ left: -175, right: 175, top: -155, bottom: 52 });
+  const [dragLim, setDragLim] = useState({ left: -175, right: 175, top: -175, bottom: 175 });
 
   const clampRoamIntoStage = () => {
     const el = stageRef.current;
@@ -138,6 +142,16 @@ export function SlimeCompanionStage({
     roamX.set(cl.x);
     roamY.set(cl.y);
   };
+
+  /** Every visit to Slime Buddy: start at stage center (no carry-over offset), then roam kicks in after the usual delay. */
+  useLayoutEffect(() => {
+    roamX.set(0);
+    roamY.set(0);
+    dragX.set(0);
+    dragY.set(0);
+    fade.set(1);
+    squish.set(1);
+  }, []);
 
   useEffect(() => {
     const el = stageRef.current;
@@ -216,11 +230,11 @@ export function SlimeCompanionStage({
       )}
     >
       <motion.div
-        className="pointer-events-auto absolute left-1/2 top-[36%] -translate-x-1/2 -translate-y-1/2"
+        className="pointer-events-auto absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
         style={{ x: roamX, y: roamY }}
       >
         <motion.div
-          className="-translate-x-1/2 -translate-y-1/2"
+          className="relative"
           style={{
             x: dragX,
             y: dragY,
@@ -269,6 +283,30 @@ export function SlimeCompanionStage({
             >
               <SlimeAdvisor state={advisorState} size="lg" profile={profile} companionMode />
             </motion.div>
+            {speechOutput?.text ? (
+              <motion.div
+                key={`${speechOutput.source}:${speechOutput.text}`}
+                initial={{ opacity: 0, y: 10, scale: 0.92, rotate: -1.5 }}
+                animate={{ opacity: 1, y: 0, scale: 1, rotate: 0 }}
+                exit={{ opacity: 0, y: 6, scale: 0.96 }}
+                transition={{ type: 'spring', stiffness: 420, damping: 26 }}
+                className={cn(
+                  'slime-comic-bubble pointer-events-none absolute left-[72%] top-[-18%] z-20 max-w-[min(74vw,25rem)]',
+                  speechOutput.source === 'error' && 'slime-comic-bubble-error',
+                  speechOutput.source === 'system' && 'slime-comic-bubble-system',
+                )}
+              >
+                <TypewriterText
+                  key={speechOutput.text}
+                  text={speechOutput.text}
+                  enabled
+                  as="p"
+                  charStep={2}
+                  intervalMs={18}
+                  className="break-keep text-[15px] font-medium leading-relaxed text-slate-800"
+                />
+              </motion.div>
+            ) : null}
           </motion.div>
         </motion.div>
       </motion.div>

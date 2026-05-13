@@ -107,6 +107,99 @@ class Settings(BaseSettings):
             "OPENAI_RESPONSES_CONTEXT_WINDOW",
         ),
     )
+    #: Client timeout for provider requests made through LlamaIndex OpenAI wrappers.
+    openai_request_timeout_sec: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=180.0,
+        validation_alias=AliasChoices("openai_request_timeout_sec", "OPENAI_REQUEST_TIMEOUT_SEC"),
+    )
+    fx_llm_primary: str = Field(
+        default="",
+        validation_alias=AliasChoices("fx_llm_primary", "FX_LLM_PRIMARY"),
+    )
+    fx_llm_fallback: str = Field(
+        default="",
+        validation_alias=AliasChoices("fx_llm_fallback", "FX_LLM_FALLBACK"),
+    )
+    fx_llm_failover_order: str = Field(
+        default="",
+        validation_alias=AliasChoices("fx_llm_failover_order", "FX_LLM_FAILOVER_ORDER"),
+    )
+    fx_llm_request_timeout_s: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=180.0,
+        validation_alias=AliasChoices("fx_llm_request_timeout_s", "FX_LLM_REQUEST_TIMEOUT_S"),
+    )
+    fx_llm_max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        validation_alias=AliasChoices("fx_llm_max_retries", "FX_LLM_MAX_RETRIES"),
+    )
+    #: Optional secondary OpenAI-compatible model for failover when primary repeatedly fails.
+    resilience_secondary_openai_model: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "resilience_secondary_openai_model",
+            "RESILIENCE_SECONDARY_OPENAI_MODEL",
+        ),
+    )
+    resilience_secondary_openai_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "resilience_secondary_openai_api_key",
+            "RESILIENCE_SECONDARY_OPENAI_API_KEY",
+        ),
+    )
+    resilience_secondary_openai_api_base: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "resilience_secondary_openai_api_base",
+            "RESILIENCE_SECONDARY_OPENAI_API_BASE",
+        ),
+    )
+    #: Generic retry attempts for transient provider faults.
+    resilience_retry_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=6,
+        validation_alias=AliasChoices("resilience_retry_attempts", "RESILIENCE_RETRY_ATTEMPTS"),
+    )
+    resilience_retry_backoff_ms: int = Field(
+        default=250,
+        ge=0,
+        le=5000,
+        validation_alias=AliasChoices("resilience_retry_backoff_ms", "RESILIENCE_RETRY_BACKOFF_MS"),
+    )
+    resilience_circuit_failure_threshold: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices(
+            "resilience_circuit_failure_threshold",
+            "RESILIENCE_CIRCUIT_FAILURE_THRESHOLD",
+        ),
+    )
+    resilience_circuit_open_sec: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=600.0,
+        validation_alias=AliasChoices("resilience_circuit_open_sec", "RESILIENCE_CIRCUIT_OPEN_SEC"),
+    )
+    resilience_brownout_latency_ms: int = Field(
+        default=9000,
+        ge=500,
+        le=120000,
+        validation_alias=AliasChoices("resilience_brownout_latency_ms", "RESILIENCE_BROWNOUT_LATENCY_MS"),
+    )
+    retrieve_parallel_timeout_sec: float = Field(
+        default=18.0,
+        ge=2.0,
+        le=120.0,
+        validation_alias=AliasChoices("retrieve_parallel_timeout_sec", "RETRIEVE_PARALLEL_TIMEOUT_SEC"),
+    )
     #: Slime model tiers: same OpenAI API key; map product ``model_option_id`` → ``OPENAI_MODEL_*`` env.
     enable_model_selector: bool = Field(
         default=True,
@@ -335,6 +428,12 @@ class Settings(BaseSettings):
         "openai_tts_model",
         "openai_tts_voice",
         "openai_tts_instructions",
+        "resilience_secondary_openai_api_key",
+        "resilience_secondary_openai_api_base",
+        "resilience_secondary_openai_model",
+        "fx_llm_primary",
+        "fx_llm_fallback",
+        "fx_llm_failover_order",
         "tavily_api_key",
         mode="before",
     )

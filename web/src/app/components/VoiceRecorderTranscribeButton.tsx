@@ -4,6 +4,7 @@ import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { apiFetch } from '../../utils/apiFetch';
 import { unlockSlimeAudioContext } from '../../utils/slimeAudioContext';
 import { cn } from './ui/utils';
+import { BuddyTooltip } from '../../features/slime/BuddyTooltip';
 
 type VoiceRecorderTranscribeButtonProps = {
   onTranscript: (text: string) => void;
@@ -123,48 +124,63 @@ export function VoiceRecorderTranscribeButton({
     >
       <div className="flex items-center gap-2">
         {showUploadFallback ? (
-          <label
-            className={cn(
-              'inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-gray-200 bg-white/80 px-3 py-2 text-xs hover:bg-white',
-              disabled || busy ? 'pointer-events-none opacity-50' : '',
-            )}
-          >
-            <Upload className="h-3.5 w-3.5 text-violet-600" aria-hidden />
-            <span>Upload audio</span>
-            <input
-              type="file"
-              accept="audio/*"
-              className="hidden"
-              disabled={disabled || busy}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void uploadAudio(f);
-                e.target.value = '';
-              }}
-            />
-          </label>
+          <BuddyTooltip content="Upload a short audio file; text is appended to the composer after server transcription.">
+            <label
+              className={cn(
+                'inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-gray-200 bg-white/80 px-3 py-2 text-xs hover:bg-white',
+                disabled || busy ? 'pointer-events-none opacity-50' : '',
+              )}
+            >
+              <Upload className="h-3.5 w-3.5 text-violet-600" aria-hidden />
+              <span>Upload audio</span>
+              <input
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                disabled={disabled || busy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void uploadAudio(f);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+          </BuddyTooltip>
         ) : null}
-        <button
-          type="button"
-          disabled={buttonDisabled}
-          onClick={() => void onMicClick()}
-          title={recording ? 'Stop and transcribe' : busy ? 'Transcribing…' : 'Voice input'}
-          aria-label={recording ? 'Stop recording' : 'Start voice input'}
-          aria-pressed={recording}
-          className={cn(
-            'relative inline-flex items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-md transition hover:scale-[1.03] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-40',
-            compact ? 'h-10 w-10' : 'h-14 w-14',
-            recording && 'ring-4 ring-cyan-300/80',
-          )}
+        <BuddyTooltip
+          content={
+            !supported
+              ? 'Voice capture is not supported in this browser.'
+              : busy && !recording
+                ? 'Transcribing your clip…'
+                : recording
+                  ? 'Stop recording and send audio for transcription.'
+                  : 'Record a short voice clip; it will be transcribed and inserted into the message box.'
+          }
         >
-          {busy ? (
-            <Loader2 className={cn('animate-spin', compact ? 'h-4 w-4' : 'h-6 w-6')} aria-hidden />
-          ) : recording ? (
-            <Square className={cn('fill-current', compact ? 'h-4 w-4' : 'h-6 w-6')} aria-hidden />
-          ) : (
-            <Mic className={cn(compact ? 'h-4 w-4' : 'h-6 w-6')} aria-hidden />
-          )}
-        </button>
+          <span className="inline-flex rounded-full">
+            <button
+              type="button"
+              disabled={buttonDisabled}
+              onClick={() => void onMicClick()}
+              aria-label={recording ? 'Stop recording' : 'Start voice input'}
+              aria-pressed={recording}
+              className={cn(
+                'relative inline-flex items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-md transition hover:scale-[1.03] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-40',
+                compact ? 'h-10 w-10' : 'h-14 w-14',
+                recording && 'ring-4 ring-cyan-300/80',
+              )}
+            >
+              {busy ? (
+                <Loader2 className={cn('animate-spin', compact ? 'h-4 w-4' : 'h-6 w-6')} aria-hidden />
+              ) : recording ? (
+                <Square className={cn('fill-current', compact ? 'h-4 w-4' : 'h-6 w-6')} aria-hidden />
+              ) : (
+                <Mic className={cn(compact ? 'h-4 w-4' : 'h-6 w-6')} aria-hidden />
+              )}
+            </button>
+          </span>
+        </BuddyTooltip>
       </div>
       {showError ? (
         <span className="max-w-[220px] text-right text-xs leading-snug text-amber-800">{showError}</span>

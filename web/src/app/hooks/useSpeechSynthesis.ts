@@ -37,6 +37,8 @@ type SpeakOptions = {
   pitch?: number;
   preferredVoiceName?: string;
   lang?: string;
+  /** Fired when the browser starts speaking the utterance. */
+  onUtteranceStart?: () => void;
   /** Fired ~600ms after speak() if nothing entered the queue (common when TTS runs after async work without a fresh gesture). */
   onMayHaveBlocked?: () => void;
   /** After utterance ends, errors, or speak() throws (e.g. Slime Buddy voiceState). */
@@ -156,6 +158,9 @@ export function useSpeechSynthesis() {
 
       u.onstart = () => {
         clearBlockTimer();
+        setIsSpeaking(true);
+        setIsPaused(false);
+        options?.onUtteranceStart?.();
       };
       u.onend = () => {
         clearBlockTimer();
@@ -177,8 +182,6 @@ export function useSpeechSynthesis() {
         // Must follow cancel() in the same synchronous turn as the click that called speak().
         // If we wait for voiceschanged / setTimeout, the browser treats speak() as non-gestured and stays silent.
         window.speechSynthesis.speak(u);
-        setIsSpeaking(true);
-        setIsPaused(false);
         scheduleBlockCheck();
       } catch (e) {
         clearBlockTimer();

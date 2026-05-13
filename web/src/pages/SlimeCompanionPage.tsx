@@ -2,15 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
-import { Ghost, Home, MessageSquare } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../app/components/ui/tooltip';
+import { Ghost, Home, MessageSquare, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionReportStreamingPanel';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
 import { SlimeCompanionStage } from '../features/slime/SlimeCompanionStage';
 import { SlimePersonalizationForm } from '../features/slime/SlimePersonalizationForm';
-import type { SlimeDecisionSuggestion } from '../features/slime/SlimeVoiceAgent';
+import type { SlimeDecisionSuggestion, SlimeSpeechOutput } from '../features/slime/SlimeVoiceAgent';
+import { BuddyTooltip } from '../features/slime/BuddyTooltip';
 import { SlimeVoiceAgent } from '../features/slime/SlimeVoiceAgent';
 import { MemoryEvidenceParticles } from '../app/components/profile/MemoryEvidenceParticles';
 import type { MemoryEvidenceItem } from '../app/components/profile/memoryEvidenceTypes';
@@ -32,6 +32,7 @@ function buddyThreadStorageKey(userId: string | null | undefined): string | null
 type BuddyCornerToast = {
   message: string;
   tone: 'memory_saved' | 'memory_retrieved' | 'neutral' | 'error';
+  details?: Array<{ action?: string; id?: string; text?: string; category?: string }>;
 };
 
 export default function SlimeCompanionPage() {
@@ -46,6 +47,7 @@ export default function SlimeCompanionPage() {
   const [buddyCornerToast, setBuddyCornerToast] = useState<BuddyCornerToast | null>(null);
   const buddyCornerToastTimerRef = useRef<number | null>(null);
   const [advisorState, setAdvisorState] = useState<SlimeAdvisorState>('idle');
+  const [speechOutput, setSpeechOutput] = useState<SlimeSpeechOutput | null>(null);
   const [memoryParticleItems, setMemoryParticleItems] = useState<MemoryEvidenceItem[]>([]);
   const [memoryParticlesActive, setMemoryParticlesActive] = useState(false);
   const [buddyThreadId, setBuddyThreadId] = useState<string | null>(null);
@@ -81,17 +83,32 @@ export default function SlimeCompanionPage() {
     }
   }, [authUserId]);
 
-  const flashBuddyCornerToast = useCallback((message: string, tone: BuddyCornerToast['tone']) => {
+  const flashBuddyCornerToast = useCallback((
+    message: string,
+    tone: BuddyCornerToast['tone'],
+    details?: BuddyCornerToast['details'],
+  ) => {
     if (buddyCornerToastTimerRef.current != null) {
       window.clearTimeout(buddyCornerToastTimerRef.current);
       buddyCornerToastTimerRef.current = null;
     }
-    setBuddyCornerToast({ message, tone });
+    setBuddyCornerToast({ message, tone, details });
     buddyCornerToastTimerRef.current = window.setTimeout(() => {
       setBuddyCornerToast(null);
       buddyCornerToastTimerRef.current = null;
     }, 3800);
   }, []);
+
+  const deleteMemoryFromBuddyToast = useCallback(async (factId: string) => {
+    if (!factId.trim()) return;
+    try {
+      const res = await apiFetch(`/api/profile/memory-fact/${encodeURIComponent(factId)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await res.text());
+      flashBuddyCornerToast('Removed that memory.', 'neutral');
+    } catch {
+      flashBuddyCornerToast('Could not delete that memory right now.', 'error');
+    }
+  }, [flashBuddyCornerToast]);
 
   useEffect(
     () => () => {
@@ -113,6 +130,10 @@ export default function SlimeCompanionPage() {
     setPendingDecision(null);
     setReportOpen(true);
     const { error } = await reportStream.start({ threadId: tid, decisionPrompt: p });
+    if (error === 'insufficient_credits') {
+      setReportOpen(false);
+      return;
+    }
     if (error && error !== 'cancelled') {
       flashBuddyCornerToast(error.length > 120 ? `${error.slice(0, 120)}…` : error, 'error');
     }
@@ -174,68 +195,73 @@ export default function SlimeCompanionPage() {
   };
 
   return (
-    <div className="relative min-h-[100dvh] overflow-hidden bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#e8f4ff]">
-      <div className="pointer-events-none absolute inset-0 opacity-[0.4] bg-[radial-gradient(ellipse_at_50%_35%,rgba(139,92,246,0.14),transparent_62%)]" />
+    <div className="relative min-h-[100dvh] overflow-hidden bg-[radial-gradient(circle_at_50%_18%,rgba(255,255,255,0.9),transparent_25%),linear-gradient(135deg,#fff5fb_0%,#f7f2ff_46%,#e8f4ff_100%)]">
+      <div className="pointer-events-none absolute inset-0 opacity-[0.58] bg-[radial-gradient(ellipse_at_50%_38%,rgba(139,92,246,0.18),transparent_58%),radial-gradient(circle_at_18%_72%,rgba(34,211,238,0.12),transparent_30%),radial-gradient(circle_at_82%_70%,rgba(244,114,182,0.10),transparent_32%)]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-white/55 to-transparent" />
 
       <div
         data-slime-avoid
         className="absolute left-3 top-3 z-[60] flex flex-wrap items-center gap-2 sm:left-4 sm:top-4"
       >
-        <button
-          type="button"
-          onClick={() => navigate('/')}
-          className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/75 px-4 py-2 text-sm font-medium text-gray-800 shadow-sm backdrop-blur-md transition hover:bg-white"
-        >
-          <Home className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
-          Home
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate('/profile')}
-          className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/75 px-4 py-2 text-sm font-medium text-gray-800 shadow-sm backdrop-blur-md transition hover:bg-white"
-        >
-          Profile
-        </button>
+        <BuddyTooltip content="Go to the Foresight-X home screen and decision workspace.">
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/82 px-4 py-2 text-sm font-semibold text-slate-800 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:bg-white hover:-translate-y-0.5"
+          >
+            <Home className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
+            Home
+          </button>
+        </BuddyTooltip>
+        <BuddyTooltip content="Manage your account, memory sources, and saved traces.">
+          <button
+            type="button"
+            onClick={() => navigate('/profile')}
+            className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/82 px-4 py-2 text-sm font-semibold text-slate-800 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:bg-white hover:-translate-y-0.5"
+          >
+            Profile
+          </button>
+        </BuddyTooltip>
       </div>
 
-      <button
-        type="button"
-        data-slime-avoid
-        onClick={() => setPanelOpen((open) => !open)}
-        className="absolute right-3 top-3 z-[60] inline-flex items-center gap-2 rounded-full border border-violet-200/70 bg-white/80 px-4 py-2 text-sm font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400 sm:right-4 sm:top-4"
-        aria-expanded={panelOpen}
-        aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
+      <BuddyTooltip
+        side="bottom"
+        content={
+          panelOpen
+            ? 'Close Slime studio. Save from inside the panel if you want to keep changes.'
+            : 'Open Slime studio to edit colors, voice, persona, and how your buddy talks.'
+        }
       >
-        <Ghost className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
-        {panelOpen ? 'Close' : 'Personalize'}
-      </button>
+        <button
+          type="button"
+          data-slime-avoid
+          onClick={() => setPanelOpen((open) => !open)}
+          className="absolute right-3 top-3 z-[60] inline-flex items-center gap-2 rounded-full border border-violet-200/70 bg-white/85 px-4 py-2 text-sm font-semibold text-violet-950 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:-translate-y-0.5 hover:border-violet-400 sm:right-4 sm:top-4"
+          aria-expanded={panelOpen}
+          aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
+        >
+          <Ghost className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
+          {panelOpen ? 'Close' : 'Personalize'}
+        </button>
+      </BuddyTooltip>
 
       {/* Bottom-left: link to full Chat UI; logo below — stays clear of center mic column */}
       <div
         data-slime-avoid
         className="absolute bottom-6 left-4 z-[65] flex max-w-[min(280px,calc(100vw-6rem))] flex-col items-start gap-3 sm:bottom-8 sm:left-6"
       >
-        <Tooltip delayDuration={250}>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              data-testid="slime-buddy-open-chat"
-              onClick={() => navigate('/chat')}
-              aria-label="Open Chat — traditional full-feature dialog"
-              className="inline-flex items-center gap-2 rounded-full border border-violet-200/80 bg-white/85 px-3.5 py-2 text-xs font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400/80 hover:bg-white sm:text-sm"
-            >
-              <MessageSquare className="h-3.5 w-3.5 shrink-0 text-violet-600" aria-hidden />
-              Chat
-            </button>
-          </TooltipTrigger>
-          <TooltipContent
-            side="top"
-            sideOffset={10}
-            className="max-w-[min(288px,calc(100vw-2rem))] border border-violet-950/20 bg-violet-950 px-3 py-2 text-left text-[11px] leading-relaxed font-medium text-violet-50 shadow-lg"
+        <BuddyTooltip content="Opens the full Chat workspace — a classic scrolling thread with richer tools than quick voice here.">
+          <button
+            type="button"
+            data-testid="slime-buddy-open-chat"
+            onClick={() => navigate('/chat')}
+            aria-label="Open Chat — traditional full-feature dialog"
+            className="inline-flex items-center gap-2 rounded-full border border-violet-200/80 bg-white/85 px-3.5 py-2 text-xs font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400/80 hover:bg-white sm:text-sm"
           >
-            Chat 是一个更加传统的对话框，有更加完整的功能。
-          </TooltipContent>
-        </Tooltip>
+            <MessageSquare className="h-3.5 w-3.5 shrink-0 text-violet-600" aria-hidden />
+            Chat
+          </button>
+        </BuddyTooltip>
         <img
           src="/ForesightXLogo.svg"
           alt=""
@@ -246,6 +272,12 @@ export default function SlimeCompanionPage() {
       </div>
 
       <div className="relative flex min-h-[100dvh] w-full flex-col items-center px-4 pb-16 pt-16 sm:pb-20 sm:pt-20">
+        <div data-slime-avoid className="relative z-30 mb-2 text-center sm:mb-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-violet-500/80">Slime Chat</p>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
+            Talk with {slimeDraft.name?.trim() || 'your Slime'}
+          </h1>
+        </div>
         <div className="relative z-40 h-[min(72vh,680px)] w-full max-w-5xl shrink-0">
           {/*
             Voice UI is split z-index inside SlimeVoiceAgent (panels z-32, mic z-52).
@@ -259,12 +291,15 @@ export default function SlimeCompanionPage() {
             onThreadId={persistThreadId}
             onDecisionSuggestion={setPendingDecision}
             onAdvisorStateChange={setAdvisorState}
+            onSpeechOutputChange={setSpeechOutput}
             onMemoryEvidenceBurst={(items) => {
               if (!items.length) return;
               setMemoryParticleItems(items);
               setMemoryParticlesActive(true);
             }}
-            onProfileMemorySaved={(msg) => flashBuddyCornerToast(msg, 'memory_saved')}
+            onProfileMemorySaved={(payload) =>
+              flashBuddyCornerToast(payload.message, 'memory_saved', payload.details || [])
+            }
             onMemoryEvidenceRetrieved={(count) =>
               flashBuddyCornerToast(
                 count === 1 ? 'Retrieved 1 related memory' : `Retrieved ${count} related memories`,
@@ -283,7 +318,12 @@ export default function SlimeCompanionPage() {
               onDone={() => setMemoryParticlesActive(false)}
             />
           </div>
-          <SlimeCompanionStage className="relative z-[44]" profile={slimeDraft} advisorState={advisorState} />
+          <SlimeCompanionStage
+            className="relative z-[44]"
+            profile={slimeDraft}
+            advisorState={advisorState}
+            speechOutput={speechOutput}
+          />
         </div>
 
         {pendingDecision?.should_show ? (
@@ -297,20 +337,24 @@ export default function SlimeCompanionPage() {
                 'I can turn this into a structured decision report with options, trade-offs, risks, and an action plan.'}
             </p>
             <div className="mt-1 flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-2 text-xs font-semibold text-white shadow-sm"
-                onClick={() => void startDecisionReportFlow(pendingDecision.decision_prompt || '')}
-              >
-                Activate Decision Mode
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-gray-300 bg-white px-4 py-2 text-xs font-medium text-gray-800"
-                onClick={() => setPendingDecision(null)}
-              >
-                Keep Chatting
-              </button>
+              <BuddyTooltip content="Run a structured decision report from this topic — options, trade-offs, risks, and an action plan.">
+                <button
+                  type="button"
+                  className="rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-2 text-xs font-semibold text-white shadow-sm"
+                  onClick={() => void startDecisionReportFlow(pendingDecision.decision_prompt || '')}
+                >
+                  Activate Decision Mode
+                </button>
+              </BuddyTooltip>
+              <BuddyTooltip content="Dismiss this suggestion and stay in casual voice chat.">
+                <button
+                  type="button"
+                  className="rounded-full border border-gray-300 bg-white px-4 py-2 text-xs font-medium text-gray-800"
+                  onClick={() => setPendingDecision(null)}
+                >
+                  Keep Chatting
+                </button>
+              </BuddyTooltip>
             </div>
           </div>
         ) : null}
@@ -322,6 +366,10 @@ export default function SlimeCompanionPage() {
         progressStep={reportStream.progressStep}
         isStreaming={reportStream.isStreaming}
         error={reportStream.error}
+        degradedWarnings={reportStream.degradedWarnings}
+        onRetryStage={() => {
+          void reportStream.retryFromCurrentStage();
+        }}
         onClose={() => {
           setReportOpen(false);
         }}
@@ -367,7 +415,7 @@ export default function SlimeCompanionPage() {
                     right: 'max(1rem, env(safe-area-inset-right, 0px))',
                   }}
                   className={cn(
-                    'pointer-events-none fixed z-[240] max-w-[min(92vw,300px)] rounded-xl border px-3.5 py-2.5 text-left text-[11px] font-medium leading-snug shadow-lg backdrop-blur-md',
+                    'fixed z-[240] max-w-[min(92vw,320px)] rounded-xl border px-3.5 py-2.5 text-left text-[11px] font-medium leading-snug shadow-lg backdrop-blur-md',
                     buddyCornerToast.tone === 'memory_saved' &&
                       'border-emerald-200/90 bg-emerald-50/96 text-emerald-950 shadow-[0_8px_30px_rgba(16,185,129,0.18)]',
                     buddyCornerToast.tone === 'memory_retrieved' &&
@@ -378,7 +426,51 @@ export default function SlimeCompanionPage() {
                       'border-red-200/90 bg-red-50/96 text-red-950 shadow-[0_8px_30px_rgba(239,68,68,0.12)]',
                   )}
                 >
-                  {buddyCornerToast.message}
+                  {buddyCornerToast.tone === 'memory_saved' && buddyCornerToast.details?.length ? (
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-800">Memory updated</p>
+                      {buddyCornerToast.details.slice(0, 2).map((d, i) => {
+                        const fid = (d.id || '').trim();
+                        const action = (d.action || 'saved').trim();
+                        const category = (d.category || 'memory').trim();
+                        return (
+                          <div key={`${fid || i}:${d.text || ''}`} className="rounded-lg border border-emerald-200/80 bg-white/70 px-2 py-1.5">
+                            <div className="mb-1 flex items-center gap-1.5">
+                              <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
+                                {action === 'merged' ? 'reinforced' : action}
+                              </span>
+                              <span className="rounded-full border border-emerald-200 bg-white px-1.5 py-0.5 text-[9px] font-medium text-emerald-800">
+                                {category}
+                              </span>
+                            </div>
+                            <p>{String(d.text || '').trim() || buddyCornerToast.message}</p>
+                            {fid ? (
+                              <div className="mt-1.5 flex gap-2">
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-800 hover:text-emerald-950"
+                                  onClick={() => navigate(`/profile?memory=${encodeURIComponent(fid)}`)}
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-700 hover:text-red-900"
+                                  onClick={() => void deleteMemoryFromBuddyToast(fid)}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                  Delete
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    buddyCornerToast.message
+                  )}
                 </motion.div>
               ) : null}
             </AnimatePresence>,
@@ -394,13 +486,15 @@ export default function SlimeCompanionPage() {
         >
           <SheetHeader className="flex flex-row items-center justify-between gap-3 border-b border-white/50 pb-3 pt-1">
             <SheetTitle className="text-left text-violet-950">Slime studio</SheetTitle>
-            <button
-              type="button"
-              onClick={() => setPanelOpen(false)}
-              className="shrink-0 rounded-full border border-violet-200/80 bg-white/90 px-3 py-1.5 text-xs font-semibold text-violet-950 shadow-sm hover:bg-violet-50"
-            >
-              Close
-            </button>
+            <BuddyTooltip content="Close Slime studio. Use Save slime inside the panel to persist changes.">
+              <button
+                type="button"
+                onClick={() => setPanelOpen(false)}
+                className="shrink-0 rounded-full border border-violet-200/80 bg-white/90 px-3 py-1.5 text-xs font-semibold text-violet-950 shadow-sm hover:bg-violet-50"
+              >
+                Close
+              </button>
+            </BuddyTooltip>
           </SheetHeader>
           <div className="px-4 pb-8 pt-2">
             <SlimePersonalizationForm

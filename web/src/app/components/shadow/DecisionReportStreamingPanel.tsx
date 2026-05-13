@@ -9,6 +9,8 @@ export function DecisionReportStreamingPanel({
   progressStep,
   isStreaming,
   error,
+  degradedWarnings = [],
+  onRetryStage,
   onClose,
   onContinueChat,
   onOpenExecutionCalendar,
@@ -20,6 +22,8 @@ export function DecisionReportStreamingPanel({
   progressStep: string;
   isStreaming: boolean;
   error: string | null;
+  degradedWarnings?: string[];
+  onRetryStage?: () => void;
   onClose: () => void;
   onContinueChat: () => void;
   onOpenExecutionCalendar: (decisionId: string) => void;
@@ -75,8 +79,29 @@ export function DecisionReportStreamingPanel({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {degradedWarnings.length > 0 ? (
+            <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <p className="font-semibold">Degraded mode</p>
+              <ul className="mt-1 space-y-1">
+                {degradedWarnings.slice(-2).map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {error ? (
-            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">{error}</div>
+            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+              <p>{error}</p>
+              {onRetryStage ? (
+                <button
+                  type="button"
+                  className="mt-2 rounded-full border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-900 hover:bg-red-100"
+                  onClick={onRetryStage}
+                >
+                  Retry this stage
+                </button>
+              ) : null}
+            </div>
           ) : null}
 
           {!error && report && !isStreaming ? (

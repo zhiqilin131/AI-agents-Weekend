@@ -8,6 +8,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { isSupabaseEnvConfigured } from '../../auth/RequireAuthLayout';
 import { SlimeCreditsChipNav } from './credits/SlimeCreditsContext';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../../hooks/useSlimeProfile';
+import { BuddyTooltip } from '../../features/slime/BuddyTooltip';
 
 type NavIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
@@ -37,18 +38,19 @@ function ProfileSlimeNav({ compact, className }: { compact: boolean; className?:
   const p = slimeProfile ?? DEFAULT_SLIME_PROFILE;
 
   return (
-    <button
-      type="button"
-      onClick={() => navigate('/profile')}
-      className={cn(
-        'flex shrink-0 flex-col items-center justify-center rounded-2xl border border-violet-200/85 bg-white/95 shadow-md backdrop-blur-md transition hover:border-violet-400 hover:bg-white hover:shadow-lg',
-        compact ? 'px-1.5 py-1' : 'px-2.5 py-2',
-        className,
-      )}
-      style={{ overflow: 'visible', lineHeight: 1 }}
-      aria-label="Profile"
-    >
-      <div
+    <BuddyTooltip content="Open your account page with slime preview, memory, and traces.">
+      <button
+        type="button"
+        onClick={() => navigate('/profile')}
+        className={cn(
+          'flex shrink-0 flex-col items-center justify-center rounded-2xl border border-violet-200/85 bg-white/95 shadow-md backdrop-blur-md transition hover:border-violet-400 hover:bg-white hover:shadow-lg',
+          compact ? 'px-1.5 py-1' : 'px-2.5 py-2',
+          className,
+        )}
+        style={{ overflow: 'visible', lineHeight: 1 }}
+        aria-label="Profile"
+      >
+        <div
         className={cn(
           'relative flex items-center justify-center overflow-visible',
           compact ? 'h-9 w-9' : 'h-11 w-11',
@@ -67,6 +69,7 @@ function ProfileSlimeNav({ compact, className }: { compact: boolean; className?:
         Profile
       </span>
     </button>
+    </BuddyTooltip>
   );
 }
 
@@ -107,42 +110,58 @@ export function MainNavButtons({
   };
 
   const homeBtn = !hideHome ? (
-    <button type="button" onClick={() => navigate('/')} className={btnClass} style={btnStyle} title="Home">
-      <NavIconSlot Icon={Home} compact={compact} colorClass="text-violet-600" />
-      Home
-    </button>
+    <BuddyTooltip content="Go to the Foresight-X home screen and decision workspace.">
+      <button type="button" onClick={() => navigate('/')} className={btnClass} style={btnStyle}>
+        <NavIconSlot Icon={Home} compact={compact} colorClass="text-violet-600" />
+        Home
+      </button>
+    </BuddyTooltip>
   ) : null;
 
   const navPills = (
     <>
-      <button type="button" onClick={() => navigate('/chat')} className={btnClass} style={btnStyle}>
-        <NavIconSlot Icon={MessagesSquare} compact={compact} colorClass="text-indigo-600" />
-        Chat
-      </button>
-      <button type="button" onClick={() => navigate('/history')} className={btnClass} style={btnStyle}>
-        <NavIconSlot Icon={History} compact={compact} colorClass="text-purple-600" />
-        History
-      </button>
-      <button type="button" onClick={() => navigate('/diary')} className={btnClass} style={btnStyle}>
-        <NavIconSlot Icon={BookOpen} compact={compact} colorClass="text-emerald-600" />
-        Diary
-      </button>
-      <button type="button" onClick={() => navigate('/execution')} className={btnClass} style={btnStyle}>
-        <NavIconSlot Icon={CalendarDays} compact={compact} colorClass="text-purple-600" />
-        Calendar
-      </button>
-      <button type="button" onClick={() => navigate('/buddy')} className={btnClass} style={btnStyle}>
-        <NavIconSlot Icon={Ghost} compact={compact} colorClass="text-fuchsia-600" />
-        {compact ? 'Buddy' : 'Slime buddy'}
-      </button>
+      <BuddyTooltip content="Open Shadow Chat — threaded assistant with reports, memory, and full composer.">
+        <button type="button" onClick={() => navigate('/chat')} className={btnClass} style={btnStyle}>
+          <NavIconSlot Icon={MessagesSquare} compact={compact} colorClass="text-indigo-600" />
+          Chat
+        </button>
+      </BuddyTooltip>
+      <BuddyTooltip content="Browse saved decision traces and past runs.">
+        <button type="button" onClick={() => navigate('/history')} className={btnClass} style={btnStyle}>
+          <NavIconSlot Icon={History} compact={compact} colorClass="text-purple-600" />
+          History
+        </button>
+      </BuddyTooltip>
+      <BuddyTooltip content="Open your diary workspace for daily notes and reflections.">
+        <button type="button" onClick={() => navigate('/diary')} className={btnClass} style={btnStyle}>
+          <NavIconSlot Icon={BookOpen} compact={compact} colorClass="text-emerald-600" />
+          Diary
+        </button>
+      </BuddyTooltip>
+      <BuddyTooltip content="Plan tasks and calendar blocks in the execution planner.">
+        <button type="button" onClick={() => navigate('/execution')} className={btnClass} style={btnStyle}>
+          <NavIconSlot Icon={CalendarDays} compact={compact} colorClass="text-purple-600" />
+          Calendar
+        </button>
+      </BuddyTooltip>
+      <BuddyTooltip content="Voice-first Slime buddy — quick chat, personalization, and playful companion mode.">
+        <button type="button" onClick={() => navigate('/buddy')} className={btnClass} style={btnStyle}>
+          <NavIconSlot Icon={Ghost} compact={compact} colorClass="text-fuchsia-600" />
+          {compact ? 'Buddy' : 'Slime buddy'}
+        </button>
+      </BuddyTooltip>
       {isSupabaseEnvConfigured() && !session ? (
         <>
-          <button type="button" onClick={() => navigate('/login')} className={btnClass} style={btnStyle}>
-            {compact ? 'Log in' : 'Sign in'}
-          </button>
-          <button type="button" onClick={() => navigate('/register')} className={btnClass} style={btnStyle}>
-            {compact ? 'Join' : 'Register'}
-          </button>
+          <BuddyTooltip content="Sign in with email to sync your profile and credits.">
+            <button type="button" onClick={() => navigate('/login')} className={btnClass} style={btnStyle}>
+              {compact ? 'Log in' : 'Sign in'}
+            </button>
+          </BuddyTooltip>
+          <BuddyTooltip content="Create a new account.">
+            <button type="button" onClick={() => navigate('/register')} className={btnClass} style={btnStyle}>
+              {compact ? 'Join' : 'Register'}
+            </button>
+          </BuddyTooltip>
         </>
       ) : null}
     </>
@@ -187,16 +206,17 @@ export function MainNavButtons({
             compact ? 'bottom-4 left-4' : 'bottom-5 left-4 sm:bottom-6 sm:left-8',
           )}
         >
-          <button
-            type="button"
-            onClick={() => void signOut().then(() => navigate(isSupabaseEnvConfigured() ? '/login' : '/'))}
-            className={cn(btnClass, 'pointer-events-auto')}
-            style={btnStyle}
-            title="Sign out"
-          >
-            <NavIconSlot Icon={LogOut} compact={compact} colorClass="text-slate-500" />
-            {compact ? 'Out' : 'Sign out'}
-          </button>
+          <BuddyTooltip content="Sign out of your account on this device.">
+            <button
+              type="button"
+              onClick={() => void signOut().then(() => navigate(isSupabaseEnvConfigured() ? '/login' : '/'))}
+              className={cn(btnClass, 'pointer-events-auto')}
+              style={btnStyle}
+            >
+              <NavIconSlot Icon={LogOut} compact={compact} colorClass="text-slate-500" />
+              {compact ? 'Out' : 'Sign out'}
+            </button>
+          </BuddyTooltip>
         </div>
       ) : null}
       {/* Below PersonaSwitcher (z-70); clears common bottom UI */}

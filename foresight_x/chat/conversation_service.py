@@ -316,6 +316,26 @@ def process_conversation_turn(
     append_temporary_context_items(thread, out.thread_only_items)
     text = out.reply.strip()
     profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
+    profile_update_details = list(out.profile_memory_events or [])
+    if not profile_updates:
+        # Fallback capture keeps SlimBody/SlimChat parity when model output omits memory_facts.
+        try:
+            from foresight_x.profile.proactive_memory import capture_turn_memory
+
+            proactive = capture_turn_memory(
+                settings=settings,
+                user_text=effective_message,
+                assistant_text=text,
+                source_chat="slime_voice" if source == "slime_voice" else "shadow_chat",
+                source_thread_id=str(thread.get("thread_id") or ""),
+                source_message_id=user_msg_id,
+                llm_model=llm_model,
+            )
+            if proactive.saved_texts:
+                profile_updates = [x for x in proactive.saved_texts if _should_store_profile_fact(x)]
+                profile_update_details = list(proactive.events or [])
+        except Exception:
+            _log.debug("proactive memory fallback failed", exc_info=True)
 
     append_message(
         thread,
@@ -331,6 +351,7 @@ def process_conversation_turn(
             {
                 "kind": "profile_update",
                 "items": profile_updates[:4],
+                "details": profile_update_details[:4],
                 "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
         )
@@ -372,6 +393,7 @@ def process_conversation_turn(
         "decision_suggestion": decision_suggestion,
         "shadow_suggestion": suggestion,
         "memory_updates": profile_updates,
+        "memory_update_details": profile_update_details,
         "evidence_items": [],
         "frontend_action": frontend_action,
     }

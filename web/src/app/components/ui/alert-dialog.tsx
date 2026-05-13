@@ -44,13 +44,21 @@ function AlertDialogOverlay({
   );
 }
 
+type AlertDialogContentProps = React.ComponentProps<
+  typeof AlertDialogPrimitive.Content
+> & {
+  /** Merged onto the overlay (e.g. raise z-index above full-screen panels). */
+  overlayClassName?: string;
+};
+
 function AlertDialogContent({
   className,
+  overlayClassName,
   ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Content>) {
+}: AlertDialogContentProps) {
   return (
     <AlertDialogPortal>
-      <AlertDialogOverlay />
+      <AlertDialogOverlay className={overlayClassName} />
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         className={cn(

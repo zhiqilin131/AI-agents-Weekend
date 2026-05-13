@@ -1,3 +1,4 @@
+import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 import type { ShadowSuggestion } from './types';
 
 export function DecisionSuggestionCard({
@@ -17,19 +18,22 @@ export function DecisionSuggestionCard({
       <p className="text-sm font-semibold text-amber-900">{suggestion.title}</p>
       <p className="mt-1 text-sm text-amber-800">{suggestion.message}</p>
       <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          disabled={disabled}
-          className="rounded-full bg-indigo-600 px-4 py-2 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={onGenerate}
-        >
-          Generate Decision Report
-        </button>
-        <button type="button" className="rounded-full border border-gray-300 px-4 py-2 text-xs" onClick={onKeep}>
-          Keep Chatting
-        </button>
+        <BuddyTooltip content="Start the structured decision pipeline — options, trade-offs, risks, and a plan from this thread.">
+          <button
+            type="button"
+            disabled={disabled}
+            className="rounded-full bg-indigo-600 px-4 py-2 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={onGenerate}
+          >
+            Generate Decision Report
+          </button>
+        </BuddyTooltip>
+        <BuddyTooltip content="Dismiss the suggestion and continue normal Shadow Chat.">
+          <button type="button" className="rounded-full border border-gray-300 px-4 py-2 text-xs" onClick={onKeep}>
+            Keep Chatting
+          </button>
+        </BuddyTooltip>
       </div>
     </div>
   );
 }
-

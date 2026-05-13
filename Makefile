@@ -1,7 +1,7 @@
 PYTHON ?= python3
 PIP ?= $(PYTHON) -m pip
 
-.PHONY: setup setup-web test test-web run-api run-web smoke doctor clean-web
+.PHONY: setup setup-web test test-web run-api run-web smoke doctor clean-web chaos-demo
 
 setup:
 	$(PIP) install -e ".[dev,web]"
@@ -29,3 +29,6 @@ doctor:
 
 clean-web:
 	rm -rf web/dist
+
+chaos-demo:
+	$(PYTHON) scripts/chaos_demo.py

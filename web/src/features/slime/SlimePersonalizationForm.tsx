@@ -9,6 +9,7 @@ import type { SlimeCompanionRelationship, SlimeProfile } from '../../app/model';
 import { apiFetch } from '../../utils/apiFetch';
 import { ModelSelector } from '../models/ModelSelector';
 import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
+import { BuddyTooltip } from './BuddyTooltip';
 import {
   ACCESSORY_OPTIONS,
   COLOR_OPTIONS,
@@ -34,6 +35,19 @@ const RELATIONSHIP_OPTIONS: Array<{ id: SlimeCompanionRelationship; label: strin
   { id: 'tiny_robot_slime_assistant', label: 'Tiny robot / slime assistant' },
   { id: 'assistant', label: 'Assistant' },
 ];
+
+const DEFAULT_CUSTOM_COLORS = { primary: '#a78bfa', secondary: '#818cf8', glow: '#38bdf8' } as const;
+
+/** ``<input type="color">`` only accepts #rrggbb; coerce shorthand or fall back. */
+function hexForColorInput(raw: string | undefined, fallback: string): string {
+  const t = (raw ?? '').trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(t)) return t.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(t)) {
+    const x = t.slice(1);
+    return `#${x[0]}${x[0]}${x[1]}${x[1]}${x[2]}${x[2]}`.toLowerCase();
+  }
+  return fallback;
+}
 
 export function SlimePersonalizationForm({
   slimeDraft,
@@ -113,14 +127,18 @@ export function SlimePersonalizationForm({
         <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-700/90">Quick presets</p>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {SLIME_PRESETS.map((preset) => (
-            <button
+            <BuddyTooltip
               key={preset.id}
-              type="button"
-              onClick={() => setSlimeDraft((s) => ({ ...s, ...preset.patch }))}
-              className="rounded-full border border-violet-200/70 bg-white/90 px-2.5 py-1 text-[11px] font-medium text-violet-950 hover:border-violet-400"
+              content={`Apply the “${preset.label}” quick look — bundled colors, personality, shape, and motion.`}
             >
-              {preset.label}
-            </button>
+              <button
+                type="button"
+                onClick={() => setSlimeDraft((s) => ({ ...s, ...preset.patch }))}
+                className="rounded-full border border-violet-200/70 bg-white/90 px-2.5 py-1 text-[11px] font-medium text-violet-950 hover:border-violet-400"
+              >
+                {preset.label}
+              </button>
+            </BuddyTooltip>
           ))}
         </div>
       </div>
@@ -188,72 +206,64 @@ export function SlimePersonalizationForm({
         <p className="text-xs font-medium text-gray-800">Theme</p>
         <div className="mt-1.5 flex flex-nowrap gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:thin]">
           {COLOR_OPTIONS.map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              title={o.label}
-              onClick={() => setSlimeDraft((s) => ({ ...s, colorTheme: o.id }))}
-              className={cn(
-                'flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-2.5 text-[11px] font-medium transition',
-                slimeDraft.colorTheme === o.id
-                  ? 'border-violet-500 bg-white shadow-sm ring-1 ring-violet-300/60'
-                  : 'border-violet-200/60 bg-white/80 hover:border-violet-300',
-              )}
-            >
-              <span className={cn('h-6 w-6 shrink-0 rounded-full ring-1 ring-white', o.swatch)} />
-              <span className="text-gray-800">{o.label}</span>
-            </button>
+            <BuddyTooltip key={o.id} content={`Use the ${o.label} palette for your slime in chat and on the buddy screen.`}>
+              <button
+                type="button"
+                onClick={() => setSlimeDraft((s) => ({ ...s, colorTheme: o.id }))}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-2.5 text-[11px] font-medium transition',
+                  slimeDraft.colorTheme === o.id
+                    ? 'border-violet-500 bg-white shadow-sm ring-1 ring-violet-300/60'
+                    : 'border-violet-200/60 bg-white/80 hover:border-violet-300',
+                )}
+              >
+                <span className={cn('h-6 w-6 shrink-0 rounded-full ring-1 ring-white', o.swatch)} />
+                <span className="text-gray-800">{o.label}</span>
+              </button>
+            </BuddyTooltip>
           ))}
         </div>
       </div>
 
       {slimeDraft.colorTheme === 'custom' ? (
-        <div className="grid grid-cols-3 gap-2">
-          <Input
-            value={slimeDraft.customColors?.primary ?? '#a78bfa'}
-            onChange={(e) =>
-              setSlimeDraft((s) => ({
-                ...s,
-                customColors: {
-                  primary: e.target.value,
-                  secondary: s.customColors?.secondary ?? '#818cf8',
-                  glow: s.customColors?.glow ?? '#38bdf8',
-                },
-              }))
-            }
-            className="h-9 rounded-lg font-mono text-xs"
-            placeholder="#primary"
-          />
-          <Input
-            value={slimeDraft.customColors?.secondary ?? '#818cf8'}
-            onChange={(e) =>
-              setSlimeDraft((s) => ({
-                ...s,
-                customColors: {
-                  primary: s.customColors?.primary ?? '#a78bfa',
-                  secondary: e.target.value,
-                  glow: s.customColors?.glow ?? '#38bdf8',
-                },
-              }))
-            }
-            className="h-9 rounded-lg font-mono text-xs"
-            placeholder="#secondary"
-          />
-          <Input
-            value={slimeDraft.customColors?.glow ?? '#38bdf8'}
-            onChange={(e) =>
-              setSlimeDraft((s) => ({
-                ...s,
-                customColors: {
-                  primary: s.customColors?.primary ?? '#a78bfa',
-                  secondary: s.customColors?.secondary ?? '#818cf8',
-                  glow: e.target.value,
-                },
-              }))
-            }
-            className="h-9 rounded-lg font-mono text-xs"
-            placeholder="#glow"
-          />
+        <div className="mt-2 flex flex-wrap items-end gap-4">
+          {(
+            [
+              { key: 'primary' as const, label: 'Body', aria: 'Primary body color' },
+              { key: 'secondary' as const, label: 'Mid', aria: 'Secondary mid-tone' },
+              { key: 'glow' as const, label: 'Glow', aria: 'Glow accent' },
+            ] as const
+          ).map(({ key, label, aria }) => {
+            const fallback = DEFAULT_CUSTOM_COLORS[key];
+            const current = slimeDraft.customColors?.[key] ?? fallback;
+            const safe = hexForColorInput(current, fallback);
+            return (
+              <div key={key} className="flex flex-col items-center gap-1">
+                <label className="relative block h-10 w-10 shrink-0 cursor-pointer overflow-hidden rounded-full border-2 border-white shadow-sm ring-1 ring-violet-300/60 transition hover:ring-violet-400">
+                  <span className="pointer-events-none absolute inset-0 rounded-full" style={{ backgroundColor: safe }} />
+                  <input
+                    type="color"
+                    value={safe}
+                    aria-label={aria}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSlimeDraft((s) => ({
+                        ...s,
+                        customColors: {
+                          primary: hexForColorInput(s.customColors?.primary, DEFAULT_CUSTOM_COLORS.primary),
+                          secondary: hexForColorInput(s.customColors?.secondary, DEFAULT_CUSTOM_COLORS.secondary),
+                          glow: hexForColorInput(s.customColors?.glow, DEFAULT_CUSTOM_COLORS.glow),
+                          [key]: v,
+                        },
+                      }));
+                    }}
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  />
+                </label>
+                <span className="text-[10px] font-medium text-gray-600">{label}</span>
+              </div>
+            );
+          })}
         </div>
       ) : null}
 
@@ -323,19 +333,23 @@ export function SlimePersonalizationForm({
           <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-700/90">Personality preset</p>
           <div className="mt-1 flex flex-wrap gap-1">
             {SLIME_PERSONA_PRESET_OPTIONS.map((pr) => (
-              <button
+              <BuddyTooltip
                 key={pr.id}
-                type="button"
-                onClick={() => setPersona(patchForPersonalityPreset(pr.id))}
-                className={cn(
-                  'rounded-full border px-2 py-0.5 text-[10px] font-medium transition',
-                  persona.personalityPreset === pr.id
-                    ? 'border-violet-500 bg-white shadow-sm'
-                    : 'border-violet-200/70 bg-white/80 hover:border-violet-400',
-                )}
+                content={`Apply the “${pr.label}” persona preset — baseline tone, warmth, humor, directness, and reply length.`}
               >
-                {pr.label}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setPersona(patchForPersonalityPreset(pr.id))}
+                  className={cn(
+                    'rounded-full border px-2 py-0.5 text-[10px] font-medium transition',
+                    persona.personalityPreset === pr.id
+                      ? 'border-violet-500 bg-white shadow-sm'
+                      : 'border-violet-200/70 bg-white/80 hover:border-violet-400',
+                  )}
+                >
+                  {pr.label}
+                </button>
+              </BuddyTooltip>
             ))}
           </div>
         </div>
@@ -419,19 +433,23 @@ export function SlimePersonalizationForm({
                 ['detailed', 'Detailed'],
               ] as const
             ).map(([id, label]) => (
-              <button
+              <BuddyTooltip
                 key={id}
-                type="button"
-                onClick={() => setPersona({ replyLength: id })}
-                className={cn(
-                  'rounded-full border px-2.5 py-1 text-[10px] font-medium',
-                  persona.replyLength === id
-                    ? 'border-violet-500 bg-white'
-                    : 'border-violet-200/70 bg-white/80 hover:border-violet-400',
-                )}
+                content={`Prefer ${label.toLowerCase()} replies when your Slime speaks (length hint for the model).`}
               >
-                {label}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setPersona({ replyLength: id })}
+                  className={cn(
+                    'rounded-full border px-2.5 py-1 text-[10px] font-medium',
+                    persona.replyLength === id
+                      ? 'border-violet-500 bg-white'
+                      : 'border-violet-200/70 bg-white/80 hover:border-violet-400',
+                  )}
+                >
+                  {label}
+                </button>
+              </BuddyTooltip>
             ))}
           </div>
         </div>
@@ -518,16 +536,18 @@ export function SlimePersonalizationForm({
                 <option value="calendar">Calendar</option>
                 <option value="decision">Decision mode</option>
               </select>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={previewBusy}
-                onClick={() => void runPreview()}
-                className="h-8 shrink-0 rounded-full text-[11px]"
-              >
-                {previewBusy ? '…' : 'Preview'}
-              </Button>
+              <BuddyTooltip content="Ask the server for one sample line using your persona and the selected scenario (uses your chosen model tier).">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={previewBusy}
+                  onClick={() => void runPreview()}
+                  className="h-8 shrink-0 rounded-full text-[11px]"
+                >
+                  {previewBusy ? '…' : 'Preview'}
+                </Button>
+              </BuddyTooltip>
             </div>
           </div>
           {previewLine !== null ? (
@@ -626,17 +646,21 @@ export function SlimePersonalizationForm({
       </div>
 
       <div className="flex flex-wrap gap-2 pt-1">
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => void onSave()}
-          className="rounded-full bg-gradient-to-r from-violet-600 to-indigo-600 px-4 text-xs font-semibold text-white shadow-sm"
-        >
-          Save slime
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => void onReset()} className="rounded-full text-xs">
-          Reset
-        </Button>
+        <BuddyTooltip content="Persist appearance, persona, and voice settings to your profile on the server.">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void onSave()}
+            className="rounded-full bg-gradient-to-r from-violet-600 to-indigo-600 px-4 text-xs font-semibold text-white shadow-sm"
+          >
+            Save slime
+          </Button>
+        </BuddyTooltip>
+        <BuddyTooltip content="Restore the default Slime preset from the server (discards unsaved local edits after reload).">
+          <Button type="button" variant="outline" size="sm" onClick={() => void onReset()} className="rounded-full text-xs">
+            Reset
+          </Button>
+        </BuddyTooltip>
       </div>
     </div>
   );

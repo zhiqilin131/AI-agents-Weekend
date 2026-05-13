@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from foresight_x.chat.conversation_service import ensure_slime_voice_thread, process_conversation_turn
 from foresight_x.config import Settings
+from foresight_x.profile.proactive_memory import ProactiveMemoryCaptureResult
 
 
 def _minimal_profile(path: Path, uid: str) -> None:
@@ -71,3 +72,56 @@ def test_slime_voice_thread_tagged(monkeypatch, tmp_path: Path) -> None:
     t = ensure_slime_voice_thread("u_tag", None)
     assert t.get("source") == "slime_voice"
     assert t.get("thread_id")
+
+
+def test_slime_voice_turn_uses_proactive_fallback_when_shadow_emits_no_memory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    uid = "u_conv_fallback"
+    _minimal_profile(tmp_path, uid)
+    settings = Settings(
+        foresight_user_id=uid,
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="sk-test",
+    )
+
+    class _I:
+        intent = "general_chat"
+
+    fake_out = MagicMock()
+    fake_out.reply = "Noted."
+    fake_out.used_memory_facts = False
+    fake_out.profile_record_texts = []
+    fake_out.profile_memory_events = []
+    fake_out.thread_only_items = []
+    fake_out.memory_confirmation_question = None
+
+    thread = ensure_slime_voice_thread(uid, None)
+    with patch("foresight_x.chat.conversation_service.detect_chat_intent", return_value=_I()):
+        with patch("foresight_x.chat.conversation_service.run_shadow_turn", return_value=fake_out):
+            with patch("foresight_x.chat.conversation_service.maybe_update_thread_summary"):
+                with patch(
+                    "foresight_x.profile.proactive_memory.capture_turn_memory",
+                    return_value=ProactiveMemoryCaptureResult(
+                        events=[
+                            {
+                                "action": "new",
+                                "id": "mf_1",
+                                "text": "User prefers concise answers.",
+                                "category": "views",
+                            }
+                        ],
+                        saved_texts=["User prefers concise answers."],
+                    ),
+                ):
+                    out = process_conversation_turn(
+                        settings=settings,
+                        user_id=uid,
+                        thread=thread,
+                        user_message="Please keep replies concise.",
+                        source="slime_voice",
+                        modality="voice",
+                    )
+
+    assert out["memory_updates"] == ["User prefers concise answers."]
+    assert out["memory_update_details"]
