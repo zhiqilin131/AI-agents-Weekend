@@ -56,6 +56,9 @@ def build_openai_llm(
     temp = 0.2 if temperature is None else float(temperature)
     extra_kw: dict[str, Any] = dict(extra)
     max_tokens_extra = extra_kw.pop("max_tokens", None)
+    forced_api_key = (str(extra_kw.pop("api_key", "") or "") or None)
+    forced_api_base = (str(extra_kw.pop("api_base", "") or "") or None)
+    extra_kw.setdefault("timeout", float(s.openai_request_timeout_sec))
 
     if provider_model_uses_openai_responses_api(resolved):
         max_out = s.openai_responses_max_output_tokens
@@ -68,8 +71,8 @@ def build_openai_llm(
         add_kw.setdefault("reasoning", reasoning_payload)
         return _OpenAIResponsesReasoningCompat(
             model=resolved,
-            api_key=(s.openai_api_key or "").strip() or None,
-            api_base=s.openai_api_base,
+            api_key=forced_api_key or ((s.openai_api_key or "").strip() or None),
+            api_base=forced_api_base or s.openai_api_base,
             temperature=temp,
             max_output_tokens=max_out,
             reasoning_options=reasoning_payload or None,
@@ -80,12 +83,37 @@ def build_openai_llm(
 
     kwargs: dict[str, Any] = {
         "model": resolved,
-        "api_key": s.openai_api_key or None,
+        "api_key": forced_api_key or (s.openai_api_key or None),
         "temperature": temp,
     }
     if max_tokens_extra is not None:
         kwargs["max_tokens"] = max_tokens_extra
-    if s.openai_api_base:
+    if forced_api_base:
+        kwargs["api_base"] = forced_api_base
+    elif s.openai_api_base:
         kwargs["api_base"] = s.openai_api_base
+    kwargs.setdefault("timeout", float(s.openai_request_timeout_sec))
     kwargs.update(extra_kw)
     return OpenAI(**kwargs)
+
+
+def build_secondary_openai_llm(
+    settings: Settings | None = None,
+    *,
+    temperature: float | None = None,
+    **extra: Any,
+) -> Any | None:
+    """Build optional secondary OpenAI-compatible failover LLM from resilience settings."""
+    s = settings or load_settings()
+    model = (s.resilience_secondary_openai_model or "").strip()
+    if not model:
+        return None
+    key = (s.resilience_secondary_openai_api_key or "").strip() or (s.openai_api_key or "").strip()
+    if not key:
+        return None
+    extra_kw: dict[str, Any] = dict(extra)
+    extra_kw["api_key"] = key
+    api_base = (s.resilience_secondary_openai_api_base or "").strip()
+    if api_base:
+        extra_kw["api_base"] = api_base
+    return build_openai_llm(s, temperature=temperature, model=model, **extra_kw)

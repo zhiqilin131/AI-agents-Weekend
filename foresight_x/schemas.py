@@ -802,6 +802,14 @@ class ReportSurface(BaseModel):
     primary_next_action: NextActionSurface
 
 
+class ResilienceTraceInfo(BaseModel):
+    """Per-trace resilience diagnostics (degradation/fallback evidence)."""
+
+    fallback_mode: bool = False
+    brownout_signal: bool = False
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class DecisionTrace(BaseModel):
     decision_id: str
     timestamp: str
@@ -821,6 +829,10 @@ class DecisionTrace(BaseModel):
     report_surface: ReportSurface | None = Field(
         default=None,
         description="UI-focused narrative; omitted on legacy saved traces.",
+    )
+    resilience: ResilienceTraceInfo | None = Field(
+        default=None,
+        description="Runtime resilience context for this decision run.",
     )
 
 

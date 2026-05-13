@@ -366,6 +366,10 @@ export default function SlimeCompanionPage() {
         progressStep={reportStream.progressStep}
         isStreaming={reportStream.isStreaming}
         error={reportStream.error}
+        degradedWarnings={reportStream.degradedWarnings}
+        onRetryStage={() => {
+          void reportStream.retryFromCurrentStage();
+        }}
         onClose={() => {
           setReportOpen(false);
         }}

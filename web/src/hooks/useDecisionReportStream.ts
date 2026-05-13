@@ -20,7 +20,17 @@ export function useDecisionReportStream() {
   const [finalTrace, setFinalTrace] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [degradedWarnings, setDegradedWarnings] = useState<string[]>([]);
   const controllerRef = useRef<AbortController | null>(null);
+  const lastStartParamsRef = useRef<{
+    threadId: string;
+    decisionPrompt: string;
+    clarificationAnswers?: Record<string, string>;
+    saveClarificationToProfile?: boolean;
+    modelOptionId?: string;
+    resumeFromStage?: string;
+    resumePartial?: Record<string, unknown>;
+  } | null>(null);
 
   const start = useCallback(async (params: {
     threadId: string;
@@ -28,6 +38,8 @@ export function useDecisionReportStream() {
     clarificationAnswers?: Record<string, string>;
     saveClarificationToProfile?: boolean;
     modelOptionId?: string;
+    resumeFromStage?: string;
+    resumePartial?: Record<string, unknown>;
   }) => {
     setStatus('streaming');
     setProgressStep('Structuring decision');
@@ -35,9 +47,13 @@ export function useDecisionReportStream() {
     setFinalTrace(null);
     setError(null);
     setIsStreaming(true);
+    setDegradedWarnings([]);
+    lastStartParamsRef.current = params;
 
     let capturedTrace: Record<string, unknown> | null = null;
     let streamError: string | null = null;
+    let lastStage = (params.resumeFromStage || '').trim();
+    let snapshotTrace: Record<string, unknown> | null = params.resumePartial ?? null;
 
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -49,18 +65,26 @@ export function useDecisionReportStream() {
       } else if (type === 'report_event') {
         const inner = ev.event as Record<string, unknown> | undefined;
         if (inner?.event === 'partial' && inner.data && typeof inner.data === 'object') {
-          setPartialTrace((prev) => mergeStreamingPartial(prev, inner.data as Record<string, unknown>));
+          snapshotTrace = mergeStreamingPartial(snapshotTrace, inner.data as Record<string, unknown>);
+          setPartialTrace(snapshotTrace);
         }
         if (inner?.event === 'meta' && typeof inner.decision_id === 'string') {
-          setPartialTrace((prev) => ({
-            ...(prev ?? {}),
+          snapshotTrace = {
+            ...(snapshotTrace ?? {}),
             decision_id: inner.decision_id,
             ...(typeof inner.timestamp === 'string' ? { timestamp: inner.timestamp } : {}),
-          }));
+          };
+          setPartialTrace(snapshotTrace);
+        }
+        if (inner?.event === 'stage' && typeof inner.stage === 'string') {
+          lastStage = inner.stage;
         }
       } else if (type === 'error') {
         streamError = String(ev.message || 'Report failed');
         setError(streamError);
+      } else if (type === 'warning') {
+        const msg = String(ev.message || 'Running in degraded mode');
+        setDegradedWarnings((prev) => (prev.includes(msg) ? prev : [...prev.slice(-2), msg]));
       } else if (type === 'done') {
         setIsStreaming(false);
         if (ev.stream_error) {
@@ -97,6 +121,8 @@ export function useDecisionReportStream() {
             save_clarification_to_profile: Boolean(params.saveClarificationToProfile),
             credit_request_id: creditReq,
             ...(params.modelOptionId ? { model_option_id: params.modelOptionId } : {}),
+            ...(params.resumeFromStage ? { resume_from_stage: params.resumeFromStage } : {}),
+            ...(params.resumePartial ? { resume_partial: params.resumePartial } : {}),
           }),
           signal: controller.signal,
         },
@@ -166,6 +192,13 @@ export function useDecisionReportStream() {
         setError(streamError);
         setStatus('error');
       }
+      if (streamError) {
+        lastStartParamsRef.current = {
+          ...params,
+          resumeFromStage: lastStage || 'enhance',
+          resumePartial: snapshotTrace ?? undefined,
+        };
+      }
       return { trace: capturedTrace, error: streamError } satisfies DecisionReportStreamResult;
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
@@ -189,6 +222,16 @@ export function useDecisionReportStream() {
     setIsStreaming(false);
   }, []);
 
+  const retryFromCurrentStage = useCallback(async () => {
+    const p = lastStartParamsRef.current;
+    if (!p) return { trace: null, error: 'missing_previous_params' } as DecisionReportStreamResult;
+    return start({
+      ...p,
+      resumeFromStage: p.resumeFromStage || 'enhance',
+      resumePartial: p.resumePartial,
+    });
+  }, [start]);
+
   /** Load a persisted trace (e.g. reopen from chat artifact). Does not run the pipeline. */
   const loadExistingTrace = useCallback(async (decisionId: string) => {
     setError(null);
@@ -211,5 +254,18 @@ export function useDecisionReportStream() {
   }, []);
 
   const trace = useMemo(() => finalTrace ?? partialTrace, [finalTrace, partialTrace]);
-  return { status, progressStep, partialTrace, finalTrace, trace, error, start, cancel, isStreaming, loadExistingTrace };
+  return {
+    status,
+    progressStep,
+    partialTrace,
+    finalTrace,
+    trace,
+    error,
+    degradedWarnings,
+    start,
+    cancel,
+    retryFromCurrentStage,
+    isStreaming,
+    loadExistingTrace,
+  };
 }
