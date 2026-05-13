@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from foresight_x.chat.intent_detector import detect_chat_intent
 from foresight_x.chat.slime_intent import classify_slime_intent, merge_with_decision_intent
@@ -160,6 +160,7 @@ def process_conversation_turn(
     modality: Modality,
     clarification_answers: dict[str, str] | None = None,
     llm_model: str | None = None,
+    on_reply_delta: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """
     One assistant reply turn using the same core pathway as Shadow streaming:
@@ -308,6 +309,7 @@ def process_conversation_turn(
             synthesis_frame=synthesis_frame,
             slime_intent_hint=slime_hint,
             llm_model=llm_model,
+            reply_delta_callback=on_reply_delta if source == "slime_voice" else None,
         )
     except Exception as e:
         _log.exception("run_shadow_turn failed in process_conversation_turn")

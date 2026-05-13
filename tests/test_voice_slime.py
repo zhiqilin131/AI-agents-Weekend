@@ -159,6 +159,47 @@ def test_voice_command_http_mocked(monkeypatch) -> None:
     assert body["asr_provider"] == "faster_whisper"
 
 
+def test_voice_command_stream_http_mocked(monkeypatch) -> None:
+    import foresight_x.ui.api_server as api_server
+
+    def fake_pipeline(*_a, **_k):
+        return {
+            "transcript": "stream me",
+            "asr_provider": "faster_whisper",
+            "language": "en",
+            "assistant_text": "Hello. Streaming works.",
+            "spoken_text": "Hello. Streaming works.",
+            "intent": "general_chat",
+            "tool_call": {"name": "no_op", "arguments": {}},
+            "tool_result": {},
+            "frontend_action": {"type": "none", "route": "", "payload": {}},
+            "requires_confirmation": False,
+            "timing": {},
+            "voice_ui": {"intent": "general_chat", "memory_phases": [], "evidence_items": [], "should_show_evidence_drawer": False},
+        }
+
+    monkeypatch.setenv("FORESIGHT_USER_ID", "demo_user")
+    with patch.object(api_server, "_run_slime_voice_pipeline", side_effect=fake_pipeline):
+        client = TestClient(api_server.app)
+        files = {"audio": ("v.webm", io.BytesIO(b"abc"), "audio/webm")}
+        r = client.post("/api/slime/voice-command-stream", files=files)
+    assert r.status_code == 200
+    events: list[dict[str, object]] = []
+    for raw_line in r.text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data: "):
+            continue
+        events.append(json.loads(line[6:]))
+    etypes = [str(ev.get("type", "")) for ev in events]
+    assert "transcript_ready" in etypes
+    assert "text_delta" in etypes
+    assert etypes[-1] == "done"
+    done = events[-1]
+    voice_response = done.get("voice_response")
+    assert isinstance(voice_response, dict)
+    assert voice_response.get("transcript") == "stream me"
+
+
 def test_voice_pipeline_conversation_turn_includes_memory_update_details(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     settings = Settings(

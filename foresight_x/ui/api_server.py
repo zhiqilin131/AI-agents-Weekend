@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Literal, cast
+from typing import Any, Callable, Literal, cast
 import json
 import uuid
 from datetime import datetime, timezone
@@ -311,6 +311,25 @@ def _trace_artifact_summary(trace: dict | None) -> str:
 def _sse_chunk(obj: dict) -> str:
     """SSE line; ``default=str`` avoids rare non-JSON-native values aborting the stream."""
     return f"data: {json.dumps(obj, ensure_ascii=False, default=str)}\n\n"
+
+
+def _split_text_deltas(text: str, *, max_chars: int = 120) -> list[str]:
+    body = str(text or "").strip()
+    if not body:
+        return []
+    parts = [p.strip() for p in re.split(r"(?<=[\.\!\?。！？])\s+", body) if p.strip()]
+    if not parts:
+        parts = [body]
+    out: list[str] = []
+    for p in parts:
+        if len(p) <= max_chars:
+            out.append(p)
+            continue
+        start = 0
+        while start < len(p):
+            out.append(p[start : start + max_chars].strip())
+            start += max_chars
+    return [x for x in out if x]
 
 
 # Uvicorn/proxies may close chunked SSE early without these → browser ERR_INCOMPLETE_CHUNKED_ENCODING.
@@ -3839,6 +3858,10 @@ def _run_slime_voice_pipeline(
     recent_ui_s: str | None,
     settings,
     llm_model: str | None = None,
+    requested_model_option_id: str | None = None,
+    client_timing: dict[str, float] | None = None,
+    on_text_delta: Callable[[str], None] | None = None,
+    on_stream_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     from foresight_x.chat.conversation_service import (
         ensure_slime_voice_thread,
@@ -3853,6 +3876,7 @@ def _run_slime_voice_pipeline(
     from foresight_x.voice.slime_tools import execute_slime_tool
 
     t_total0 = time.perf_counter()
+    client_timing = client_timing or {}
     if not raw:
         raise ValueError("empty_audio")
 
@@ -3866,35 +3890,53 @@ def _run_slime_voice_pipeline(
         os.write(fd, raw)
     finally:
         os.close(fd)
-    try:
-        tr = transcribe_audio(tmp_path, settings=settings)
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+
+    t_context0 = time.perf_counter()
+
+    def _prepare_voice_context() -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any], str]:
+        uid_local = settings.foresight_user_id
+        sp_local: dict[str, Any] = {}
+        if slime_profile_s:
+            try:
+                raw_sp = json.loads(slime_profile_s)
+                if isinstance(raw_sp, dict):
+                    sp_local = raw_sp
+            except json.JSONDecodeError:
+                sp_local = {}
+        ruc_local: dict[str, Any] = {}
+        if recent_ui_s:
+            try:
+                raw_r = json.loads(recent_ui_s)
+                if isinstance(raw_r, dict):
+                    ruc_local = raw_r
+            except json.JSONDecodeError:
+                ruc_local = {}
+        thread_local = ensure_slime_voice_thread(uid_local, thread_id)
+        resolved_tid_local = str(thread_local.get("thread_id") or "")
+        return uid_local, sp_local, ruc_local, thread_local, resolved_tid_local
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        asr_fut = ex.submit(transcribe_audio, tmp_path, settings=settings)
+        context_fut = ex.submit(_prepare_voice_context)
+        try:
+            tr = asr_fut.result()
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+        uid, sp, ruc, thread, resolved_tid = context_fut.result()
+    context_prep_ms = (time.perf_counter() - t_context0) * 1000
 
     transcript = (tr.text or "").strip()
     if not transcript:
         raise ValueError("no_speech_detected")
-
-    uid = settings.foresight_user_id
-    sp: dict[str, Any] = {}
-    if slime_profile_s:
-        try:
-            raw_sp = json.loads(slime_profile_s)
-            if isinstance(raw_sp, dict):
-                sp = raw_sp
-        except json.JSONDecodeError:
-            sp = {}
-    ruc: dict[str, Any] = {}
-    if recent_ui_s:
-        try:
-            raw_r = json.loads(recent_ui_s)
-            if isinstance(raw_r, dict):
-                ruc = raw_r
-        except json.JSONDecodeError:
-            ruc = {}
-
-    thread = ensure_slime_voice_thread(uid, thread_id)
-    resolved_tid = str(thread.get("thread_id") or "")
+    if on_stream_event is not None:
+        on_stream_event(
+            {
+                "type": "transcript_ready",
+                "transcript": transcript,
+                "asr_provider": tr.provider,
+                "language": tr.language,
+            }
+        )
 
     early_intent = ""
     early_tool = ""
@@ -3908,14 +3950,24 @@ def _run_slime_voice_pipeline(
         assistant_text = early_text
         tr_timing_early = tr.timing or {}
         timing_identity: dict[str, Any] = {
+            "recording_ms": client_timing.get("recording_ms"),
+            "upload_ms": client_timing.get("upload_ms"),
+            "vad_endpoint_ms": client_timing.get("vad_endpoint_ms"),
             "audio_duration_seconds": tr.duration_seconds,
             "asr_provider": tr.provider,
             "asr_model": tr_timing_early.get("model"),
             "asr_model_load_ms": tr_timing_early.get("asr_model_load_ms"),
+            "asr_ms": tr_timing_early.get("transcription_ms"),
             "transcription_ms": tr_timing_early.get("transcription_ms"),
             "realtime_factor": tr_timing_early.get("realtime_factor"),
+            "context_prep_ms": context_prep_ms,
+            "memory_retrieval_ms": 0.0,
             "intent_route_ms": 0.0,
             "tool_execute_ms": 0.0,
+            "llm_first_token_ms": 0.0,
+            "llm_total_ms": 0.0,
+            "tts_ms": 0.0,
+            "model_option_id": requested_model_option_id,
             "total_ms": (time.perf_counter() - t_total0) * 1000,
         }
         append_message(
@@ -3983,17 +4035,31 @@ def _run_slime_voice_pipeline(
     t_route0 = time.perf_counter()
     route = route_slime_voice_command(transcript, ctx, settings=settings, llm_model=llm_model)
     route_ms = (time.perf_counter() - t_route0) * 1000
+    if on_stream_event is not None:
+        if route.tool_name == "search_memory":
+            on_stream_event({"type": "status", "status": "searching_memory", "label": "Checking memory..."})
+        on_stream_event({"type": "status", "status": "thinking", "label": "Thinking..."})
 
     tr_timing = tr.timing or {}
     timing: dict[str, Any] = {
+        "recording_ms": client_timing.get("recording_ms"),
+        "upload_ms": client_timing.get("upload_ms"),
+        "vad_endpoint_ms": client_timing.get("vad_endpoint_ms"),
         "audio_duration_seconds": tr.duration_seconds,
         "asr_provider": tr.provider,
         "asr_model": tr_timing.get("model"),
         "asr_model_load_ms": tr_timing.get("asr_model_load_ms"),
+        "asr_ms": tr_timing.get("transcription_ms"),
         "transcription_ms": tr_timing.get("transcription_ms"),
         "realtime_factor": tr_timing.get("realtime_factor"),
+        "context_prep_ms": context_prep_ms,
+        "memory_retrieval_ms": 0.0,
         "intent_route_ms": route_ms,
         "tool_execute_ms": 0.0,
+        "llm_first_token_ms": 0.0,
+        "llm_total_ms": 0.0,
+        "tts_ms": 0.0,
+        "model_option_id": requested_model_option_id,
         "total_ms": 0.0,
     }
 
@@ -4013,6 +4079,8 @@ def _run_slime_voice_pipeline(
         )
         tool_ms = (time.perf_counter() - t_tool0) * 1000
         timing["tool_execute_ms"] = tool_ms
+        if route.tool_name == "search_memory":
+            timing["memory_retrieval_ms"] = tool_ms
         timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
 
         user_row = append_message(
@@ -4098,8 +4166,10 @@ def _run_slime_voice_pipeline(
         modality="voice",
         clarification_answers=None,
         llm_model=llm_model,
+        on_reply_delta=on_text_delta,
     )
     timing["tool_execute_ms"] = (time.perf_counter() - t_conv0) * 1000
+    timing["llm_total_ms"] = timing["tool_execute_ms"]
     timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
 
     assistant_text = str(turn.get("assistant_text") or "")
@@ -4226,10 +4296,14 @@ async def slime_voice_command(
     slime_profile: str | None = Form(None),
     recent_ui_context: str | None = Form(None),
     model_option_id: str | None = Form(default=None),
+    recording_ms: float | None = Form(default=None),
+    vad_endpoint_ms: float | None = Form(default=None),
 ) -> JSONResponse:
     """Push-to-talk: local ASR (default faster-whisper) + GPT-4o-mini tool routing."""
     settings = _settings_for_active_user()
+    t_read0 = time.perf_counter()
     raw = await audio.read()
+    upload_ms = (time.perf_counter() - t_read0) * 1000
     if not raw:
         raise HTTPException(status_code=400, detail="empty_audio")
     rid = _credit_header_request_id(request) or f"slime_voice:{uuid.uuid4().hex}"
@@ -4256,6 +4330,12 @@ async def slime_voice_command(
             recent_ui_context,
             settings,
             voice_pm,
+            model_option_id,
+            {
+                "recording_ms": recording_ms,
+                "upload_ms": upload_ms,
+                "vad_endpoint_ms": vad_endpoint_ms,
+            },
         )
     except ValueError as e:
         if tx is not None:
@@ -4282,6 +4362,126 @@ async def slime_voice_command(
             refund_for_transaction(tx, "Slime voice failed", settings=settings)
         raise HTTPException(status_code=500, detail=f"voice_command_failed: {e!s}") from e
     return JSONResponse(content=body)
+
+
+@app.post("/api/slime/voice-command-stream", response_model=None)
+async def slime_voice_command_stream(
+    request: Request,
+    audio: UploadFile = File(...),
+    current_route: str | None = Form(None),
+    thread_id: str | None = Form(None),
+    slime_profile: str | None = Form(None),
+    recent_ui_context: str | None = Form(None),
+    model_option_id: str | None = Form(default=None),
+    recording_ms: float | None = Form(default=None),
+    vad_endpoint_ms: float | None = Form(default=None),
+) -> StreamingResponse | JSONResponse:
+    settings = _settings_for_active_user()
+    t_read0 = time.perf_counter()
+    raw = await audio.read()
+    upload_ms = (time.perf_counter() - t_read0) * 1000
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty_audio")
+    rid = _credit_header_request_id(request) or f"slime_voice_stream:{uuid.uuid4().hex}"
+    prof = load_user_profile(settings)
+    tx, gate_err = _credit_gate(
+        settings,
+        "slime_voice",
+        request_id=rid,
+        model_option_id=model_option_id,
+        profile=prof,
+        metadata={"endpoint": "/api/slime/voice-command-stream"},
+    )
+    if gate_err is not None:
+        return gate_err
+    voice_pm = _resolved_chat_model(settings, "slime_voice", model_option_id, profile=prof)
+
+    async def _gen():
+        yield _sse_chunk({"type": "status", "status": "transcribing", "label": "Transcribing..."})
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        saw_text_delta = [False]
+        saw_transcript_ready = [False]
+
+        def _emit_stream_event(ev: dict[str, Any]) -> None:
+            if str(ev.get("type") or "") == "transcript_ready":
+                saw_transcript_ready[0] = True
+            loop.call_soon_threadsafe(q.put_nowait, ev)
+
+        def _emit_text_delta(delta: str) -> None:
+            d = str(delta or "")
+            if not d.strip():
+                return
+            saw_text_delta[0] = True
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "text_delta", "delta": d})
+
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                _run_slime_voice_pipeline,
+                raw,
+                audio.filename,
+                current_route,
+                thread_id,
+                slime_profile,
+                recent_ui_context,
+                settings,
+                voice_pm,
+                model_option_id,
+                {
+                    "recording_ms": recording_ms,
+                    "upload_ms": upload_ms,
+                    "vad_endpoint_ms": vad_endpoint_ms,
+                },
+                _emit_text_delta,
+                _emit_stream_event,
+            )
+        )
+        try:
+            while not worker.done():
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=0.08)
+                    yield _sse_chunk(ev)
+                except TimeoutError:
+                    continue
+            while True:
+                try:
+                    ev = q.get_nowait()
+                    yield _sse_chunk(ev)
+                except asyncio.QueueEmpty:
+                    break
+            body = await worker
+            if not saw_transcript_ready[0]:
+                yield _sse_chunk(
+                    {
+                        "type": "transcript_ready",
+                        "transcript": body.get("transcript"),
+                        "asr_provider": body.get("asr_provider"),
+                        "language": body.get("language"),
+                        "timing": body.get("timing") or {},
+                    }
+                )
+            if not saw_text_delta[0]:
+                for delta in _split_text_deltas(str(body.get("assistant_text") or "")):
+                    yield _sse_chunk({"type": "text_delta", "delta": delta})
+            yield _sse_chunk({"type": "done", "voice_response": body, "stream_error": False})
+        except ValueError as e:
+            if tx is not None:
+                refund_for_transaction(tx, "Slime voice stream validation error", settings=settings)
+            yield _sse_chunk({"type": "error", "message": str(e)})
+            yield _sse_chunk({"type": "done", "stream_error": True})
+        except RuntimeError as e:
+            if tx is not None:
+                refund_for_transaction(tx, "Slime voice stream runtime error", settings=settings)
+            yield _sse_chunk({"type": "error", "message": str(e)})
+            yield _sse_chunk({"type": "done", "stream_error": True})
+        except Exception as e:
+            _log.exception("slime voice command stream failed")
+            if tx is not None:
+                refund_for_transaction(tx, "Slime voice stream failed", settings=settings)
+            yield _sse_chunk({"type": "error", "message": f"voice_command_stream_failed: {e!s}"})
+            yield _sse_chunk({"type": "done", "stream_error": True})
+
+    return _sse_streaming_response(_gen())
 
 
 @app.get("/api/traces/{decision_id}/resource-drops", response_model=None)

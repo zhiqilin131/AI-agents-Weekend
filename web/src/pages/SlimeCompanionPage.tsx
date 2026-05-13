@@ -304,7 +304,6 @@ export default function SlimeCompanionPage() {
           <SlimeVoiceAgent
             slimeProfile={slimeDraft}
             currentRoute="/buddy"
-            hideModelSelector
             threadId={buddyThreadId ?? undefined}
             onThreadId={persistThreadId}
             onDecisionSuggestion={setPendingDecision}

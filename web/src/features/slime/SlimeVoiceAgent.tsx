@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { VoiceRecorderSpeechPhase } from '../../hooks/useVoiceRecorder';
 import { Mic, Square } from 'lucide-react';
 import { useNavigate } from 'react-router';
@@ -13,6 +13,7 @@ import type { SlimeProfile } from '../../app/model';
 import { apiFetch } from '../../utils/apiFetch';
 import { apiFetchErrorMessage } from '../../utils/apiOrigin';
 import { confirmCalendarDraft } from '../../utils/calendarAgentApi';
+import { parseSseBlocks } from '../../utils/parseSse';
 import {
   executionStorageKeys,
   SLIME_CALENDAR_BRIEF_CONTEXT_KEY,
@@ -328,24 +329,29 @@ export function SlimeVoiceAgent({
   const navigate = useNavigate();
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const slimeModels = useSlimeModelCatalog();
+  const defaultVoiceModelId = useMemo(() => {
+    const little = slimeModels.models.find((m) => m.id === 'little')?.id;
+    return little || slimeModels.defaultModel || '';
+  }, [slimeModels.models, slimeModels.defaultModel]);
   const [voiceModelOptionId, setVoiceModelOptionId] = useState('');
   useEffect(() => {
-    if (slimeModels.ready && slimeModels.defaultModel && !voiceModelOptionId) {
-      setVoiceModelOptionId(slimeModels.defaultModel);
+    if (slimeModels.ready && defaultVoiceModelId && !voiceModelOptionId) {
+      setVoiceModelOptionId(defaultVoiceModelId);
     }
-  }, [slimeModels.ready, slimeModels.defaultModel, voiceModelOptionId]);
+  }, [slimeModels.ready, defaultVoiceModelId, voiceModelOptionId]);
   const { storageUserKey } = useExecutionStorageUserKey();
   const sendVoiceBlobRef = useRef<(blob: Blob | null) => Promise<void>>(async () => {});
   const { supported, recording, error, setError, startRecording, stopRecording, speechPhase } = useVoiceRecorder({
     autoStopOnSilence: true,
     silenceDetectionConfig: {
       silenceThreshold: 0.018,
-      silenceDurationMs: 1200,
+      silenceDurationMs: 1100,
       minSpeechMs: 320,
       maxRecordingMs: 30000,
       maxInitialSilenceMs: 8000,
     },
     onAutoStop: (blob) => {
+      setVoiceState('auto_stopping');
       void sendVoiceBlobRef.current(blob);
     },
   });
@@ -355,6 +361,11 @@ export function SlimeVoiceAgent({
   const [transcriptPreview, setTranscriptPreview] = useState<string | null>(null);
   const [lastReplyText, setLastReplyText] = useState<string | null>(null);
   const [ttsHint, setTtsHint] = useState<string | null>(null);
+  const [latencyHint, setLatencyHint] = useState<string | null>(null);
+  const inFlightRequestRef = useRef(0);
+  const slowHintTimerRef = useRef<number | null>(null);
+  const verySlowHintTimerRef = useRef<number | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
   const [buddyAudioPlaying, setBuddyAudioPlaying] = useState(false);
   const buddyAudioRef = useRef<HTMLAudioElement | null>(null);
   const buddyWebAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -425,6 +436,20 @@ export function SlimeVoiceAgent({
   }, []);
 
   useEffect(() => () => cancelBuddyAudio(), [cancelBuddyAudio]);
+
+  useEffect(
+    () => () => {
+      if (slowHintTimerRef.current != null) {
+        window.clearTimeout(slowHintTimerRef.current);
+        slowHintTimerRef.current = null;
+      }
+      if (verySlowHintTimerRef.current != null) {
+        window.clearTimeout(verySlowHintTimerRef.current);
+        verySlowHintTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   const runTts = useCallback(
     (
@@ -810,16 +835,180 @@ export function SlimeVoiceAgent({
     }
   }, [pendingCalendarMutation, runTts, showSpeechOutput, updateLocalCalendarEvent]);
 
+  const handleVoiceResponse = useCallback(
+    async (data: VoiceResponse) => {
+      void refreshCredits();
+      if (data.thread_id) onThreadId?.(data.thread_id);
+      const mus = data.memory_updates;
+      if (mus?.length) {
+        const toastMsg = formatProfileMemoryToast(mus, data.memory_update_details);
+        if (toastMsg) {
+          onProfileMemorySaved?.({
+            message: toastMsg,
+            items: mus,
+            details: (data.memory_update_details || []).map((d) => ({
+              action: d.action,
+              id: (d as { id?: string }).id,
+              text: d.text,
+              category: d.category,
+            })),
+          });
+        }
+      }
+
+      const phases = data.voice_ui?.memory_phases ?? [];
+      const hadServerMemorySearch = phases.includes('searching_memory') || data.tool_call?.name === 'search_memory';
+      if (hadServerMemorySearch) {
+        setVoiceState('synthesizing');
+      }
+
+      const evidenceItems = readEvidenceItems(data);
+      setDrawerItems(evidenceItems);
+      setShowEvidenceCta(
+        Boolean(evidenceItems.length && (data.voice_ui?.should_show_evidence_drawer ?? true)),
+      );
+
+      if (hadServerMemorySearch && evidenceItems.length > 0) {
+        onMemoryEvidenceRetrieved?.(evidenceItems.length);
+      }
+
+      setTranscriptPreview(data.transcript || null);
+      if (data.transcript && (await prepareCalendarMutation(data.transcript))) {
+        return;
+      }
+      const assistant = (data.assistant_text || '').trim();
+      const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
+      setLastReplyText(toSpeak || null);
+
+      const fe = data.frontend_action;
+      const convTurn = Boolean(data.tool_result && typeof data.tool_result === 'object' && data.tool_result.conversation_turn);
+
+      if (fe?.type === 'slime_profile_refresh') {
+        void refetchSlimeProfileGlobal();
+      }
+
+      if (fe?.type === 'calendar_draft_confirm' && fe.payload && typeof fe.payload === 'object') {
+        const pl = fe.payload as { resolved?: ResolvedCalendar; draft_id?: string };
+        const resolved = pl.resolved;
+        if (typeof pl.draft_id === 'string' && pl.draft_id.trim()) {
+          setPendingAgentDraftId(pl.draft_id.trim());
+        } else {
+          setPendingAgentDraftId(null);
+        }
+        if (resolved?.start_iso && resolved?.end_iso) {
+          setPendingCalendar(resolved);
+          setPendingCalendarMutation(null);
+          setPendingConfirm(null);
+          onDecisionSuggestion?.(null);
+          setVoiceState('awaiting_confirmation');
+          runTts(toSpeak || `I can add this to your calendar: ${resolved.display_summary}.`, {
+            force: true,
+            onMayHaveBlocked: () =>
+              setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
+          });
+          return;
+        }
+      }
+
+      if (fe?.type === 'show_calendar_draft' && fe.route) {
+        applySlimeVoiceFrontendAction(navigate, fe as SlimeVoiceFrontendAction);
+        setPendingConfirm(null);
+        setPendingCalendar(null);
+        setPendingCalendarMutation(null);
+        setPendingAgentDraftId(null);
+        onDecisionSuggestion?.(null);
+        setVoiceState('idle');
+        runTts(toSpeak || 'Opening your planner with a draft schedule.', {
+          force: true,
+          onMayHaveBlocked: () => setTtsHint('No audio? Tap “Play reply” below.'),
+        });
+        return;
+      }
+
+      if (fe?.type === 'confirm' && fe.payload && typeof fe.payload === 'object') {
+        const title = String((fe.payload as { title?: string }).title || 'Confirm change');
+        const patch = (fe.payload as { patch?: Record<string, unknown> }).patch;
+        if (patch && typeof patch === 'object') {
+          setPendingConfirm({ title, patch });
+        }
+        setPendingCalendar(null);
+        setPendingCalendarMutation(null);
+        onDecisionSuggestion?.(null);
+        setVoiceState('idle');
+        return;
+      }
+
+      setPendingConfirm(null);
+      setPendingCalendar(null);
+      setPendingCalendarMutation(null);
+      setVoiceState('executing_tool');
+
+      if (evidenceItems.length) onMemoryEvidenceBurst?.(evidenceItems);
+
+      if (fe?.type === 'navigate') {
+        applySlimeVoiceFrontendAction(navigate, fe);
+      }
+
+      if (convTurn && data.decision_suggestion?.should_show) {
+        onDecisionSuggestion?.(data.decision_suggestion);
+        setVoiceState('decision_prompt');
+        const seq =
+          data.spoken_sequence && data.spoken_sequence.length > 0
+            ? data.spoken_sequence
+            : [assistant, String(data.decision_suggestion.spoken_prompt || '').trim()].filter(Boolean);
+        runSpokenSequence(seq, {
+          force: true,
+          onAllComplete: () => setVoiceState('idle'),
+        });
+        return;
+      }
+
+      onDecisionSuggestion?.(null);
+      if (convTurn && data.spoken_sequence && data.spoken_sequence.length > 0) {
+        runSpokenSequence(data.spoken_sequence, {
+          force: true,
+          onAllComplete: () => setVoiceState('idle'),
+        });
+        return;
+      }
+
+      runTts(toSpeak, {
+        force: true,
+        onMayHaveBlocked: () =>
+          setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
+      });
+    },
+    [
+      refreshCredits,
+      onThreadId,
+      onProfileMemorySaved,
+      onMemoryEvidenceRetrieved,
+      prepareCalendarMutation,
+      onDecisionSuggestion,
+      runTts,
+      navigate,
+      onMemoryEvidenceBurst,
+      runSpokenSequence,
+    ],
+  );
+
   const sendVoiceBlob = useCallback(
     async (blob: Blob | null) => {
       unlockSlimeAudioContext();
       primeSpeechSynthesisFromGesture();
       setVoiceState('transcribing');
+      setLatencyHint(null);
+      const requestGen = ++inFlightRequestRef.current;
       if (!blob) {
         setVoiceState('idle');
         showSpeechOutput('No audio captured.', { source: 'error' });
         return;
       }
+      const recordingMs =
+        recordingStartedAtRef.current != null
+          ? Math.max(0, Math.round(performance.now() - recordingStartedAtRef.current))
+          : undefined;
+      recordingStartedAtRef.current = null;
       const fd = new FormData();
       fd.append('audio', blob, 'voice.webm');
       if (currentRoute) fd.append('current_route', currentRoute);
@@ -841,15 +1030,35 @@ export function SlimeVoiceAgent({
       if (voiceModelOptionId) {
         fd.append('model_option_id', voiceModelOptionId);
       }
+      if (typeof recordingMs === 'number' && Number.isFinite(recordingMs)) {
+        fd.append('recording_ms', String(recordingMs));
+      }
       setVoiceState('thinking');
+      if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
+      if (verySlowHintTimerRef.current != null) window.clearTimeout(verySlowHintTimerRef.current);
+      slowHintTimerRef.current = window.setTimeout(() => {
+        if (inFlightRequestRef.current === requestGen) {
+          setLatencyHint('Still working — checking memory and context...');
+        }
+      }, 2000);
+      verySlowHintTimerRef.current = window.setTimeout(() => {
+        if (inFlightRequestRef.current === requestGen) {
+          setLatencyHint('Still working — checking deeper memory.');
+        }
+      }, 6000);
       try {
+        const reqStart = performance.now();
         const vcCredit =
           typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `vc-${Date.now()}`;
-        const res = await apiFetch('/api/slime/voice-command', {
+        const res = await apiFetch('/api/slime/voice-command-stream', {
           method: 'POST',
           headers: { 'X-Credit-Request-Id': vcCredit },
           body: fd,
         });
+        const uploadMs = Math.max(0, Math.round(performance.now() - reqStart));
+        if (inFlightRequestRef.current === requestGen) {
+          setLatencyHint(uploadMs > 1800 ? 'Processing voice command…' : null);
+        }
         if (res.status === 402) {
           let j: Record<string, unknown> = {};
           try {
@@ -866,157 +1075,76 @@ export function SlimeVoiceAgent({
                 : 'You need more Slime Credits for this action.',
           });
           setVoiceState('idle');
+          if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
+          if (verySlowHintTimerRef.current != null) window.clearTimeout(verySlowHintTimerRef.current);
+          setLatencyHint(null);
           return;
         }
         if (!res.ok) {
           const t = await res.text();
           throw new Error(httpErrorBodyToMessage(t, res.statusText));
         }
-        const data = (await res.json()) as VoiceResponse;
-        void refreshCredits();
-        if (data.thread_id) onThreadId?.(data.thread_id);
-        const mus = data.memory_updates;
-        if (mus?.length) {
-          const toastMsg = formatProfileMemoryToast(mus, data.memory_update_details);
-          if (toastMsg) {
-            onProfileMemorySaved?.({
-              message: toastMsg,
-              items: mus,
-              details: (data.memory_update_details || []).map((d) => ({
-                action: d.action,
-                id: (d as { id?: string }).id,
-                text: d.text,
-                category: d.category,
-              })),
-            });
+        if (!res.body) {
+          throw new Error('voice_stream_unavailable');
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let streamedText = '';
+        let streamError: string | null = null;
+        let finalData: VoiceResponse | null = null;
+        const onEvent = (ev: Record<string, unknown>) => {
+          const type = String(ev.type || '');
+          if (type === 'status') {
+            const status = String(ev.status || '');
+            if (status === 'transcribing') setVoiceState('transcribing');
+            else if (status === 'searching_memory') setVoiceState('searching_memory');
+            else if (status === 'thinking') setVoiceState('thinking');
+          } else if (type === 'transcript_ready') {
+            const transcript = String(ev.transcript || '').trim();
+            if (transcript) setTranscriptPreview(transcript);
+          } else if (type === 'text_delta') {
+            const delta = String(ev.delta || '').trim();
+            if (!delta) return;
+            streamedText = streamedText ? `${streamedText} ${delta}` : delta;
+            setVoiceState('speaking');
+            showSpeechOutput(streamedText, { speaking: false, source: 'assistant' });
+          } else if (type === 'error') {
+            streamError = String(ev.message || 'voice_stream_failed');
+          } else if (type === 'done') {
+            if (Boolean(ev.stream_error)) {
+              streamError = streamError || 'voice_stream_failed';
+              return;
+            }
+            const body = ev.voice_response;
+            if (body && typeof body === 'object') {
+              finalData = body as VoiceResponse;
+            }
           }
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          buffer = parseSseBlocks(buffer, onEvent);
         }
-
-        const phases = data.voice_ui?.memory_phases ?? [];
-        const hadServerMemorySearch =
-          phases.includes('searching_memory') || data.tool_call?.name === 'search_memory';
-        if (hadServerMemorySearch) {
-          setVoiceState('synthesizing');
+        if (buffer.trim()) {
+          parseSseBlocks(`${buffer}\n\n`, onEvent);
         }
-
-        const evidenceItems = readEvidenceItems(data);
-        setDrawerItems(evidenceItems);
-        setShowEvidenceCta(
-          Boolean(evidenceItems.length && (data.voice_ui?.should_show_evidence_drawer ?? true)),
-        );
-
-        if (hadServerMemorySearch && evidenceItems.length > 0) {
-          onMemoryEvidenceRetrieved?.(evidenceItems.length);
+        if (streamError) {
+          throw new Error(streamError);
         }
-
-        setTranscriptPreview(data.transcript || null);
-        if (data.transcript && (await prepareCalendarMutation(data.transcript))) {
-          return;
+        if (!finalData) {
+          throw new Error('voice_stream_incomplete');
         }
-        const assistant = (data.assistant_text || '').trim();
-        const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
-        setLastReplyText(toSpeak || null);
-
-        const fe = data.frontend_action;
-        const convTurn = Boolean(
-          data.tool_result && typeof data.tool_result === 'object' && data.tool_result.conversation_turn,
-        );
-
-        if (fe?.type === 'slime_profile_refresh') {
-          void refetchSlimeProfileGlobal();
-        }
-
-        if (fe?.type === 'calendar_draft_confirm' && fe.payload && typeof fe.payload === 'object') {
-          const pl = fe.payload as { resolved?: ResolvedCalendar; draft_id?: string };
-          const resolved = pl.resolved;
-          if (typeof pl.draft_id === 'string' && pl.draft_id.trim()) {
-            setPendingAgentDraftId(pl.draft_id.trim());
-          } else {
-            setPendingAgentDraftId(null);
-          }
-          if (resolved?.start_iso && resolved?.end_iso) {
-            setPendingCalendar(resolved);
-            setPendingCalendarMutation(null);
-            setPendingConfirm(null);
-            onDecisionSuggestion?.(null);
-            setVoiceState('awaiting_confirmation');
-            runTts(toSpeak || `I can add this to your calendar: ${resolved.display_summary}.`, {
-              force: true,
-              onMayHaveBlocked: () =>
-                setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
-            });
-            return;
-          }
-        }
-
-        if (fe?.type === 'show_calendar_draft' && fe.route) {
-          applySlimeVoiceFrontendAction(navigate, fe as SlimeVoiceFrontendAction);
-          setPendingConfirm(null);
-          setPendingCalendar(null);
-          setPendingCalendarMutation(null);
-          setPendingAgentDraftId(null);
-          onDecisionSuggestion?.(null);
-          setVoiceState('idle');
-          runTts(toSpeak || 'Opening your planner with a draft schedule.', {
-            force: true,
-            onMayHaveBlocked: () => setTtsHint('No audio? Tap “Play reply” below.'),
-          });
-          return;
-        }
-
-        if (fe?.type === 'confirm' && fe.payload && typeof fe.payload === 'object') {
-          const title = String((fe.payload as { title?: string }).title || 'Confirm change');
-          const patch = (fe.payload as { patch?: Record<string, unknown> }).patch;
-          if (patch && typeof patch === 'object') {
-            setPendingConfirm({ title, patch });
-          }
-          setPendingCalendar(null);
-          setPendingCalendarMutation(null);
-          onDecisionSuggestion?.(null);
-          setVoiceState('idle');
-          return;
-        }
-
-        setPendingConfirm(null);
-        setPendingCalendar(null);
-        setPendingCalendarMutation(null);
-        setVoiceState('executing_tool');
-
-        if (evidenceItems.length) onMemoryEvidenceBurst?.(evidenceItems);
-
-        if (fe?.type === 'navigate') {
-          applySlimeVoiceFrontendAction(navigate, fe);
-        }
-
-        if (convTurn && data.decision_suggestion?.should_show) {
-          onDecisionSuggestion?.(data.decision_suggestion);
-          setVoiceState('decision_prompt');
-          const seq =
-            data.spoken_sequence && data.spoken_sequence.length > 0
-              ? data.spoken_sequence
-              : [assistant, String(data.decision_suggestion.spoken_prompt || '').trim()].filter(Boolean);
-          runSpokenSequence(seq, {
-            force: true,
-            onAllComplete: () => setVoiceState('idle'),
-          });
-          return;
-        }
-
-        onDecisionSuggestion?.(null);
-        if (convTurn && data.spoken_sequence && data.spoken_sequence.length > 0) {
-          runSpokenSequence(data.spoken_sequence, {
-            force: true,
-            onAllComplete: () => setVoiceState('idle'),
-          });
-          return;
-        }
-
-        runTts(toSpeak, {
-          force: true,
-          onMayHaveBlocked: () =>
-            setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
-        });
+        if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
+        if (verySlowHintTimerRef.current != null) window.clearTimeout(verySlowHintTimerRef.current);
+        setLatencyHint(null);
+        await handleVoiceResponse(finalData);
       } catch (e) {
+        if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
+        if (verySlowHintTimerRef.current != null) window.clearTimeout(verySlowHintTimerRef.current);
+        setLatencyHint(null);
         setVoiceState('error');
         showSpeechOutput(friendlySlimeVoiceError(apiFetchErrorMessage(e)), { source: 'error' });
       }
@@ -1025,19 +1153,10 @@ export function SlimeVoiceAgent({
       currentRoute,
       threadId,
       slimeProfile,
-      navigate,
-      runTts,
-      runSpokenSequence,
-      onMemoryEvidenceBurst,
-      onThreadId,
-      onDecisionSuggestion,
-      onProfileMemorySaved,
-      onMemoryEvidenceRetrieved,
       showInsufficient,
-      refreshCredits,
       voiceModelOptionId,
       showSpeechOutput,
-      prepareCalendarMutation,
+      handleVoiceResponse,
     ],
   );
 
@@ -1048,6 +1167,7 @@ export function SlimeVoiceAgent({
   const pushToTalk = useCallback(async () => {
     setError(null);
     setTtsHint(null);
+    setLatencyHint(null);
     if (recording) {
       unlockSlimeAudioContext();
       primeSpeechSynthesisFromGesture();
@@ -1068,6 +1188,7 @@ export function SlimeVoiceAgent({
     setDrawerOpen(false);
     setShowEvidenceCta(false);
     setVoiceState('listening');
+    recordingStartedAtRef.current = performance.now();
     primeSpeechSynthesisFromGesture({ skipUtterance: true });
     const ok = await startRecording();
     if (!ok) setVoiceState('error');
@@ -1108,6 +1229,7 @@ export function SlimeVoiceAgent({
         )}
       >
         {ttsHint ? <p className="max-w-xs text-center text-[11px] text-amber-900/90">{ttsHint}</p> : null}
+        {latencyHint ? <p className="max-w-xs text-center text-[11px] text-violet-900/90">{latencyHint}</p> : null}
 
         {error ? <p className="max-w-xs text-center text-xs text-red-700">{error}</p> : null}
 
@@ -1322,12 +1444,12 @@ export function SlimeVoiceAgent({
       {!hideModelSelector ? (
         <div
           data-slime-avoid
-          className="pointer-events-auto fixed right-3 bottom-[max(5.75rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] z-[52] w-[min(92vw,16rem)] sm:right-5"
+          className="pointer-events-auto fixed right-3 bottom-[max(5.75rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] z-[52] w-[min(82vw,12rem)] sm:right-5"
         >
-          <div className="rounded-xl border border-white/50 bg-white/72 px-2 py-1 backdrop-blur-md">
+          <div className="rounded-lg border border-white/70 bg-white/85 px-2 py-1 shadow-sm backdrop-blur-sm">
             <ModelSelector
               feature="slime_voice"
-              selectedModelId={voiceModelOptionId || slimeModels.defaultModel}
+              selectedModelId={voiceModelOptionId || defaultVoiceModelId}
               onChange={setVoiceModelOptionId}
               models={slimeModels.models}
               selectorEnabled={slimeModels.selectorEnabled}

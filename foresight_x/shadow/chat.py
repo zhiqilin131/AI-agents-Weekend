@@ -10,7 +10,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
@@ -194,6 +194,36 @@ class ShadowChatTurn(BaseModel):
             "Skip duplicates of facts already in stable memory in the prompt; skip empty meta-summaries."
         ),
     )
+
+
+def _stream_reply_text(llm: Any, prompt: str, on_delta: Callable[[str], None] | None = None) -> str:
+    """Best-effort token streaming for plain-text shadow reply."""
+    stream_prompt = (
+        f"{prompt}\n\n"
+        "Return ONLY the assistant's user-facing reply text. "
+        "Do not output JSON, keys, markdown fences, or meta labels."
+    )
+    if not hasattr(llm, "stream_complete"):
+        return str(llm.complete(stream_prompt) or "").strip()
+
+    out_parts: list[str] = []
+    prev_text = ""
+    try:
+        for piece in llm.stream_complete(stream_prompt):
+            delta = str(getattr(piece, "delta", "") or "")
+            text = str(getattr(piece, "text", "") or "")
+            if not delta and text and text.startswith(prev_text):
+                delta = text[len(prev_text) :]
+            if delta:
+                out_parts.append(delta)
+                if on_delta is not None:
+                    on_delta(delta)
+            prev_text = text or prev_text
+    except Exception:
+        _log.debug("stream_complete failed; falling back to complete()", exc_info=True)
+        return str(llm.complete(stream_prompt) or "").strip()
+    joined = "".join(out_parts).strip()
+    return joined or prev_text.strip()
 
 
 def _utc_now() -> str:
@@ -495,6 +525,7 @@ def run_shadow_turn(
     synthesis_frame: Literal["shadow", "slime_buddy"] = "shadow",
     slime_intent_hint: str | None = None,
     llm_model: str | None = None,
+    reply_delta_callback: Callable[[str], None] | None = None,
 ) -> ShadowTurnOutput:
     """Run one shadow chat turn with separated thread vs profile memory pathways."""
     s = settings or load_settings()
@@ -606,13 +637,16 @@ def run_shadow_turn(
             "Respond as shadow: help them articulate changes. You cannot re-score options here; "
             "if they need a full regenerated report, they should use Generate Decision Report again.\n"
         )
-    turn = structured_predict(llm, ShadowChatTurn, prompt)
-
-    reply = turn.reply_to_user.strip()
-    flag = bool(turn.suggest_decision_navigation)
+    if reply_delta_callback is not None:
+        reply = _stream_reply_text(llm, prompt, on_delta=reply_delta_callback).strip()
+        flag = False
+        memory_drafts: list[ShadowMemoryFactDraft] = []
+    else:
+        turn = structured_predict(llm, ShadowChatTurn, prompt)
+        reply = turn.reply_to_user.strip()
+        flag = bool(turn.suggest_decision_navigation)
+        memory_drafts = list(turn.memory_facts)
     memory_used: list[str] = []
-
-    memory_drafts: list[ShadowMemoryFactDraft] = list(turn.memory_facts)
     if not memory_drafts and atomic_claims and synthesis_frame != "slime_buddy":
         memory_drafts = _coerce_atomic_claims_to_memory_drafts(atomic_claims)
 

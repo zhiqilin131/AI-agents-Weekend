@@ -82,13 +82,29 @@ def get_model_option_for_request(
             return None
         return cand
 
-    chain: list[str | None] = [
-        (requested_model_option_id or "").strip() or None,
-        (getattr(profile, "default_model_option_id", None) or "").strip() or None if profile else None,
-        FEATURE_DEFAULT_MODEL.get(str(feature), None),
-        (s.default_model_option or "").strip() or None,
-        catalog[0].id,
-    ]
+    feature_key = str(feature or "").strip().lower()
+    requested = (requested_model_option_id or "").strip() or None
+    profile_default = (getattr(profile, "default_model_option_id", None) or "").strip() or None if profile else None
+    feature_default = FEATURE_DEFAULT_MODEL.get(feature_key, None)
+    server_default = (s.default_model_option or "").strip() or None
+
+    # Voice latency policy: only an explicit voice selector choice may override default.
+    # Do not implicitly inherit Profile default (which might be balanced/deep).
+    if feature_key == "slime_voice":
+        chain: list[str | None] = [
+            requested,
+            feature_default,
+            server_default,
+            catalog[0].id,
+        ]
+    else:
+        chain = [
+            requested,
+            profile_default,
+            feature_default,
+            server_default,
+            catalog[0].id,
+        ]
 
     for raw in chain:
         hit = _pick(raw)
