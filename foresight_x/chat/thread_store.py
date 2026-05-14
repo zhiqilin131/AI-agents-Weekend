@@ -473,6 +473,8 @@ def save_thread(thread: dict[str, Any]) -> None:
 def delete_thread(*, user_id: str, thread_id: str) -> bool:
     if _supabase_enabled():
         try:
+            if _fetch_thread_row_supabase(user_id=user_id, thread_id=thread_id) is None:
+                return False
             client = get_client()
             client.table("messages").delete().eq("thread_id", thread_id).execute()
             resp = (
@@ -570,4 +572,3 @@ def append_message(
             ids.append(decision_id)
     save_thread(thread)
     return msg
-
