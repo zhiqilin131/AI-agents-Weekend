@@ -118,6 +118,41 @@ def calculate_credit_cost(
     )
 
 
+def _get_or_create_user_credits_unlocked(uid: str, settings: Settings) -> UserCredits:
+    """Load or initialize credits while the caller already holds the per-user lock."""
+    existing = load_user_credits_row(uid, settings=settings)
+    if existing:
+        return existing
+    now = _utc_now()
+    grant = max(0, int(settings.default_slime_credits))
+    row = UserCredits(
+        user_id=uid,
+        balance=grant,
+        lifetime_granted=grant,
+        lifetime_used=0,
+        created_at=now,
+        updated_at=now,
+    )
+    save_user_credits_row(row, settings=settings)
+    if grant > 0:
+        append_ledger(
+            CreditTransaction(
+                id=f"tx-{uuid.uuid4().hex}",
+                user_id=uid,
+                type="initial_grant",
+                amount=grant,
+                balance_after=grant,
+                reason="New user initial Slime Credits",
+                feature="unknown",
+                request_id=None,
+                metadata={"source": "get_or_create_user_credits"},
+                created_at=now,
+            ),
+            settings=settings,
+        )
+    return row
+
+
 def get_or_create_user_credits(user_id: str, settings: Settings | None = None) -> UserCredits:
     s = settings or load_settings()
     uid = (user_id or "").strip()
@@ -125,37 +160,7 @@ def get_or_create_user_credits(user_id: str, settings: Settings | None = None) -
         raise ValueError("user_id required")
     lock = acquire_user_lock(uid)
     with lock:
-        existing = load_user_credits_row(uid, settings=s)
-        if existing:
-            return existing
-        now = _utc_now()
-        grant = max(0, int(s.default_slime_credits))
-        row = UserCredits(
-            user_id=uid,
-            balance=grant,
-            lifetime_granted=grant,
-            lifetime_used=0,
-            created_at=now,
-            updated_at=now,
-        )
-        save_user_credits_row(row, settings=s)
-        if grant > 0:
-            append_ledger(
-                CreditTransaction(
-                    id=f"tx-{uuid.uuid4().hex}",
-                    user_id=uid,
-                    type="initial_grant",
-                    amount=grant,
-                    balance_after=grant,
-                    reason="New user initial Slime Credits",
-                    feature="unknown",
-                    request_id=None,
-                    metadata={"source": "get_or_create_user_credits"},
-                    created_at=now,
-                ),
-                settings=s,
-            )
-        return row
+        return _get_or_create_user_credits_unlocked(uid, s)
 
 
 def get_credit_balance(user_id: str, settings: Settings | None = None) -> int:
@@ -253,7 +258,7 @@ def consume_credits(
             prior = find_usage_by_request_id(uid, rid, settings=s)
             if prior is not None:
                 return prior
-        row = load_user_credits_row(uid, settings=s) or get_or_create_user_credits(uid, settings=s)
+        row = _get_or_create_user_credits_unlocked(uid, s)
         if row.balance < cost_i:
             raise RuntimeError("insufficient_credits")
         new_bal = row.balance - cost_i
@@ -338,7 +343,7 @@ def redeem_test_code(user_id: str, code: str, settings: Settings | None = None) 
     lock = acquire_user_lock(uid)
     with lock:
         reds = load_redemptions(uid, settings=s)
-        row = load_user_credits_row(uid, settings=s) or get_or_create_user_credits(uid, settings=s)
+        row = _get_or_create_user_credits_unlocked(uid, s)
         now = _utc_now()
         new_bal = row.balance + reward
         updated = row.model_copy(
@@ -406,7 +411,7 @@ def redeem_voucher_code(user_id: str, code: str, settings: Settings | None = Non
         matches = [r for r in reds if r.code_hash == code_hash]
         if len(matches) >= max_per_user:
             return {"ok": False, "error": "already_redeemed", "message": "You already used this voucher."}
-        row = load_user_credits_row(uid, settings=s) or get_or_create_user_credits(uid, settings=s)
+        row = _get_or_create_user_credits_unlocked(uid, s)
         now = _utc_now()
         new_bal = row.balance + reward
         updated = row.model_copy(
