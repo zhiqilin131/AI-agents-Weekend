@@ -349,6 +349,64 @@ def test_voice_pipeline_async_tool_postprocess_can_return_pending(monkeypatch, t
     assert body["memory_updates"] == []
 
 
+def test_voice_pipeline_tool_timeout_falls_back_to_conversation_answer(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    settings = Settings(
+        foresight_user_id="u_voice_tool_timeout",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="sk-test",
+        slime_voice_tool_timeout_ms=100,
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_tool_timeout.json").write_text(
+        json.dumps({"user_id": "u_voice_tool_timeout", "memory_facts": [], "priority_lines": [], "about_me": ""}),
+        encoding="utf-8",
+    )
+    tr = TranscriptionResult(text="what do you remember about me", provider="faster_whisper", language="en", timing={})
+    route = SlimeVoiceRouteResult(
+        intent="memory_search",
+        tool_name="search_memory",
+        arguments={"query": "what do you remember about me", "scope": "all"},
+        requires_confirmation=False,
+    )
+    turn = {
+        "thread_id": "t1",
+        "assistant_text": "You told me you prefer concise replies.",
+        "spoken_sequence": ["You told me you prefer concise replies."],
+        "intent": "general_chat",
+        "decision_suggestion": None,
+        "memory_updates": [],
+        "memory_update_details": [],
+        "frontend_action": {"type": "none", "route": "", "payload": {}},
+    }
+
+    def _slow_tool(*_a, **_k):
+        time.sleep(0.2)
+        return (
+            {"ok": True, "evidence_items": []},
+            {"type": "none", "route": "", "payload": {}},
+            "slow tool",
+        )
+
+    with patch("foresight_x.voice.asr.transcribe_audio", return_value=tr):
+        with patch("foresight_x.voice.slime_voice_router.route_slime_voice_command", return_value=route):
+            with patch("foresight_x.voice.slime_tools.execute_slime_tool", side_effect=_slow_tool):
+                with patch("foresight_x.chat.conversation_service.process_conversation_turn", return_value=turn):
+                    body = _run_slime_voice_pipeline(
+                        b"bytes",
+                        "a.webm",
+                        "/buddy",
+                        None,
+                        None,
+                        None,
+                        settings,
+                    )
+    assert body["assistant_text"] == "You told me you prefer concise replies."
+    assert body.get("tool_timeout_fallback") is True
+    assert body["tool_result"].get("error") == "tool_timeout"
+
+
 def test_slime_tts_requires_openai_key(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "")
