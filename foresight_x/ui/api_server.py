@@ -179,9 +179,29 @@ from foresight_x.calendar_agent import ics_service as cal_ics_service
 
 _log = logging.getLogger(__name__)
 
+MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024
+_AUDIO_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _read_audio_upload_limited(upload: UploadFile, *, empty_detail: str) -> bytes:
+    data = bytearray()
+    while True:
+        chunk = await upload.read(_AUDIO_UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        data.extend(chunk)
+        if len(data) > MAX_AUDIO_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"audio_file_too_large: max {MAX_AUDIO_UPLOAD_BYTES} bytes",
+            )
+    if not data:
+        raise HTTPException(status_code=400, detail=empty_detail)
+    return bytes(data)
 
 
 def _credit_header_request_id(request: Request) -> str | None:
@@ -3879,9 +3899,7 @@ async def transcribe_audio(file: UploadFile = File(...)) -> dict:
     except ImportError as e:
         raise HTTPException(status_code=503, detail="openai package required for transcription") from e
 
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Empty audio file")
+    raw = await _read_audio_upload_limited(file, empty_detail="Empty audio file")
 
     client = OpenAI(
         api_key=settings.openai_api_key,
@@ -4548,10 +4566,8 @@ async def slime_voice_command(
     """Push-to-talk: local ASR (default faster-whisper) + GPT-4o-mini tool routing."""
     settings = _settings_for_active_user()
     t_read0 = time.perf_counter()
-    raw = await audio.read()
+    raw = await _read_audio_upload_limited(audio, empty_detail="empty_audio")
     upload_ms = (time.perf_counter() - t_read0) * 1000
-    if not raw:
-        raise HTTPException(status_code=400, detail="empty_audio")
     rid = _credit_header_request_id(request) or f"slime_voice:{uuid.uuid4().hex}"
     prof = load_user_profile(settings)
     tx, gate_err = _credit_gate(
@@ -4624,10 +4640,8 @@ async def slime_voice_command_stream(
 ) -> StreamingResponse | JSONResponse:
     settings = _settings_for_active_user()
     t_read0 = time.perf_counter()
-    raw = await audio.read()
+    raw = await _read_audio_upload_limited(audio, empty_detail="empty_audio")
     upload_ms = (time.perf_counter() - t_read0) * 1000
-    if not raw:
-        raise HTTPException(status_code=400, detail="empty_audio")
     rid = _credit_header_request_id(request) or f"slime_voice_stream:{uuid.uuid4().hex}"
     prof = load_user_profile(settings)
     tx, gate_err = _credit_gate(
