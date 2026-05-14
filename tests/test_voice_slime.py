@@ -201,6 +201,48 @@ def test_voice_command_stream_http_mocked(monkeypatch) -> None:
     assert voice_response.get("transcript") == "stream me"
 
 
+def test_transcribe_rejects_oversized_audio(monkeypatch) -> None:
+    import foresight_x.ui.api_server as api_server
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(api_server, "MAX_AUDIO_UPLOAD_BYTES", 3)
+    client = TestClient(api_server.app)
+    files = {"file": ("v.webm", io.BytesIO(b"abcd"), "audio/webm")}
+
+    r = client.post("/api/transcribe", files=files)
+
+    assert r.status_code == 413
+    assert "audio_file_too_large" in r.json()["detail"]
+
+
+def test_voice_command_rejects_oversized_audio_before_pipeline(monkeypatch) -> None:
+    import foresight_x.ui.api_server as api_server
+
+    monkeypatch.setattr(api_server, "MAX_AUDIO_UPLOAD_BYTES", 3)
+    client = TestClient(api_server.app)
+    files = {"audio": ("v.webm", io.BytesIO(b"abcd"), "audio/webm")}
+
+    with patch.object(api_server, "_run_slime_voice_pipeline", side_effect=AssertionError("pipeline called")):
+        r = client.post("/api/slime/voice-command", files=files)
+
+    assert r.status_code == 413
+    assert "audio_file_too_large" in r.json()["detail"]
+
+
+def test_voice_command_stream_rejects_oversized_audio_before_pipeline(monkeypatch) -> None:
+    import foresight_x.ui.api_server as api_server
+
+    monkeypatch.setattr(api_server, "MAX_AUDIO_UPLOAD_BYTES", 3)
+    client = TestClient(api_server.app)
+    files = {"audio": ("v.webm", io.BytesIO(b"abcd"), "audio/webm")}
+
+    with patch.object(api_server, "_run_slime_voice_pipeline", side_effect=AssertionError("pipeline called")):
+        r = client.post("/api/slime/voice-command-stream", files=files)
+
+    assert r.status_code == 413
+    assert "audio_file_too_large" in r.json()["detail"]
+
+
 def test_voice_pipeline_conversation_turn_includes_memory_update_details(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     settings = Settings(
