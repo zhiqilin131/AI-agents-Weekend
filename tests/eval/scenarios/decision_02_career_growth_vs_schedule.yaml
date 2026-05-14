@@ -1,0 +1,21 @@
+id: decision-02-career-growth-vs-schedule
+persona_id: b
+category: decision
+input: I have a higher-title opportunity, but it comes with weekly late-night meetings.
+  I'm worried it will wreck family rhythm. How would you break this down?
+expected:
+  must_retrieve_memory_ids:
+  - pd_b_006
+  must_include_in_options:
+  - accept|take|trial
+  - delay|defer|postpone|negotiate
+  - alternative|explore
+  must_not_violate: []
+  recommendation_present: true
+  latency_p95_ms: 120000
+  latency_target_ms: 9000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 34
+  llm_call_count_target: 26

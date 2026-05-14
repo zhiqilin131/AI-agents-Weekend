@@ -1,0 +1,21 @@
+id: decision-05-health-workload-reset
+persona_id: b
+category: decision
+input: My sleep has been squeezed by work for weeks. Should I cut some side commitments
+  now or push through a bit longer?
+expected:
+  must_retrieve_memory_ids:
+  - pd_b_004
+  must_include_in_options:
+  - cut|reduce|trim
+  - delegate|share|distribute|negotiate
+  - support|maintain|continue
+  must_not_violate: []
+  recommendation_present: true
+  latency_p95_ms: 120000
+  latency_target_ms: 9000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 34
+  llm_call_count_target: 24

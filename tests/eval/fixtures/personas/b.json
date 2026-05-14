@@ -1,0 +1,139 @@
+{
+  "user_id": "persona_b",
+  "values": [
+    "family stability",
+    "long-term career trajectory",
+    "health sustainability"
+  ],
+  "risk_posture": "moderate",
+  "recurring_themes": [
+    "balances immediate income against long-term upside",
+    "accepts short-term discomfort for strategic positioning"
+  ],
+  "current_goals": [
+    "secure promotion path within 18 months",
+    "protect evening time for family commitments"
+  ],
+  "known_constraints": [
+    "weekly caregiver duties",
+    "cannot sustain travel-heavy schedule"
+  ],
+  "n_decisions_summarized": 6,
+  "last_updated": "2026-01-20T08:30:00Z",
+  "confidence": 0.82,
+  "priority_lines": [
+    {
+      "id": "pl_b_001",
+      "text": "Prioritize roles with advancement visibility, not just short-term salary spikes.",
+      "origin": "user",
+      "channel": "profile",
+      "created_at": "2026-01-12T07:00:00Z"
+    },
+    {
+      "id": "pl_b_002",
+      "text": "Keep work hours compatible with family routines.",
+      "origin": "user",
+      "channel": "profile",
+      "created_at": "2026-01-12T07:05:00Z"
+    },
+    {
+      "id": "pl_b_003",
+      "text": "Avoid choices that repeatedly trigger burnout patterns.",
+      "origin": "system",
+      "channel": "shadow",
+      "created_at": "2026-01-12T07:10:00Z"
+    }
+  ],
+  "user_priorities": [
+    "Prioritize roles with advancement visibility, not just short-term salary spikes.",
+    "Keep work hours compatible with family routines."
+  ],
+  "inferred_priorities": [
+    "Avoid choices that repeatedly trigger burnout patterns."
+  ],
+  "priorities": [
+    "Prioritize roles with advancement visibility, not just short-term salary spikes.",
+    "Keep work hours compatible with family routines."
+  ],
+  "about_me": "Mid-career operator evaluating leadership growth while maintaining family reliability in City X.",
+  "constraints": [
+    "No recurring weekend travel.",
+    "Needs predictable evenings three days per week."
+  ],
+  "memory_facts": [
+    {
+      "id": "mf_b_001",
+      "category": "behavior",
+      "text": "I regret decisions that increase title but remove family time.",
+      "source": "shadow",
+      "created_at": "2026-01-12T07:15:00Z",
+      "subject_ref": "user",
+      "predicate": "regrets",
+      "object_value": "title_gain_with_family_time_loss",
+      "evidence": "The last high-travel role caused ongoing stress at home."
+    },
+    {
+      "id": "mf_b_002",
+      "category": "goals",
+      "text": "I want a leadership path with mentorship responsibilities.",
+      "source": "user",
+      "created_at": "2026-01-12T07:20:00Z",
+      "subject_ref": "user",
+      "predicate": "wants",
+      "object_value": "leadership_path_with_mentoring",
+      "evidence": "I feel most fulfilled when growing younger teammates."
+    }
+  ],
+  "timezone": "Asia/Singapore",
+  "default_model_option_id": "deep",
+  "past_decisions": [
+    {
+      "id": "pd_b_001",
+      "decision_type": "career",
+      "situation_summary": "Chose between Company A manager track and Company B specialist track.",
+      "chosen_option": "Selected Company A manager track.",
+      "outcome": "Gained people leadership experience but needed stricter calendar boundaries.",
+      "timestamp": "2024-03-05T09:00:00Z"
+    },
+    {
+      "id": "pd_b_002",
+      "decision_type": "finance",
+      "situation_summary": "Evaluated fixed bonus package versus variable commission-heavy package.",
+      "chosen_option": "Selected fixed bonus package.",
+      "outcome": "Reduced monthly financial volatility.",
+      "timestamp": "2024-07-11T14:20:00Z"
+    },
+    {
+      "id": "pd_b_003",
+      "decision_type": "career",
+      "situation_summary": "Accepted temporary project lead role with evening coordination demands.",
+      "chosen_option": "Accepted role with explicit no-meeting-after-7pm condition.",
+      "outcome": "Delivered project goals without major family routine disruption.",
+      "timestamp": "2024-10-02T18:00:00Z"
+    },
+    {
+      "id": "pd_b_004",
+      "decision_type": "health",
+      "situation_summary": "Balanced extra consulting workload against sleep and exercise routine.",
+      "chosen_option": "Reduced consulting scope to maintain recovery schedule.",
+      "outcome": "Energy levels improved and stress episodes declined.",
+      "timestamp": "2025-01-23T06:40:00Z"
+    },
+    {
+      "id": "pd_b_005",
+      "decision_type": "relationship",
+      "situation_summary": "Planned support plan for shared caregiver responsibilities with partner.",
+      "chosen_option": "Moved one workday to remote to support caregiver transitions.",
+      "outcome": "Lowered coordination friction at home.",
+      "timestamp": "2025-06-17T20:15:00Z"
+    },
+    {
+      "id": "pd_b_006",
+      "decision_type": "career",
+      "situation_summary": "Decided whether to switch to a high-visibility role requiring heavy travel.",
+      "chosen_option": "Declined travel-heavy role and pursued internal leadership project.",
+      "outcome": "Maintained advancement trajectory with better schedule control.",
+      "timestamp": "2025-11-08T12:45:00Z"
+    }
+  ]
+}

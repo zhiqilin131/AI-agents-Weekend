@@ -1,0 +1,21 @@
+id: decision-06-health-energy-vs-income
+persona_id: a
+category: decision
+input: I want to take an evening side gig for extra income, but my daytime job is
+  already packed and I'm worried I'll burn out. What's the stable tradeoff?
+expected:
+  must_retrieve_memory_ids:
+  - pd_a_002
+  must_include_in_options:
+  - take|accept|freelance
+  - decline|skip|focus
+  - limit|partial|networking
+  must_not_violate: []
+  recommendation_present: true
+  latency_p95_ms: 120000
+  latency_target_ms: 9000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 34
+  llm_call_count_target: 24

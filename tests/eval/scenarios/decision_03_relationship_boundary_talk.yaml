@@ -1,0 +1,21 @@
+id: decision-03-relationship-boundary-talk
+persona_id: b
+category: decision
+input: My partner and I keep clashing over caregiving split. Should we pause the argument
+  and set rules first, or keep things as-is for now and observe?
+expected:
+  must_retrieve_memory_ids:
+  - pd_b_005
+  must_include_in_options:
+  - pause|wait|observe
+  - boundary|limit|rule
+  - support|external
+  must_not_violate: []
+  recommendation_present: true
+  latency_p95_ms: 120000
+  latency_target_ms: 10000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 34
+  llm_call_count_target: 24

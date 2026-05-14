@@ -1,0 +1,19 @@
+id: shadow-02-half-thought-prompt
+persona_id: c
+category: shadow
+input: I have this vague urge to change direction, but when I look closer it feels
+  like avoidance. I can't tell if I actually want it.
+expected:
+  must_retrieve_memory_ids:
+  - pd_c_001
+  must_include_in_options: []
+  must_not_violate:
+  - not_therapy
+  recommendation_present: false
+  latency_p95_ms: 60000
+  latency_target_ms: 8000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 15
+  llm_call_count_target: 12

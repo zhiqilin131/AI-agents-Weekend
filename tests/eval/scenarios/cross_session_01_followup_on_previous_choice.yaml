@@ -1,0 +1,29 @@
+id: cross-session-01-followup-on-previous-choice
+persona_id: b
+category: cross_session
+input:
+- role: user
+  content: Last week I chose to turn down that high-travel role and go with the internal
+    leadership track.
+- role: assistant
+  content: Got it, you prioritized long-term growth with a schedule your family can
+    sustain.
+- role: user
+  content: So this week, how do I talk to my manager about that thing we decided last
+    week without sounding like I'm dodging responsibility?
+expected:
+  must_retrieve_memory_ids:
+  - pd_b_006
+  must_include_in_options:
+  - direct|communicate
+  - structured|proposal|prepare
+  - feedback|peer|mentor
+  must_not_violate: []
+  recommendation_present: true
+  latency_p95_ms: 90000
+  latency_target_ms: 10000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 34
+  llm_call_count_target: 28
