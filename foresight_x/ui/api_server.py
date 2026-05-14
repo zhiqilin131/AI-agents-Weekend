@@ -4152,6 +4152,71 @@ def _run_slime_voice_pipeline(
         "total_ms": 0.0,
     }
 
+    def _conversation_turn_response(
+        *,
+        tool_timeout_fallback: bool,
+        tool_result_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        t_conv0 = time.perf_counter()
+        first_delta_ms: float | None = None
+
+        def _on_reply_delta(delta: str) -> None:
+            nonlocal first_delta_ms
+            if first_delta_ms is None and str(delta or "").strip():
+                first_delta_ms = (time.perf_counter() - t_conv0) * 1000
+            if on_text_delta is not None:
+                on_text_delta(delta)
+
+        turn = process_conversation_turn(
+            settings=settings,
+            user_id=uid,
+            thread=thread,
+            user_message=transcript,
+            source="slime_voice",
+            modality="voice",
+            clarification_answers=None,
+            llm_model=llm_model,
+            on_reply_delta=_on_reply_delta,
+        )
+        timing["tool_execute_ms"] = (time.perf_counter() - t_conv0) * 1000
+        timing["llm_total_ms"] = timing["tool_execute_ms"]
+        timing["llm_first_token_ms"] = first_delta_ms or timing["llm_total_ms"]
+        timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
+
+        assistant_text_local = str(turn.get("assistant_text") or "")
+        spoken_seq = [x for x in (turn.get("spoken_sequence") or []) if str(x).strip()]
+        spoken_text_local = " ".join(spoken_seq).strip() or assistant_text_local
+        ds = turn.get("decision_suggestion")
+        fe_out = turn.get("frontend_action") or {"type": "none", "route": "", "payload": {}}
+
+        voice_ui = {
+            "intent": str(turn.get("intent") or route.intent),
+            "memory_phases": [],
+            "evidence_items": [],
+            "should_show_evidence_drawer": False,
+        }
+        return {
+            "transcript": transcript,
+            "asr_provider": tr.provider,
+            "language": tr.language,
+            "assistant_text": assistant_text_local,
+            "spoken_text": spoken_text_local,
+            "spoken_sequence": spoken_seq,
+            "thread_id": str(turn.get("thread_id") or resolved_tid),
+            "intent": str(turn.get("intent") or route.intent),
+            "decision_suggestion": ds,
+            "memory_updates": turn.get("memory_updates") or [],
+            "memory_update_details": turn.get("memory_update_details") or [],
+            "tool_call": {"name": route.tool_name, "arguments": route.arguments},
+            "tool_result": tool_result_payload,
+            "frontend_action": fe_out,
+            "requires_confirmation": bool(ds and ds.get("should_show")),
+            "route_timeout_fallback": route_timed_out,
+            "tool_timeout_fallback": tool_timeout_fallback,
+            "timing": timing,
+            "voice_ui": voice_ui,
+        }
+
     tool_executables = {
         "navigate",
         "search_memory",
@@ -4179,12 +4244,14 @@ def _run_slime_voice_pipeline(
         except FuturesTimeout:
             tool_timed_out = True
             tool_result = {"ok": False, "error": "tool_timeout", "tool_name": route.tool_name}
-            fe = {"type": "none", "route": "", "payload": {}}
-            assistant_text = (
-                "I heard you — this action is taking too long right now. "
-                "Please try that command again."
-            )
             ex_tool.shutdown(wait=False, cancel_futures=True)
+            return _conversation_turn_response(
+                tool_timeout_fallback=True,
+                tool_result_payload={
+                    **tool_result,
+                    "fallback": "conversation_turn",
+                },
+            )
         except Exception:
             ex_tool.shutdown(wait=False, cancel_futures=True)
             raise
@@ -4301,65 +4368,10 @@ def _run_slime_voice_pipeline(
             "voice_ui": voice_ui,
         }
 
-    t_conv0 = time.perf_counter()
-    first_delta_ms: float | None = None
-
-    def _on_reply_delta(delta: str) -> None:
-        nonlocal first_delta_ms
-        if first_delta_ms is None and str(delta or "").strip():
-            first_delta_ms = (time.perf_counter() - t_conv0) * 1000
-        if on_text_delta is not None:
-            on_text_delta(delta)
-
-    turn = process_conversation_turn(
-        settings=settings,
-        user_id=uid,
-        thread=thread,
-        user_message=transcript,
-        source="slime_voice",
-        modality="voice",
-        clarification_answers=None,
-        llm_model=llm_model,
-        on_reply_delta=_on_reply_delta,
+    return _conversation_turn_response(
+        tool_timeout_fallback=False,
+        tool_result_payload={"ok": True, "conversation_turn": True},
     )
-    timing["tool_execute_ms"] = (time.perf_counter() - t_conv0) * 1000
-    timing["llm_total_ms"] = timing["tool_execute_ms"]
-    timing["llm_first_token_ms"] = first_delta_ms or timing["llm_total_ms"]
-    timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
-
-    assistant_text = str(turn.get("assistant_text") or "")
-    spoken_seq = [x for x in (turn.get("spoken_sequence") or []) if str(x).strip()]
-    spoken_text = " ".join(spoken_seq).strip() or assistant_text
-    ds = turn.get("decision_suggestion")
-    fe_out = turn.get("frontend_action") or {"type": "none", "route": "", "payload": {}}
-
-    voice_ui = {
-        "intent": str(turn.get("intent") or route.intent),
-        "memory_phases": [],
-        "evidence_items": [],
-        "should_show_evidence_drawer": False,
-    }
-    return {
-        "transcript": transcript,
-        "asr_provider": tr.provider,
-        "language": tr.language,
-        "assistant_text": assistant_text,
-        "spoken_text": spoken_text,
-        "spoken_sequence": spoken_seq,
-        "thread_id": str(turn.get("thread_id") or resolved_tid),
-        "intent": str(turn.get("intent") or route.intent),
-        "decision_suggestion": ds,
-        "memory_updates": turn.get("memory_updates") or [],
-        "memory_update_details": turn.get("memory_update_details") or [],
-        "tool_call": {"name": route.tool_name, "arguments": route.arguments},
-        "tool_result": {"ok": True, "conversation_turn": True},
-        "frontend_action": fe_out,
-        "requires_confirmation": bool(ds and ds.get("should_show")),
-        "route_timeout_fallback": route_timed_out,
-        "tool_timeout_fallback": False,
-        "timing": timing,
-        "voice_ui": voice_ui,
-    }
 
 
 @app.post("/api/slime/tts", response_model=None)
