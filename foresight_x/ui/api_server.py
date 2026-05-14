@@ -4082,7 +4082,62 @@ def _run_slime_voice_pipeline(
         recent_ui_context=ruc,
     )
     def _fallback_route_for_timeout(text: str) -> SlimeVoiceRouteResult:
-        si = classify_slime_intent(text)
+        raw = str(text or "").strip()
+        low = raw.lower()
+        has_calendar_target = any(
+            marker in low
+            for marker in (
+                "calendar",
+                "execution calendar",
+                "planner",
+                "schedule",
+            )
+        ) or any(marker in raw for marker in ("日历", "执行日历", "日程", "计划"))
+        asks_calendar_create = any(
+            marker in low
+            for marker in (
+                "add ",
+                "put ",
+                "schedule ",
+                "book ",
+                "set up ",
+                "remind ",
+            )
+        ) or any(marker in raw for marker in ("加", "加入", "安排", "提醒", "放到", "记到"))
+        asks_calendar_search = any(
+            marker in low
+            for marker in (
+                "what do i have",
+                "what's on my",
+                "whats on my",
+                "am i free",
+                "do i have anything",
+                "today",
+                "tomorrow",
+                "this week",
+            )
+        ) and has_calendar_target
+
+        if has_calendar_target and asks_calendar_create:
+            return SlimeVoiceRouteResult(
+                intent="calendar_create",
+                tool_name="create_calendar_draft",
+                arguments={},
+                requires_confirmation=False,
+                assistant_hint=(
+                    "I heard your calendar request. I'll draft it for confirmation so nothing gets added silently."
+                ),
+            )
+        if asks_calendar_search:
+            return SlimeVoiceRouteResult(
+                intent="calendar_search",
+                tool_name="search_calendar",
+                arguments={"query": raw[:500], "range": "week"},
+                requires_confirmation=False,
+                assistant_hint="I heard your calendar question. Let me check it directly.",
+            )
+
+        si = classify_slime_intent(raw)
         hint = (
             "I heard you, but routing took too long this turn. Could you repeat that in a short command?"
         )
@@ -4229,6 +4284,10 @@ def _run_slime_voice_pipeline(
     if route.tool_name in tool_executables:
         t_tool0 = time.perf_counter()
         tool_timeout_s = float(max(0.1, settings.slime_voice_tool_timeout_ms / 1000.0))
+        if route.tool_name in {"create_calendar_draft", "schedule_decision_plan"}:
+            # Calendar draft generation may include parser + conflict checks; give it a wider budget
+            # so we return a real confirmation card instead of falling back to generic chat text.
+            tool_timeout_s = max(tool_timeout_s, 6.0)
         tool_timed_out = False
         ex_tool = ThreadPoolExecutor(max_workers=1)
         fut_tool = ex_tool.submit(
