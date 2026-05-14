@@ -58,6 +58,13 @@ def test_transfer_queries_official_flavor() -> None:
     assert "transfer" in " ".join(qs).lower() or "common app" in " ".join(qs).lower()
 
 
+def test_transferring_wording_still_triggers_transfer_queries() -> None:
+    tr = _trace("I am transferring schools this year, what should I prepare?", decision_type="academic")
+    qs = build_tavily_resource_queries(tr)
+    joined = " ".join(qs).lower()
+    assert "transfer" in joined or "common app" in joined
+
+
 def test_emotional_skip_external() -> None:
     tr = _trace("I feel lonely and cry every night")
     assert should_skip_external_resources(tr) is True

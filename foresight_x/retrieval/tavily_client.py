@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from typing import Any, Protocol
+import re
 
 from tavily import TavilyClient
 
@@ -19,6 +20,34 @@ from foresight_x.schemas import Fact, UserState
 
 # https://docs.tavily.com/ — API rejects queries over 400 characters.
 TAVILY_MAX_QUERY_CHARS = 400
+_TAVILY_QUERY_STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "that",
+        "this",
+        "from",
+        "your",
+        "about",
+        "have",
+        "what",
+        "when",
+        "where",
+        "which",
+        "should",
+        "would",
+        "could",
+        "user",
+        "priority",
+        "priorities",
+        "memory",
+        "facts",
+        "values",
+        "constraints",
+    }
+)
 
 
 def _truncate_tavily_query(q: str) -> str:
@@ -28,28 +57,75 @@ def _truncate_tavily_query(q: str) -> str:
     return s[: TAVILY_MAX_QUERY_CHARS - 1].rstrip() + "…"
 
 
-def build_tavily_query_for_decision(user_state: UserState, profile_extra: str = "") -> str:
+def _compact_profile_hint(profile_extra: str, *, max_terms: int = 6) -> str:
+    """Keep only high-signal profile tokens to avoid broadening Tavily intent."""
+    raw = profile_extra or ""
+    toks = re.findall(r"[A-Za-z0-9][A-Za-z0-9+._-]{2,}|[\u4e00-\u9fff]{2,}", raw)
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in toks:
+        tl = t.lower()
+        if tl in seen or tl in _TAVILY_QUERY_STOPWORDS:
+            continue
+        # Keep explicit entities/acronyms/IDs; skip generic profile labels.
+        if not (any(ch.isdigit() for ch in t) or t.isupper() or t[:1].isupper() or re.search(r"[\u4e00-\u9fff]", t)):
+            continue
+        seen.add(tl)
+        out.append(t)
+        if len(out) >= max_terms:
+            break
+    return " ".join(out)
+
+
+def _append_unique(parts: list[str], text: str) -> None:
+    s = (text or "").strip()
+    if not s:
+        return
+    ls = s.lower()
+    if any(ls == p.lower() for p in parts):
+        return
+    parts.append(s)
+
+
+def build_tavily_query_for_decision(
+    user_state: UserState,
+    profile_extra: str = "",
+    *,
+    include_profile: bool = False,
+) -> str:
     """Build a Tavily query aligned to *this* decision.
 
     Puts the user's actual question first so live search is not dominated by profile text or old
     demo embeddings. Chroma retrieval may still use a broader query string separately.
     """
     raw = (user_state.raw_input or "").strip()
-    goals = " ".join((user_state.goals or [])[:12])
+    goals = " ".join((user_state.goals or [])[:4]).strip()
     dt = (user_state.decision_type or "general").strip()
-    prof = (profile_extra or "").strip()
-    if len(prof) > 260:
-        prof = prof[:257] + "..."
+    deadline = (user_state.deadline_hint or "").strip()
+    prof_hint = _compact_profile_hint(profile_extra)
     parts: list[str] = []
+
     if raw:
-        parts.append(raw)
-    if goals:
-        parts.append(goals)
+        _append_unique(parts, raw)
+    else:
+        _append_unique(parts, goals)
+
+    # Keep domain/time cues compact and explicit.
     if dt and dt != "general":
-        parts.append(dt)
-    if prof:
-        parts.append(prof)
-    q = " ".join(parts) if parts else raw or goals or dt
+        _append_unique(parts, f"decision type: {dt}")
+    if deadline:
+        _append_unique(parts, f"deadline: {deadline[:80]}")
+
+    # Include profile context only when explicitly enabled and the user query is short/underspecified.
+    if include_profile and prof_hint and (not raw or len(raw) < 80):
+        _append_unique(parts, f"context: {prof_hint}")
+
+    if not parts:
+        _append_unique(parts, goals)
+        if dt and dt != "general":
+            _append_unique(parts, dt)
+
+    q = " ".join(parts).strip()
     return _truncate_tavily_query(q)
 
 

@@ -38,3 +38,13 @@ def test_keeps_overlap_on_topic() -> None:
         confidence=0.7,
     )
     assert keep_baseline_fact(us, fact, tavily_query="how to dispose of biological waste safely")
+
+
+def test_rejects_single_token_overlap_that_is_not_topical() -> None:
+    us = _us("Should I transfer to CMU for CS this fall?")
+    fact = Fact(
+        text="Football transfer rumor tracker and fantasy league updates.",
+        source_url="https://sports.example",
+        confidence=0.7,
+    )
+    assert not keep_baseline_fact(us, fact, tavily_query="Should I transfer to CMU for CS this fall?")

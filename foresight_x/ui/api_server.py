@@ -4140,7 +4140,7 @@ def _run_slime_voice_pipeline(
             return SlimeVoiceRouteResult(
                 intent="calendar_create",
                 tool_name="create_calendar_draft",
-                arguments={},
+                arguments={"_fast_parse": True},
                 requires_confirmation=False,
                 assistant_hint=(
                     "I heard your calendar request. I'll draft it for confirmation so nothing gets added silently."

@@ -46,6 +46,23 @@ class Settings(BaseSettings):
     )
     #: If local Chroma has fewer than this many hits, run Tavily (unless ``tavily_always`` / ``tavily_fresh_each_run``).
     tavily_min_cache_hits: int = Field(default=3, ge=0, validation_alias=AliasChoices("tavily_min_cache_hits", "TAVILY_MIN_CACHE_HITS"))
+    #: Inject profile text into Tavily query only when explicitly enabled.
+    tavily_include_profile_in_query: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("tavily_include_profile_in_query", "TAVILY_INCLUDE_PROFILE_IN_QUERY"),
+    )
+    #: Keep cached Tavily web snippets only for this many days.
+    tavily_cached_web_max_age_days: int = Field(
+        default=3,
+        ge=0,
+        le=30,
+        validation_alias=AliasChoices("tavily_cached_web_max_age_days", "TAVILY_CACHED_WEB_MAX_AGE_DAYS"),
+    )
+    #: Require cached Tavily snippets to match the current query signature.
+    tavily_query_scoped_cache: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("tavily_query_scoped_cache", "TAVILY_QUERY_SCOPED_CACHE"),
+    )
 
     chroma_persist_dir: Path = Field(
         default=Path("./data/chroma"),

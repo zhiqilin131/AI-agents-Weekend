@@ -91,7 +91,7 @@ def build_tavily_resource_queries(trace: DecisionTrace, *, max_queries: int = 3)
             queries.append(qq)
 
     # Domain-shaped triggers (avoid vague life-coaching queries)
-    if any(k in raw for k in ("transfer", "transferred transferring")):
+    if any(k in raw for k in ("transfer", "transferred", "transferring")):
         base = hints or raw_in[:120]
         q(f"official transfer admissions requirements {base}")
         q("Common App transfer application official")
@@ -155,8 +155,8 @@ def rank_resource_candidate(
     for tok in qt.split():
         if len(tok) > 3 and tok in ttl:
             score += 0.12
-        if len(tok) > 3 and tok in raw_user.lower():
-            score += 0.05
+        if len(tok) > 3 and tok in (fact.text or "").lower():
+            score += 0.03
 
     if any(host.endswith(suf) or suf in host for suf in _GOOD_HOST_SUFFIX):
         score += 0.55

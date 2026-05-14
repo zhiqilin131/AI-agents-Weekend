@@ -806,6 +806,24 @@ def test_deterministic_voice_rename_persists_without_confirm(tmp_path: Path) -> 
     assert loaded.slime_profile.name == "Pebble"
 
 
+def test_route_voice_slime_name_phrase_renames_slime_not_calendar(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_voice_rename_slime_name_phrase",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="",
+    )
+    ctx = SlimeVoiceContext(user_id="u_voice_rename_slime_name_phrase")
+    route = route_slime_voice_command(
+        "Oh, I mean, can you change your slime name into Adam?",
+        ctx,
+        settings=settings,
+    )
+    assert route.tool_name == "update_slime_profile"
+    assert route.arguments["patch"]["name"] == "Adam"
+    assert route.auto_apply_voice_rename is True
+
+
 def test_route_voice_from_now_on_slime_rename_persists_without_confirm(tmp_path: Path) -> None:
     settings = Settings(
         foresight_user_id="u_voice_rename_phrase",
@@ -1255,6 +1273,10 @@ def test_memory_search_direct_question_uses_concrete_profile_fact(tmp_path: Path
                     {
                         "id": "f1",
                         "category": "identity",
+                        "confidence": 0.91,
+                        "importance": 0.87,
+                        "created_at": "2026-05-01T10:00:00Z",
+                        "updated_at": "2026-05-12T10:00:00Z",
                         "text": "Rose is my girlfriend and we plan October visits.",
                         "subject_ref": "user",
                         "predicate": "dating",
@@ -1289,7 +1311,78 @@ def test_memory_search_direct_question_uses_concrete_profile_fact(tmp_path: Path
     assert "Rose" in assistant
     assert "girlfriend" in assistant.lower()
     assert any("structured:" in str(item.get("fullText") or "") for item in tr["evidence_items"])
+    assert any(item.get("category") == "identity" for item in tr["evidence_items"])
+    assert any(item.get("createdAt") == "2026-05-01T10:00:00Z" for item in tr["evidence_items"])
     assert any("Foresight-X" in str(hit.get("text") or "") for hit in tr["hits"])
+
+
+def test_memory_search_broad_recall_balances_structured_memory_categories(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_memory_balanced",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_memory_balanced.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_memory_balanced",
+                "about_me": "I am a student building useful AI interfaces.",
+                "priority_lines": [
+                    {"id": f"p{i}", "text": f"Decision clarification preference {i}: I like explicit constraints."}
+                    for i in range(12)
+                ],
+                "memory_facts": [
+                    {
+                        "id": "rel",
+                        "category": "identity",
+                        "text": "Rose is my girlfriend.",
+                        "predicate": "dating",
+                        "object_value": "Rose",
+                        "importance": 0.9,
+                    },
+                    {
+                        "id": "proj",
+                        "category": "goals",
+                        "text": "I am building Foresight-X as a project.",
+                        "predicate": "works_on",
+                        "object_value": "Foresight-X",
+                        "importance": 0.88,
+                    },
+                    {
+                        "id": "constraint",
+                        "category": "constraints",
+                        "text": "I have limited time during heavy coursework weeks.",
+                        "predicate": "limited_by",
+                        "object_value": "coursework",
+                        "importance": 0.8,
+                    },
+                    {
+                        "id": "behavior",
+                        "category": "behavior",
+                        "text": "I iterate quickly on UI details after trying the demo.",
+                        "importance": 0.65,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_memory_balanced")
+    route = SlimeVoiceRouteResult(
+        intent="memory_search",
+        tool_name="search_memory",
+        arguments={"query": "What do you remember about me?", "scope": "all"},
+        requires_confirmation=False,
+    )
+    tr, _fe, assistant = execute_slime_tool(route, ctx, settings=settings, transcript="What do you remember about me?")
+    hit_text = " ".join(str(h.get("text") or "") for h in tr["hits"])
+    assert "Rose" in hit_text
+    assert "Foresight-X" in hit_text
+    assert "coursework" in hit_text
+    assert "Decision clarification preference 11" not in hit_text
+    assert "girlfriend" in assistant or "Foresight-X" in assistant
 
 
 def test_calendar_parse_saturday_morning() -> None:

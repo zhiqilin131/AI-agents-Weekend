@@ -42,7 +42,7 @@ def test_slime_voice_turn_decision_envelope(monkeypatch, tmp_path: Path) -> None
 
     fake_out = MagicMock()
     fake_out.reply = "That sounds like a real fork in the road — we can structure it."
-    fake_out.used_memory_facts = False
+    fake_out.used_memory_facts = []
     fake_out.profile_record_texts = []
     fake_out.thread_only_items = []
 
@@ -64,7 +64,48 @@ def test_slime_voice_turn_decision_envelope(monkeypatch, tmp_path: Path) -> None
     assert out["decision_suggestion"]["should_show"] is True
     assert "Decision" in (out["decision_suggestion"].get("display_text") or "")
     assert out["frontend_action"]["type"] == "show_decision_mode_confirmation"
-    assert len(out["spoken_sequence"]) >= 1
+    assert out["spoken_sequence"] == [out["assistant_text"]]
+
+
+def test_slime_voice_turn_surfaces_used_memory_evidence(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    uid = "u_conv_memory_evidence"
+    _minimal_profile(tmp_path, uid)
+    settings = Settings(
+        foresight_user_id=uid,
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="sk-test",
+    )
+
+    class _I:
+        intent = "general_chat"
+
+    fake_out = MagicMock()
+    fake_out.reply = "Rose is your girlfriend, and you two have talked about October visits."
+    fake_out.used_memory_facts = ["Rose is my girlfriend and we plan October visits."]
+    fake_out.profile_record_texts = []
+    fake_out.profile_memory_events = []
+    fake_out.thread_only_items = []
+    fake_out.memory_confirmation_question = None
+
+    thread = ensure_slime_voice_thread(uid, None)
+    with patch("foresight_x.chat.conversation_service.detect_chat_intent", return_value=_I()):
+        with patch("foresight_x.chat.conversation_service.run_shadow_turn", return_value=fake_out):
+            with patch("foresight_x.chat.conversation_service.maybe_update_thread_summary"):
+                out = process_conversation_turn(
+                    settings=settings,
+                    user_id=uid,
+                    thread=thread,
+                    user_message="Who is my girlfriend?",
+                    source="slime_voice",
+                    modality="voice",
+                )
+
+    assert out["evidence_items"]
+    assert out["evidence_items"][0]["label"] == "Used memory"
+    assert "Rose" in out["evidence_items"][0]["fullText"]
+    assert out["evidence_items"][0]["confidence"] == 0.64
 
 
 def test_slime_voice_thread_tagged(monkeypatch, tmp_path: Path) -> None:
@@ -90,7 +131,7 @@ def test_slime_voice_turn_uses_proactive_fallback_when_shadow_emits_no_memory(mo
 
     fake_out = MagicMock()
     fake_out.reply = "Noted."
-    fake_out.used_memory_facts = False
+    fake_out.used_memory_facts = []
     fake_out.profile_record_texts = []
     fake_out.profile_memory_events = []
     fake_out.thread_only_items = []

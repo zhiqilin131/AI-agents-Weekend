@@ -152,6 +152,33 @@ def _is_broad_user_memory_query(query: str) -> bool:
     )
 
 
+def _is_relationship_hit(h: dict[str, Any]) -> bool:
+    text = str(h.get("text") or "").lower()
+    pred = str(h.get("predicate") or "").lower()
+    return any(
+        token in " ".join([text, pred])
+        for token in ("girlfriend", "boyfriend", "partner", "dating", "relationship", "roommate", "friend")
+    )
+
+
+def _is_project_hit(h: dict[str, Any]) -> bool:
+    text = str(h.get("text") or "").lower()
+    pred = str(h.get("predicate") or "").lower()
+    return any(token in " ".join([text, pred]) for token in ("project", "foresight", "startup", "research", "app", "building"))
+
+
+def _memory_hit_bucket(h: dict[str, Any]) -> str:
+    kind = str(h.get("kind") or "")
+    category = str(h.get("category") or "").lower()
+    if kind != "memory_fact":
+        return kind
+    if _is_relationship_hit(h):
+        return "relationship"
+    if _is_project_hit(h):
+        return "project"
+    return category or "memory_fact"
+
+
 def _score_text(text: str, tokens: set[str]) -> float:
     if not text or not tokens:
         return 0.0
@@ -229,14 +256,22 @@ def _search_profile_and_memory(profile: UserProfile, query: str, tokens: set[str
                     "text": _profile_fact_display_text(f),
                     "id": fid,
                     "score": score + 0.25 + category_boost + importance_boost + recency_boost + rel_boost + intent_boost,
+                    "category": category,
+                    "predicate": str(getattr(f, "predicate", "") or ""),
+                    "confidence": float(getattr(f, "confidence", 0.7) or 0.7),
+                    "importance": float(getattr(f, "importance", 0.5) or 0.5),
+                    "created_at": str(getattr(f, "created_at", "") or ""),
+                    "updated_at": str(getattr(f, "updated_at", "") or ""),
+                    "last_reinforced_at": str(getattr(f, "last_reinforced_at", "") or ""),
                 }
             )
-    return out[:12]
+    return out[:36]
 
 
 def _search_chat_history(settings: Settings, query: str, tokens: set[str], thread_id: str | None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     uid = settings.foresight_user_id
+    broad = _is_broad_user_memory_query(query)
 
     def collect_thread(tid: str, *, current: bool = False) -> None:
         t = load_thread(tid, user_id=uid)
@@ -244,21 +279,21 @@ def _search_chat_history(settings: Settings, query: str, tokens: set[str], threa
         ws = str(t.get("working_summary") or "")
         boost = 0.12 if current else 0.0
         score = _score_text(ws, tokens)
-        if ws and score > 0:
-            out.append({"kind": "thread_summary", "thread_id": tid, "text": ws[:500], "score": score + boost})
+        if ws and (score > 0 or broad):
+            out.append({"kind": "thread_summary", "thread_id": tid, "text": ws[:500], "score": score + boost + (0.08 if broad else 0.0)})
         for m in msgs:
             if str(m.get("role")) != "user":
                 continue
             c = str(m.get("content") or "")
             score = _score_text(c, tokens)
-            if score > 0:
+            if score > 0 or (broad and len(c.strip()) >= 24):
                 out.append(
                     {
                         "kind": "chat_message",
                         "thread_id": tid,
                         "message_id": m.get("id"),
                         "text": c[:500],
-                        "score": score + boost,
+                        "score": score + boost + (0.04 if broad else 0.0),
                     }
                 )
 
@@ -278,17 +313,18 @@ def _search_chat_history(settings: Settings, query: str, tokens: set[str], threa
 
 def _search_decision_reports(settings: Settings, query: str, tokens: set[str]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    broad = _is_broad_user_memory_query(query)
     for item in list_traces(settings=settings)[:40]:
         preview = f"{item.preview} {item.decision_type}"
         score = _score_text(preview, tokens)
-        if score > 0:
+        if score > 0 or broad:
             out.append(
                 {
                     "kind": "decision_trace",
                     "decision_id": item.decision_id,
                     "text": preview[:300],
                     "timestamp": item.timestamp,
-                    "score": score,
+                    "score": score + (0.05 if broad else 0.0),
                 }
             )
     return out[:12]
@@ -309,6 +345,59 @@ def _rank_memory_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         h["rank_score"] = float(h.get("score") or 0.0) + source_boost.get(kind, 0.0)
     ranked.sort(key=lambda h: float(h.get("rank_score") or 0.0), reverse=True)
     return ranked
+
+
+def _dedupe_memory_hits(ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for h in ranked:
+        key = " ".join(str(h.get("text") or "").lower().split())[:120]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(h)
+    return unique
+
+
+def _diversify_memory_hits(ranked: list[dict[str, Any]], *, broad: bool, limit: int = 10) -> list[dict[str, Any]]:
+    if not broad:
+        return ranked[:limit]
+
+    priority_buckets = (
+        "identity",
+        "relationship",
+        "project",
+        "goals",
+        "constraints",
+        "behavior",
+        "views",
+        "about_me",
+        "thread_summary",
+        "chat_message",
+        "decision_trace",
+        "priority_line",
+    )
+    selected: list[dict[str, Any]] = []
+    used_ids: set[int] = set()
+
+    for bucket in priority_buckets:
+        if len(selected) >= limit:
+            break
+        for idx, h in enumerate(ranked):
+            if idx in used_ids:
+                continue
+            if _memory_hit_bucket(h) == bucket:
+                selected.append(h)
+                used_ids.add(idx)
+                break
+
+    for idx, h in enumerate(ranked):
+        if len(selected) >= limit:
+            break
+        if idx not in used_ids:
+            selected.append(h)
+            used_ids.add(idx)
+    return selected[:limit]
 
 
 def tool_search_memory(
@@ -338,17 +427,11 @@ def tool_search_memory(
     if scope in ("decision_reports", "all"):
         hits.extend(_search_decision_reports(settings, query, tokens))
 
-    # de-dupe by text prefix, then sort so precise profile facts beat loose chat matches.
-    seen: set[str] = set()
-    unique: list[dict[str, Any]] = []
-    for h in _rank_memory_hits(hits):
-        key = (h.get("text") or "")[:80]
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(h)
+    broad = _is_broad_user_memory_query(query)
+    unique = _dedupe_memory_hits(_rank_memory_hits(hits))
+    selected = _diversify_memory_hits(unique, broad=broad, limit=10)
 
-    if not unique:
+    if not selected:
         return (
             {
                 "hits": [],
@@ -361,11 +444,11 @@ def tool_search_memory(
             },
         )
 
-    evidence_models = evidence_items_from_hits(unique[:10])
+    evidence_models = evidence_items_from_hits(selected)
     evidence_items = [e.model_dump(mode="json") for e in evidence_models]
     return (
         {
-            "hits": unique[:10],
+            "hits": selected,
             "evidence_items": evidence_items,
             "summary": "",
         },
