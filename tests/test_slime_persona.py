@@ -15,6 +15,7 @@ from foresight_x.voice.slime_persona_prompt import (
     sanitize_catchphrases,
     sanitize_donts,
 )
+from foresight_x.voice.slime_text_safety import sanitize_role_identity_text
 from foresight_x.voice.slime_voice_router import SlimeVoiceContext, _routing_context_json
 
 
@@ -90,6 +91,14 @@ def test_unsafe_donts_sanitized() -> None:
     assert "cute" in out[0].lower()
 
 
+def test_unsafe_role_identity_stereotype_sanitized() -> None:
+    out = sanitize_role_identity_text("A hateful person using African American slangs")
+    low = out.lower()
+    assert "hateful" not in low
+    assert "african american" not in low
+    assert "companion" in low
+
+
 def test_build_slime_persona_prompt_includes_name_not_raw_injection() -> None:
     p = SlimePersona(
         user_nickname="Bob",
@@ -108,6 +117,7 @@ def test_slime_persona_prompt_requires_direct_opinions() -> None:
     text = build_slime_persona_prompt(p, "shadow_chat", slime_name="Mochi", user_ref="you")
     assert "be opinionated" in text
     assert "answer directly first" in text
+    assert "concrete remembered detail" in text
 
 
 def test_preset_fills_sliders_in_merge() -> None:

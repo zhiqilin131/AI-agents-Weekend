@@ -146,6 +146,9 @@ export function PersonalizedFitCard({
           <Anchor className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" aria-hidden />
           <p className="text-sm font-medium leading-relaxed text-gray-800">{surface.groundingNote}</p>
         </div>
+        {surface.howAnswered ? (
+          <p className="mt-2 pl-6 text-[11px] text-gray-500">How answered: {surface.howAnswered}</p>
+        ) : null}
       </div>
 
       {surface.groundingSignals.length > 0 ? (

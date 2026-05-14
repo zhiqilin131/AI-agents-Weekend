@@ -821,10 +821,38 @@ class ReportSurface(BaseModel):
         description="Quick confidence label for whether the recommendation is strongly, partially, or thinly grounded.",
     )
     grounding_signals: list[GroundingSignal] = Field(default_factory=list)
+    how_answered: str = Field(
+        default="",
+        description="Compact runtime explanation for how the answer was produced under resilience/fallback.",
+    )
     personalized_reasons: list[PersonalizedFitReason] = Field(default_factory=list)
     future_paths: list[FuturePath] = Field(default_factory=list)
     key_assumptions: list[str] = Field(default_factory=list)
     primary_next_action: NextActionSurface
+
+
+class Degradation(BaseModel):
+    """Structured runtime degradation event captured during one pipeline run."""
+
+    at: str = ""
+    component: str = ""
+    stage: str = ""
+    reason: str = ""
+    retryable: bool = True
+    error_kind: str = ""
+
+
+class RuntimeContext(BaseModel):
+    """Runtime context metadata to audit provider behavior and failover."""
+
+    pipeline_started_at: str = ""
+    total_latency_ms: int = 0
+    per_stage_latency_ms: dict[str, int] = Field(default_factory=dict)
+    provider_per_stage: dict[str, str] = Field(default_factory=dict)
+    breaker_states_at_start: dict[str, Any] = Field(default_factory=dict)
+    breaker_states_at_end: dict[str, Any] = Field(default_factory=dict)
+    chaos_armed: bool = False
+    chaos_profile: dict[str, str] = Field(default_factory=dict)
 
 
 class ResilienceTraceInfo(BaseModel):
@@ -854,6 +882,14 @@ class DecisionTrace(BaseModel):
     report_surface: ReportSurface | None = Field(
         default=None,
         description="UI-focused narrative; omitted on legacy saved traces.",
+    )
+    runtime: RuntimeContext | None = Field(
+        default=None,
+        description="Detailed runtime execution context (latency, providers, breaker snapshots).",
+    )
+    degradations: list[Degradation] = Field(
+        default_factory=list,
+        description="Structured degradation events captured during this run.",
     )
     resilience: ResilienceTraceInfo | None = Field(
         default=None,

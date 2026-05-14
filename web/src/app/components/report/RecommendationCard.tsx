@@ -4,7 +4,6 @@ import { CheckCircle2 } from 'lucide-react';
 import type { DecisionReport, ResourceDrop } from '../../model';
 import { RESOURCE_DROP_CALENDAR_ID } from '../../model';
 import { TypewriterText } from '../TypewriterText';
-import { useSpeechSynthesis } from '../../hooks/useSpeechSynthesis';
 import {
   bubbleTextFromReasoningWithPersona,
   conciseReasoningPreview,
@@ -17,6 +16,7 @@ import { ResourceDrops } from './ResourceDrops';
 import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
 import { slimeBubbleLabel } from '../../../utils/slimeBubbleLabel';
 import { apiFetch } from '../../../utils/apiFetch';
+import { normalizeTtsVoiceName } from '../../../utils/ttsVoices';
 
 export function RecommendationCard({
   report,
@@ -46,7 +46,6 @@ export function RecommendationCard({
     '…';
   const reasoning = report.recommendation.reasoning?.trim() ?? '';
   const hasRec = Boolean(reasoning || chosenOptionId);
-  const { supported, isSpeaking, isPaused, speak, pause, resume, cancel } = useSpeechSynthesis();
   const { slimeProfile, refreshSlimeProfile } = useSlimeProfile();
   const [cloudSpeaking, setCloudSpeaking] = useState(false);
   const [cloudPaused, setCloudPaused] = useState(false);
@@ -80,16 +79,6 @@ export function RecommendationCard({
     void refreshSlimeProfile();
   }, [isStreaming, refreshSlimeProfile]);
 
-  const ttsOpts = useMemo(
-    () => ({
-      rate: slimeProfile.voice?.rate,
-      pitch: slimeProfile.voice?.pitch,
-      preferredVoiceName: slimeProfile.voice?.preferredVoiceName,
-      onMayHaveBlocked: () => cancel(),
-    }),
-    [slimeProfile.voice?.rate, slimeProfile.voice?.pitch, slimeProfile.voice?.preferredVoiceName, cancel],
-  );
-
   const cleanupCloudAudio = useCallback(() => {
     const audio = cloudAudioRef.current;
     cloudAudioRef.current = null;
@@ -106,14 +95,6 @@ export function RecommendationCard({
     setCloudPaused(false);
     setCloudLoading(false);
   }, []);
-
-  const speakWithBrowserFallback = useCallback(
-    (text: string) => {
-      if (!supported) return;
-      speak(text, ttsOpts);
-    },
-    [speak, supported, ttsOpts],
-  );
 
   const startCloudReadAloud = useCallback(() => {
     const text = speechText.trim();
@@ -134,7 +115,13 @@ export function RecommendationCard({
             'Content-Type': 'application/json',
             'X-Credit-Request-Id': requestId,
           },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({
+            text,
+            ...(normalizeTtsVoiceName(slimeProfile.voice?.preferredVoiceName)
+              ? { voice: normalizeTtsVoiceName(slimeProfile.voice?.preferredVoiceName) }
+              : {}),
+            ...(typeof slimeProfile.voice?.rate === 'number' ? { speed: slimeProfile.voice.rate } : {}),
+          }),
         });
         if (gen !== cloudTtsGenRef.current) return;
         if (res.status === 402) {
@@ -156,8 +143,7 @@ export function RecommendationCard({
         audio.onerror = () => {
           if (gen !== cloudTtsGenRef.current) return;
           cleanupCloudAudio();
-          setReadAloudHint('Cloud voice could not play, so I used the browser voice for now.');
-          speakWithBrowserFallback(text);
+          setReadAloudHint('TTS audio could not play. Try again after tapping the page once.');
         };
         await audio.play();
         if (gen !== cloudTtsGenRef.current) return;
@@ -167,30 +153,28 @@ export function RecommendationCard({
       } catch {
         if (gen !== cloudTtsGenRef.current) return;
         cleanupCloudAudio();
-        setReadAloudHint('Cloud voice was unavailable, so I used the browser voice for now.');
-        speakWithBrowserFallback(text);
+        setReadAloudHint('TTS voice was unavailable. Check API / credits, then play again.');
       }
     })();
-  }, [cancel, cleanupCloudAudio, speakWithBrowserFallback, speechText]);
+  }, [cleanupCloudAudio, slimeProfile.voice, speechText]);
 
   useEffect(() => {
     if (isStreaming) {
       autoSpokenAfterIdleRef.current = false;
       return;
     }
-    if (!supported || !speechText.trim()) return;
+    if (slimeProfile.voice?.enabled === false || !speechText.trim()) return;
     if (autoSpokenAfterIdleRef.current) return;
     autoSpokenAfterIdleRef.current = true;
     startCloudReadAloud();
-  }, [isStreaming, speechText, supported, startCloudReadAloud]);
+  }, [isStreaming, speechText, slimeProfile.voice?.enabled, startCloudReadAloud]);
 
   useEffect(
     () => () => {
       cloudTtsGenRef.current += 1;
       cleanupCloudAudio();
-      cancel();
     },
-    [cancel, cleanupCloudAudio],
+    [cleanupCloudAudio],
   );
 
   const dropsLoading = Boolean(resourceDropsLoading);
@@ -199,7 +183,7 @@ export function RecommendationCard({
   const baseMood: SlimeAdvisorState =
     (report.insights.biasRisks?.length ?? 0) > 0 ? 'cautious' : 'idle';
   const effectiveSlimeState: SlimeAdvisorState =
-    (cloudSpeaking || cloudLoading || isSpeaking) && !(cloudPaused || isPaused)
+    (cloudSpeaking || cloudLoading) && !cloudPaused
       ? 'speaking'
       : isStreaming
         ? 'thinking'
@@ -207,7 +191,7 @@ export function RecommendationCard({
           ? 'thinking'
           : baseMood;
 
-  const mouthSpeaking = (cloudSpeaking || cloudLoading || isSpeaking) && !(cloudPaused || isPaused);
+  const mouthSpeaking = (cloudSpeaking || cloudLoading) && !cloudPaused;
 
   const handleReadAloud = () => {
     if (!speechText.trim()) return;
@@ -227,15 +211,7 @@ export function RecommendationCard({
       setCloudPaused(true);
       return;
     }
-    if (!isSpeaking) {
-      startCloudReadAloud();
-      return;
-    }
-    if (isPaused) {
-      resume();
-      return;
-    }
-    pause();
+    startCloudReadAloud();
   };
 
   const showCollapsedReasoning = longBody && !showFullReasoning && !isStreaming;
@@ -275,10 +251,10 @@ export function RecommendationCard({
           />
           <div className="relative z-20">
             <MiniReadAloudControl
-              supported={supported || typeof Audio !== 'undefined'}
-              isPlaying={cloudLoading || cloudSpeaking || isSpeaking}
-              isPaused={cloudPaused || isPaused}
-              disabled={Boolean(isStreaming) || !speechText.trim()}
+              supported={typeof Audio !== 'undefined'}
+              isPlaying={cloudLoading || cloudSpeaking}
+              isPaused={cloudPaused}
+              disabled={Boolean(isStreaming) || slimeProfile.voice?.enabled === false || !speechText.trim()}
               onPress={handleReadAloud}
             />
           </div>

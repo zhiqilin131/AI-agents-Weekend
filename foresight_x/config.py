@@ -67,11 +67,11 @@ class Settings(BaseSettings):
     )
     openai_api_base: str | None = Field(default=None, validation_alias=AliasChoices("openai_api_base", "OPENAI_API_BASE"))
     openai_tts_model: str = Field(
-        default="gpt-4o-mini-tts",
+        default="tts-1",
         validation_alias=AliasChoices("openai_tts_model", "OPENAI_TTS_MODEL"),
     )
     openai_tts_voice: str = Field(
-        default="coral",
+        default="onyx",
         validation_alias=AliasChoices("openai_tts_voice", "OPENAI_TTS_VOICE"),
     )
     openai_tts_instructions: str = Field(
@@ -200,6 +200,46 @@ class Settings(BaseSettings):
         le=120.0,
         validation_alias=AliasChoices("retrieve_parallel_timeout_sec", "RETRIEVE_PARALLEL_TIMEOUT_SEC"),
     )
+    #: Timeout for atomic-claim extraction in shadow turn; on timeout, continue without claims.
+    shadow_atomic_claims_timeout_sec: float = Field(
+        default=1.2,
+        ge=0.1,
+        le=15.0,
+        validation_alias=AliasChoices("shadow_atomic_claims_timeout_sec", "SHADOW_ATOMIC_CLAIMS_TIMEOUT_SEC"),
+    )
+    #: Minimum lexical overlap ratio required to reuse chat-fast memory cache.
+    memory_cache_min_topic_overlap: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices("memory_cache_min_topic_overlap", "MEMORY_CACHE_MIN_TOPIC_OVERLAP"),
+    )
+    #: Max routing latency budget for Slime voice command router before graceful fallback.
+    slime_voice_route_timeout_ms: int = Field(
+        default=1200,
+        ge=100,
+        le=20000,
+        validation_alias=AliasChoices("slime_voice_route_timeout_ms", "SLIME_VOICE_ROUTE_TIMEOUT_MS"),
+    )
+    #: Max tool execution budget for Slime voice before fallback response.
+    slime_voice_tool_timeout_ms: int = Field(
+        default=2200,
+        ge=100,
+        le=60000,
+        validation_alias=AliasChoices("slime_voice_tool_timeout_ms", "SLIME_VOICE_TOOL_TIMEOUT_MS"),
+    )
+    #: Run Slime voice post-processing (memory capture/summary) in background.
+    slime_voice_tool_postprocess_async: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("slime_voice_tool_postprocess_async", "SLIME_VOICE_TOOL_POSTPROCESS_ASYNC"),
+    )
+    #: If async post-processing is enabled, wait this long for quick completion before returning.
+    slime_voice_tool_postprocess_wait_ms: int = Field(
+        default=180,
+        ge=0,
+        le=10000,
+        validation_alias=AliasChoices("slime_voice_tool_postprocess_wait_ms", "SLIME_VOICE_TOOL_POSTPROCESS_WAIT_MS"),
+    )
     #: Slime model tiers: same OpenAI API key; map product ``model_option_id`` → ``OPENAI_MODEL_*`` env.
     enable_model_selector: bool = Field(
         default=True,
@@ -317,6 +357,39 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         validation_alias=AliasChoices("graph_fusion_weight", "GRAPH_FUSION_WEIGHT"),
+    )
+    #: Enable query-type-aware dynamic scaling on top of ``graph_fusion_weight``.
+    graph_fusion_dynamic_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("graph_fusion_dynamic_enabled", "GRAPH_FUSION_DYNAMIC_ENABLED"),
+    )
+    #: Multiplier for graph alpha on factual/info-seeking queries.
+    graph_fusion_mult_factual: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=3.0,
+        validation_alias=AliasChoices("graph_fusion_mult_factual", "GRAPH_FUSION_MULT_FACTUAL"),
+    )
+    #: Multiplier for graph alpha on personal-memory/preference queries.
+    graph_fusion_mult_personal: float = Field(
+        default=1.25,
+        ge=0.0,
+        le=3.0,
+        validation_alias=AliasChoices("graph_fusion_mult_personal", "GRAPH_FUSION_MULT_PERSONAL"),
+    )
+    #: Multiplier for graph alpha on planning/decision queries.
+    graph_fusion_mult_planning: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        validation_alias=AliasChoices("graph_fusion_mult_planning", "GRAPH_FUSION_MULT_PLANNING"),
+    )
+    #: Multiplier for graph alpha on uncategorized/general queries.
+    graph_fusion_mult_general: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=3.0,
+        validation_alias=AliasChoices("graph_fusion_mult_general", "GRAPH_FUSION_MULT_GENERAL"),
     )
     #: PPR damping for graph activation.
     graph_ppr_damping: float = Field(

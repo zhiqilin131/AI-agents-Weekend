@@ -16,6 +16,7 @@ import logging
 import re
 from pathlib import Path
 from threading import Lock
+from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 import time
@@ -653,10 +654,57 @@ class SlimeConfirmCalendarBody(BaseModel):
 
 
 class SlimeTtsBody(BaseModel):
-    """Buddy auto-play: MP3 bytes for <audio> (avoids speechSynthesis gesture loss after async)."""
+    """Buddy/report read-aloud: MP3 bytes for <audio> from server-side TTS."""
 
     text: str = Field(..., min_length=1, max_length=4096)
     model_option_id: str | None = Field(default=None, max_length=64)
+    voice: str | None = Field(default=None, max_length=64)
+    speed: float | None = Field(default=None, ge=0.25, le=4.0)
+
+
+_OPENAI_TTS_FAST_VOICES = {
+    "alloy",
+    "echo",
+    "fable",
+    "nova",
+    "onyx",
+    "shimmer",
+}
+
+_OPENAI_TTS_EXTENDED_VOICES = _OPENAI_TTS_FAST_VOICES | {
+    "ash",
+    "coral",
+    "sage",
+}
+
+_LEGACY_BROWSER_TTS_ALIASES: tuple[tuple[str, str], ...] = (
+    ("eddy", "onyx"),
+    ("alex", "echo"),
+    ("daniel", "onyx"),
+    ("fred", "echo"),
+    ("tom", "onyx"),
+    ("samantha", "nova"),
+    ("victoria", "nova"),
+    ("ash", "echo"),
+    ("coral", "nova"),
+    ("sage", "shimmer"),
+    ("karen", "shimmer"),
+    ("susan", "shimmer"),
+)
+
+
+def _normalize_slime_tts_voice(raw: str | None, *, default: str, model: str = "tts-1") -> str:
+    allowed = _OPENAI_TTS_FAST_VOICES if model in {"tts-1", "tts-1-hd"} else _OPENAI_TTS_EXTENDED_VOICES
+    low = str(raw or "").strip().lower()
+    default_voice = default if default in allowed else "onyx"
+    if not low:
+        return default_voice
+    if low in allowed:
+        return low
+    for needle, mapped in _LEGACY_BROWSER_TTS_ALIASES:
+        if needle in low:
+            return mapped
+    return default_voice
 
 
 class UsageRedeemCodeBody(BaseModel):
@@ -3873,6 +3921,7 @@ def _run_slime_voice_pipeline(
     from foresight_x.shadow.thread_summary import maybe_update_thread_summary
     from foresight_x.voice.asr import transcribe_audio
     from foresight_x.voice.slime_voice_router import SlimeVoiceContext, route_slime_voice_command
+    from foresight_x.voice.slime_voice_router import SlimeVoiceRouteResult
     from foresight_x.voice.slime_tools import execute_slime_tool
 
     t_total0 = time.perf_counter()
@@ -4032,13 +4081,53 @@ def _run_slime_voice_pipeline(
         slime_profile=sp,
         recent_ui_context=ruc,
     )
+    def _fallback_route_for_timeout(text: str) -> SlimeVoiceRouteResult:
+        si = classify_slime_intent(text)
+        hint = (
+            "I heard you, but routing took too long this turn. Could you repeat that in a short command?"
+        )
+        return SlimeVoiceRouteResult(
+            intent=si.intent,
+            tool_name="no_op",
+            arguments={"reason": "route_timeout"},
+            requires_confirmation=False,
+            assistant_hint=hint,
+        )
+
     t_route0 = time.perf_counter()
-    route = route_slime_voice_command(transcript, ctx, settings=settings, llm_model=llm_model)
+    route_timed_out = False
+    route_timeout_s = float(max(0.1, settings.slime_voice_route_timeout_ms / 1000.0))
+    ex_route = ThreadPoolExecutor(max_workers=1)
+    fut_route = ex_route.submit(
+        route_slime_voice_command,
+        transcript,
+        ctx,
+        settings=settings,
+        llm_model=llm_model,
+    )
+    try:
+        route = fut_route.result(timeout=route_timeout_s)
+        ex_route.shutdown(wait=False, cancel_futures=True)
+    except FuturesTimeout:
+        route_timed_out = True
+        route = _fallback_route_for_timeout(transcript)
+        ex_route.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        ex_route.shutdown(wait=False, cancel_futures=True)
+        raise
     route_ms = (time.perf_counter() - t_route0) * 1000
     if on_stream_event is not None:
         if route.tool_name == "search_memory":
             on_stream_event({"type": "status", "status": "searching_memory", "label": "Checking memory..."})
         on_stream_event({"type": "status", "status": "thinking", "label": "Thinking..."})
+        on_stream_event(
+            {
+                "type": "route_ready",
+                "intent": route.intent,
+                "tool_name": route.tool_name,
+                "route_timeout_fallback": route_timed_out,
+            }
+        )
 
     tr_timing = tr.timing or {}
     timing: dict[str, Any] = {
@@ -4074,9 +4163,31 @@ def _run_slime_voice_pipeline(
     }
     if route.tool_name in tool_executables:
         t_tool0 = time.perf_counter()
-        tool_result, fe, assistant_text = execute_slime_tool(
-            route, ctx, settings=settings, transcript=transcript
+        tool_timeout_s = float(max(0.1, settings.slime_voice_tool_timeout_ms / 1000.0))
+        tool_timed_out = False
+        ex_tool = ThreadPoolExecutor(max_workers=1)
+        fut_tool = ex_tool.submit(
+            execute_slime_tool,
+            route,
+            ctx,
+            settings=settings,
+            transcript=transcript,
         )
+        try:
+            tool_result, fe, assistant_text = fut_tool.result(timeout=tool_timeout_s)
+            ex_tool.shutdown(wait=False, cancel_futures=True)
+        except FuturesTimeout:
+            tool_timed_out = True
+            tool_result = {"ok": False, "error": "tool_timeout", "tool_name": route.tool_name}
+            fe = {"type": "none", "route": "", "payload": {}}
+            assistant_text = (
+                "I heard you — this action is taking too long right now. "
+                "Please try that command again."
+            )
+            ex_tool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            ex_tool.shutdown(wait=False, cancel_futures=True)
+            raise
         tool_ms = (time.perf_counter() - t_tool0) * 1000
         timing["tool_execute_ms"] = tool_ms
         if route.tool_name == "search_memory":
@@ -4090,43 +4201,74 @@ def _run_slime_voice_pipeline(
             mode="normal",
             metadata_extra={"interaction_source": "slime_voice", "modality": "voice"},
         )
-        memory_capture = capture_turn_memory(
-            settings=settings,
-            user_text=transcript,
-            assistant_text=assistant_text,
-            source_chat="slime_voice",
-            source_thread_id=resolved_tid,
-            source_message_id=str(user_row.get("id") or ""),
-            llm_model=llm_model,
-        )
         append_message(
             thread,
             role="assistant",
             content=assistant_text,
             mode="normal",
             memory_used=route.tool_name == "search_memory",
-            profile_updated=bool(memory_capture.saved_texts),
+            profile_updated=False,
         )
-        if memory_capture.saved_texts:
-            thread.setdefault("memory_events", []).append(
-                {
-                    "kind": "profile_update",
-                    "items": memory_capture.saved_texts[:4],
-                    "details": memory_capture.events[:4],
-                    "at": _utc_now(),
-                }
+        def _tool_postprocess_capture() -> tuple[list[str], list[dict[str, Any]]]:
+            memory_capture_local = capture_turn_memory(
+                settings=settings,
+                user_text=transcript,
+                assistant_text=assistant_text,
+                source_chat="slime_voice",
+                source_thread_id=resolved_tid,
+                source_message_id=str(user_row.get("id") or ""),
+                llm_model=llm_model,
             )
-            try:
-                from foresight_x.memory_graph import TemporalGraphMemory
+            if memory_capture_local.saved_texts:
+                thread.setdefault("memory_events", []).append(
+                    {
+                        "kind": "profile_update",
+                        "items": memory_capture_local.saved_texts[:4],
+                        "details": memory_capture_local.events[:4],
+                        "at": _utc_now(),
+                    }
+                )
+                try:
+                    from foresight_x.memory_graph import TemporalGraphMemory
 
-                if settings.graph_enabled:
-                    TemporalGraphMemory(settings.foresight_user_id, settings=settings).record_shadow_event(
-                        transcript,
-                        assistant_text,
-                    )
-            except Exception:
-                pass
-        maybe_update_thread_summary(thread, settings=settings)
+                    if settings.graph_enabled:
+                        TemporalGraphMemory(settings.foresight_user_id, settings=settings).record_shadow_event(
+                            transcript,
+                            assistant_text,
+                        )
+                except Exception:
+                    pass
+            maybe_update_thread_summary(thread, settings=settings)
+            save_thread(thread)
+            return list(memory_capture_local.saved_texts), list(memory_capture_local.events)
+
+        saved_texts: list[str] = []
+        saved_events: list[dict[str, Any]] = []
+        postprocess_pending = False
+        if settings.slime_voice_tool_postprocess_async:
+            result_box: dict[str, Any] = {}
+
+            def _worker() -> None:
+                try:
+                    st, ev = _tool_postprocess_capture()
+                    result_box["saved_texts"] = st
+                    result_box["saved_events"] = ev
+                except Exception as exc:
+                    _log.debug("voice tool postprocess failed", exc_info=True)
+                    result_box["error"] = str(exc)
+
+            tpp = Thread(target=_worker, daemon=True, name="slime-voice-postprocess")
+            tpp.start()
+            wait_s = float(max(0.0, settings.slime_voice_tool_postprocess_wait_ms / 1000.0))
+            if wait_s > 0:
+                tpp.join(wait_s)
+            if tpp.is_alive():
+                postprocess_pending = True
+            else:
+                saved_texts = list(result_box.get("saved_texts") or [])
+                saved_events = list(result_box.get("saved_events") or [])
+        else:
+            saved_texts, saved_events = _tool_postprocess_capture()
 
         voice_ui: dict[str, Any] = {
             "intent": route.intent,
@@ -4146,17 +4288,29 @@ def _run_slime_voice_pipeline(
             "thread_id": resolved_tid,
             "intent": route.intent,
             "decision_suggestion": None,
-            "memory_updates": memory_capture.saved_texts,
-            "memory_update_details": memory_capture.events,
+            "memory_updates": saved_texts,
+            "memory_update_details": saved_events,
             "tool_call": {"name": route.tool_name, "arguments": route.arguments},
             "tool_result": tool_result,
             "frontend_action": fe,
             "requires_confirmation": route.requires_confirmation,
+            "postprocess_pending": postprocess_pending,
+            "route_timeout_fallback": route_timed_out,
+            "tool_timeout_fallback": tool_timed_out,
             "timing": timing,
             "voice_ui": voice_ui,
         }
 
     t_conv0 = time.perf_counter()
+    first_delta_ms: float | None = None
+
+    def _on_reply_delta(delta: str) -> None:
+        nonlocal first_delta_ms
+        if first_delta_ms is None and str(delta or "").strip():
+            first_delta_ms = (time.perf_counter() - t_conv0) * 1000
+        if on_text_delta is not None:
+            on_text_delta(delta)
+
     turn = process_conversation_turn(
         settings=settings,
         user_id=uid,
@@ -4166,10 +4320,11 @@ def _run_slime_voice_pipeline(
         modality="voice",
         clarification_answers=None,
         llm_model=llm_model,
-        on_reply_delta=on_text_delta,
+        on_reply_delta=_on_reply_delta,
     )
     timing["tool_execute_ms"] = (time.perf_counter() - t_conv0) * 1000
     timing["llm_total_ms"] = timing["tool_execute_ms"]
+    timing["llm_first_token_ms"] = first_delta_ms or timing["llm_total_ms"]
     timing["total_ms"] = (time.perf_counter() - t_total0) * 1000
 
     assistant_text = str(turn.get("assistant_text") or "")
@@ -4200,6 +4355,8 @@ def _run_slime_voice_pipeline(
         "tool_result": {"ok": True, "conversation_turn": True},
         "frontend_action": fe_out,
         "requires_confirmation": bool(ds and ds.get("should_show")),
+        "route_timeout_fallback": route_timed_out,
+        "tool_timeout_fallback": False,
         "timing": timing,
         "voice_ui": voice_ui,
     }
@@ -4237,19 +4394,37 @@ def slime_tts(body: SlimeTtsBody, request: Request):
 
     text = body.text.strip()[:4096]
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_api_base or None)
-    tts_model = (settings.openai_tts_model or "gpt-4o-mini-tts").strip()
-    tts_voice = (settings.openai_tts_voice or "coral").strip()
+    tts_model = (settings.openai_tts_model or "tts-1").strip()
+    default_voice = (settings.openai_tts_voice or "onyx").strip().lower()
+    tts_voice = _normalize_slime_tts_voice(body.voice, default=default_voice, model=tts_model)
     tts_instructions = (settings.openai_tts_instructions or "").strip()
     speech_kwargs: dict[str, Any] = {"model": tts_model, "voice": tts_voice, "input": text}
+    if body.speed is not None:
+        speech_kwargs["speed"] = max(0.25, min(4.0, float(body.speed)))
     if tts_instructions and tts_model not in {"tts-1", "tts-1-hd"}:
         speech_kwargs["instructions"] = tts_instructions
     try:
         resp = client.audio.speech.create(**speech_kwargs)
     except Exception as e:
-        _log.exception("slime TTS OpenAI call failed")
-        if tx is not None:
-            refund_for_transaction(tx, "TTS provider error", settings=settings)
-        raise HTTPException(status_code=502, detail=f"TTS failed: {e!s}") from e
+        fallback_kwargs = dict(speech_kwargs)
+        fallback_voice = _normalize_slime_tts_voice(None, default=default_voice, model=tts_model)
+        if fallback_kwargs.get("voice") != fallback_voice:
+            fallback_kwargs["voice"] = fallback_voice
+        if "speed" in fallback_kwargs:
+            fallback_kwargs.pop("speed", None)
+        if fallback_kwargs != speech_kwargs:
+            try:
+                resp = client.audio.speech.create(**fallback_kwargs)
+            except Exception as e2:
+                _log.exception("slime TTS OpenAI call failed")
+                if tx is not None:
+                    refund_for_transaction(tx, "TTS provider error", settings=settings)
+                raise HTTPException(status_code=502, detail=f"TTS failed: {e2!s}") from e2
+        else:
+            _log.exception("slime TTS OpenAI call failed")
+            if tx is not None:
+                refund_for_transaction(tx, "TTS provider error", settings=settings)
+            raise HTTPException(status_code=502, detail=f"TTS failed: {e!s}") from e
 
     try:
         audio_bytes = resp.read()

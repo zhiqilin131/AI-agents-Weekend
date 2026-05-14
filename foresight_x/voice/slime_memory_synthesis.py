@@ -197,7 +197,7 @@ def _heuristic_answer(
         mid = f"from what I’ve got saved, the concrete bits are: {glue}"
     else:
         mid = f"I found these concrete notes: {glue}"
-    tail = (" …" if len(items) > 3 else "") + " Open “View evidence” for the exact lines."
+    tail = " I found a few more related notes too." if len(items) > 3 else ""
     body = mid + tail
     msg = prefix + (body[0].lower() + body[1:] if prefix else body)
     return SlimeSynthesizedAnswer(

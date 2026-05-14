@@ -18,6 +18,34 @@ function truncate(text: string, maxLen: number): string {
   return `${t.slice(0, maxLen - 1).trim()}…`;
 }
 
+function deriveHowAnsweredFromTrace(trace: Record<string, unknown>): string {
+  const runtime =
+    trace.runtime && typeof trace.runtime === 'object'
+      ? (trace.runtime as Record<string, unknown>)
+      : undefined;
+  const providers =
+    runtime && runtime.provider_per_stage && typeof runtime.provider_per_stage === 'object'
+      ? (runtime.provider_per_stage as Record<string, unknown>)
+      : undefined;
+  const infer = String(providers?.infer || '').trim();
+  const finalize = String(providers?.finalize || '').trim();
+  const picked = finalize || infer;
+  const bits: string[] = [];
+  if (picked && picked !== 'unknown' && picked !== 'none') {
+    bits.push(`Answered with ${picked}`);
+  }
+  const degradations = Array.isArray(trace.degradations) ? trace.degradations : [];
+  const hasTavilyDegrade = degradations.some((row) => {
+    if (!row || typeof row !== 'object') return false;
+    const r = row as Record<string, unknown>;
+    const c = String(r.component || '').toLowerCase();
+    const e = String(r.error_kind || '').toLowerCase();
+    return c.includes('tavily') && ['outage', 'timeout', '5xx', 'circuit_open', 'brownout'].includes(e);
+  });
+  if (hasTavilyDegrade) bits.push('Tavily cached');
+  return bits.join(' — ');
+}
+
 function dedupeRefs(refs: EvidenceReference[]): EvidenceReference[] {
   const seen = new Set<string>();
   const out: EvidenceReference[] = [];
@@ -84,6 +112,7 @@ export function parseReportSurface(raw: unknown): ReportSurface | undefined {
   const keyAssumptions = Array.isArray(o.key_assumptions)
     ? o.key_assumptions.map((x) => String(x || '').trim()).filter(Boolean)
     : [];
+  const howAnswered = typeof o.how_answered === 'string' ? o.how_answered.trim() : '';
   const prRaw = Array.isArray(o.personalized_reasons) ? o.personalized_reasons : [];
   const personalizedReasons: PersonalizedFitReason[] = [];
   for (const row of prRaw) {
@@ -165,6 +194,7 @@ export function parseReportSurface(raw: unknown): ReportSurface | undefined {
     groundingNote,
     groundingStrength,
     groundingSignals,
+    howAnswered: howAnswered || undefined,
     personalizedReasons,
     futurePaths,
     keyAssumptions,
@@ -767,6 +797,7 @@ export function deriveReportSurfaceFromTrace(trace: Record<string, unknown>): Re
     personalizedReasons: personalizedReasonsOut,
     futurePaths,
     keyAssumptions,
+    howAnswered: deriveHowAnsweredFromTrace(trace) || undefined,
     primaryNextAction,
   };
 }

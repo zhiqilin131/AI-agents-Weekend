@@ -43,7 +43,7 @@ import {
 } from '../../../utils/executionCalendarSelection';
 import { SLIME_VOICE_CHAT_PREFILL_KEY } from '../../../utils/slimeVoiceActions';
 import { EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY } from '../../../utils/executionStorageKeys';
-import { primeSpeechSynthesisFromGesture } from '../../../app/hooks/useSpeechSynthesis';
+import { unlockSlimeAudioContext } from '../../../utils/slimeAudioContext';
 
 export function ShadowChatShell({
   initialThreadId = null,
@@ -334,7 +334,7 @@ export function ShadowChatShell({
 
   const onOpenReportArtifact = useCallback(
     (decisionId: string) => {
-      primeSpeechSynthesisFromGesture();
+      unlockSlimeAudioContext();
       setReportOpen(true);
       void loadExistingTrace(decisionId);
     },
@@ -591,7 +591,7 @@ export function ShadowChatShell({
       pushTimeline('Pick or create a chat thread first');
       return;
     }
-    primeSpeechSynthesisFromGesture();
+    unlockSlimeAudioContext();
     reportGeneratingRef.current = true;
     try {
       const lastUser = seedPrompt ?? (messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.');
@@ -745,7 +745,7 @@ export function ShadowChatShell({
   }, [calendarCoachHint, navigate, pushTimeline, storageReady, storageUserKey]);
 
   const onGenerateDecisionReport = useCallback(async () => {
-    primeSpeechSynthesisFromGesture();
+    unlockSlimeAudioContext();
     const lastUser = messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.';
     if (clarifyOpen) {
       pushTimeline('Answer or skip the clarification card below first');
@@ -875,7 +875,7 @@ export function ShadowChatShell({
                     meta={clarifyPayload.meta}
                     disabled={sending}
                     onSkip={async () => {
-                      primeSpeechSynthesisFromGesture();
+                      unlockSlimeAudioContext();
                       const pending = pendingClarifyAction;
                       const payload = clarifyPayload;
                       const q0 = payload?.questions[0];

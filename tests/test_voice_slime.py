@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+import time
 import types
 from datetime import datetime, timezone
 from pathlib import Path
@@ -247,6 +248,107 @@ def test_voice_pipeline_conversation_turn_includes_memory_update_details(monkeyp
     assert body["memory_update_details"][0]["id"] == "m1"
 
 
+def test_voice_pipeline_route_timeout_falls_back_to_noop(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    settings = Settings(
+        foresight_user_id="u_voice_route_timeout",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="sk-test",
+        slime_voice_route_timeout_ms=100,
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_route_timeout.json").write_text(
+        json.dumps({"user_id": "u_voice_route_timeout", "memory_facts": [], "priority_lines": [], "about_me": ""}),
+        encoding="utf-8",
+    )
+    tr = TranscriptionResult(text="open chat", provider="faster_whisper", language="en", timing={})
+
+    def _slow_route(*_a, **_k):
+        time.sleep(0.2)
+        return SlimeVoiceRouteResult(
+            intent="navigate",
+            tool_name="navigate",
+            arguments={"route": "chat"},
+            requires_confirmation=False,
+        )
+
+    turn = {
+        "thread_id": "t1",
+        "assistant_text": "Let us reason it out quickly.",
+        "spoken_sequence": ["Let us reason it out quickly."],
+        "intent": "general_chat",
+        "decision_suggestion": None,
+        "memory_updates": [],
+        "memory_update_details": [],
+        "frontend_action": {"type": "none", "route": "", "payload": {}},
+    }
+
+    with patch("foresight_x.voice.asr.transcribe_audio", return_value=tr):
+        with patch("foresight_x.voice.slime_voice_router.route_slime_voice_command", side_effect=_slow_route):
+            with patch("foresight_x.chat.conversation_service.process_conversation_turn", return_value=turn):
+                body = _run_slime_voice_pipeline(
+                    b"bytes",
+                    "a.webm",
+                    "/buddy",
+                    None,
+                    None,
+                    None,
+                    settings,
+                )
+    assert body["tool_call"]["name"] == "no_op"
+    assert body["assistant_text"] == "Let us reason it out quickly."
+    assert body.get("route_timeout_fallback") is True
+
+
+def test_voice_pipeline_async_tool_postprocess_can_return_pending(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    settings = Settings(
+        foresight_user_id="u_voice_async_post",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="sk-test",
+        slime_voice_tool_postprocess_async=True,
+        slime_voice_tool_postprocess_wait_ms=0,
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_async_post.json").write_text(
+        json.dumps({"user_id": "u_voice_async_post", "memory_facts": [], "priority_lines": [], "about_me": ""}),
+        encoding="utf-8",
+    )
+    tr = TranscriptionResult(text="go home", provider="faster_whisper", language="en", timing={})
+    route = SlimeVoiceRouteResult(
+        intent="navigate",
+        tool_name="navigate",
+        arguments={"route": "home"},
+        requires_confirmation=False,
+    )
+
+    class _Cap:
+        def __init__(self):
+            self.saved_texts: list[str] = []
+            self.events: list[dict[str, object]] = []
+
+    def _slow_capture(*_a, **_k):
+        time.sleep(0.15)
+        return _Cap()
+
+    with patch("foresight_x.voice.asr.transcribe_audio", return_value=tr):
+        with patch("foresight_x.voice.slime_voice_router.route_slime_voice_command", return_value=route):
+            with patch("foresight_x.profile.proactive_memory.capture_turn_memory", side_effect=_slow_capture):
+                body = _run_slime_voice_pipeline(
+                    b"bytes",
+                    "a.webm",
+                    "/buddy",
+                    None,
+                    None,
+                    None,
+                    settings,
+                )
+    assert body.get("postprocess_pending") is True
+    assert body["memory_updates"] == []
+
+
 def test_slime_tts_requires_openai_key(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "")
@@ -294,6 +396,91 @@ def test_slime_tts_uses_configured_openai_voice(monkeypatch, tmp_path: Path) -> 
             "instructions": "Sound like a warm tiny slime.",
         }
     ]
+
+
+def test_slime_tts_defaults_to_low_latency_voice(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ENABLE_CREDIT_LIMITS", "false")
+    monkeypatch.delenv("OPENAI_TTS_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_TTS_VOICE", raising=False)
+    from foresight_x.ui import api_server
+
+    calls: list[dict[str, object]] = []
+
+    class FakeSpeech:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(read=lambda: b"fake-mp3")
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key: str, base_url: str | None = None):
+            self.audio = types.SimpleNamespace(speech=FakeSpeech())
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+
+    c = TestClient(api_server.app)
+    r = c.post("/api/slime/tts", json={"text": "Hello."})
+
+    assert r.status_code == 200
+    assert calls[0]["model"] == "tts-1"
+    assert calls[0]["voice"] == "onyx"
+    assert "instructions" not in calls[0]
+
+
+def test_slime_tts_uses_requested_voice_and_speed(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ENABLE_CREDIT_LIMITS", "false")
+    monkeypatch.setenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+    monkeypatch.setenv("OPENAI_TTS_VOICE", "coral")
+    from foresight_x.ui import api_server
+
+    calls: list[dict[str, object]] = []
+
+    class FakeSpeech:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(read=lambda: b"fake-mp3")
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key: str, base_url: str | None = None):
+            self.audio = types.SimpleNamespace(speech=FakeSpeech())
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+
+    c = TestClient(api_server.app)
+    r = c.post("/api/slime/tts", json={"text": "Hello.", "voice": "onyx", "speed": 1.2})
+
+    assert r.status_code == 200
+    assert calls[0]["voice"] == "onyx"
+    assert calls[0]["speed"] == 1.2
+
+
+def test_slime_tts_maps_legacy_browser_voice_to_tts_voice(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ENABLE_CREDIT_LIMITS", "false")
+    from foresight_x.ui import api_server
+
+    calls: list[dict[str, object]] = []
+
+    class FakeSpeech:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(read=lambda: b"fake-mp3")
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key: str, base_url: str | None = None):
+            self.audio = types.SimpleNamespace(speech=FakeSpeech())
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+
+    c = TestClient(api_server.app)
+    r = c.post("/api/slime/tts", json={"text": "Hello.", "voice": "Eddy (English (United States))"})
+
+    assert r.status_code == 200
+    assert calls[0]["voice"] == "onyx"
 
 
 def test_navigate_tool_validates_route() -> None:
@@ -472,6 +659,44 @@ def test_deterministic_voice_rename_persists_without_confirm(tmp_path: Path) -> 
     assert loaded.slime_profile.name == "Pebble"
 
 
+def test_route_voice_from_now_on_slime_rename_persists_without_confirm(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_voice_rename_phrase",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_rename_phrase.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_voice_rename_phrase",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_voice_rename_phrase")
+    route = route_slime_voice_command("From now on, your name is Pebble.", ctx, settings=settings)
+    assert route.tool_name == "update_slime_profile"
+    assert route.auto_apply_voice_rename is True
+    tr, fe, _assistant = execute_slime_tool(
+        route,
+        ctx,
+        settings=settings,
+        transcript="From now on, your name is Pebble.",
+    )
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
+    from foresight_x.profile.store import load_user_profile
+
+    loaded = load_user_profile(settings)
+    assert loaded.slime_profile is not None
+    assert loaded.slime_profile.name == "Pebble"
+
+
 def test_route_slime_voice_rename_skips_when_call_me_present() -> None:
     settings = Settings(openai_api_key="")
     ctx = SlimeVoiceContext(user_id="demo_user")
@@ -492,20 +717,25 @@ def test_route_slime_voice_opinion_skips_router_llm() -> None:
     assert r.arguments["reason"] == "fast_conversation"
 
 
-def test_route_slime_voice_memory_question_keeps_router_llm() -> None:
+def test_route_slime_voice_memory_question_skips_router_llm() -> None:
     settings = Settings(openai_api_key="sk-test")
     ctx = SlimeVoiceContext(user_id="demo_user")
-    fake_route = types.SimpleNamespace(
-        tool_name="search_memory",
-        arguments={"query": "who is my girlfriend", "scope": "all"},
-        requires_confirmation=False,
-        assistant_hint=None,
-    )
-    with patch("foresight_x.voice.slime_voice_router.structured_predict", return_value=fake_route) as sp:
+    with patch(
+        "foresight_x.voice.slime_voice_router.structured_predict",
+        side_effect=AssertionError("router LLM should be skipped"),
+    ):
         r = route_slime_voice_command("Who is my girlfriend?", ctx, settings=settings)
-    sp.assert_called_once()
     assert r.tool_name == "search_memory"
     assert r.arguments["scope"] == "all"
+    assert "girlfriend" in r.arguments["query"].lower()
+
+
+def test_route_slime_voice_change_tts_voice_without_openai_key() -> None:
+    settings = Settings(openai_api_key="")
+    ctx = SlimeVoiceContext(user_id="demo_user")
+    r = route_slime_voice_command("Change your voice to Eddy.", ctx, settings=settings)
+    assert r.tool_name == "update_slime_profile"
+    assert r.arguments["patch"]["voice"]["preferred_voice_name"] == "onyx"
 
 
 def test_is_safe_hyphenated_apostrophe_slime_display_name() -> None:
@@ -658,6 +888,43 @@ def test_profile_update_user_nickname_uses_persona_patch_requires_confirmation(t
     assert pending.get("persona", {}).get("user_nickname") == "boss"
 
 
+def test_profile_update_accepts_top_level_user_nickname_patch(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_nick_top",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_nick_top.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_nick_top",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_nick_top")
+    route = SlimeVoiceRouteResult(
+        intent="profile_update",
+        tool_name="update_slime_profile",
+        arguments={"patch": {"user_nickname": "boss"}},
+        requires_confirmation=False,
+        auto_apply_voice_persona=True,
+    )
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="from now on you call me boss")
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
+    from foresight_x.profile.store import load_user_profile
+
+    loaded = load_user_profile(settings)
+    assert loaded.slime_profile is not None
+    assert loaded.slime_profile.persona.user_nickname == "boss"
+
+
 def test_route_voice_call_me_persists_without_confirm(tmp_path: Path) -> None:
     settings = Settings(
         foresight_user_id="u_voice_nick",
@@ -691,6 +958,46 @@ def test_route_voice_call_me_persists_without_confirm(tmp_path: Path) -> None:
     assert loaded.slime_profile is not None
     assert loaded.slime_profile.persona is not None
     assert loaded.slime_profile.persona.user_nickname == "老板"
+
+
+def test_route_voice_from_now_on_you_call_me_persists_without_confirm(tmp_path: Path) -> None:
+    settings = Settings(
+        foresight_user_id="u_voice_nick_phrase",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="",
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_nick_phrase.json").write_text(
+        json.dumps(
+            {
+                "user_id": "u_voice_nick_phrase",
+                "memory_facts": [],
+                "priority_lines": [],
+                "about_me": "",
+                "slime_profile": {"name": "Mochi", "color_theme": "violet", "personality": "calm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = SlimeVoiceContext(user_id="u_voice_nick_phrase")
+    route = route_slime_voice_command("From now on, you call me boss.", ctx, settings=settings)
+    assert route.tool_name == "update_slime_profile"
+    assert route.auto_apply_voice_persona is True
+    tr, fe, _assistant = execute_slime_tool(
+        route,
+        ctx,
+        settings=settings,
+        transcript="From now on, you call me boss.",
+    )
+    assert tr.get("ok") is True
+    assert fe.get("type") == "slime_profile_refresh"
+    from foresight_x.profile.store import load_user_profile
+
+    loaded = load_user_profile(settings)
+    assert loaded.slime_profile is not None
+    assert loaded.slime_profile.persona is not None
+    assert loaded.slime_profile.persona.user_nickname == "boss"
 
 
 def test_route_voice_ni_jiao_wo_persists_without_confirm(tmp_path: Path) -> None:
@@ -778,7 +1085,7 @@ def test_memory_search_returns_evidence_items_not_raw_dump(tmp_path: Path) -> No
         requires_confirmation=False,
     )
     tr, fe, assistant = execute_slime_tool(route, ctx, settings=settings, transcript="Who is Rose?")
-    assert fe["payload"].get("display_mode") == "particles"
+    assert fe["payload"].get("display_mode") == "chips"
     assert isinstance(tr.get("evidence_items"), list)
     assert len(tr["evidence_items"]) >= 1
     assert "• From your profile" not in assistant
