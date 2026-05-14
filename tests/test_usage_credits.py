@@ -67,6 +67,17 @@ def test_consume_and_insufficient(isolated_settings: Settings, monkeypatch: pyte
     assert chk2.allowed is False
 
 
+def test_consume_credits_creates_missing_row_without_deadlock(isolated_settings: Settings) -> None:
+    u = "user-first-consume"
+
+    tx = consume_credits(u, "shadow_chat", 1, "first-req", settings=isolated_settings)
+
+    assert tx is not None
+    assert tx.amount == -1
+    assert tx.balance_after == 14
+    assert get_credit_balance(u, settings=isolated_settings) == 14
+
+
 def test_redeem_test_code_repeatable(isolated_settings: Settings) -> None:
     u = "user-c"
     get_or_create_user_credits(u, settings=isolated_settings)
@@ -80,6 +91,16 @@ def test_redeem_test_code_repeatable(isolated_settings: Settings) -> None:
     assert r2["balance"] == 215
 
 
+def test_redeem_test_code_creates_missing_row_without_deadlock(isolated_settings: Settings) -> None:
+    u = "user-first-test-code"
+
+    r = redeem_test_code(u, "beta-test-phrase", settings=isolated_settings)
+
+    assert r["ok"] is True
+    assert r["credits_granted"] == 100
+    assert r["balance"] == 115
+
+
 def test_voucher_redeem(isolated_settings: Settings) -> None:
     u = "user-d"
     get_or_create_user_credits(u, settings=isolated_settings)
@@ -87,6 +108,16 @@ def test_voucher_redeem(isolated_settings: Settings) -> None:
     assert r1["ok"] is True
     r2 = redeem_voucher_code(u, "foresight-beta", settings=isolated_settings)
     assert r2["ok"] is False
+
+
+def test_redeem_voucher_creates_missing_row_without_deadlock(isolated_settings: Settings) -> None:
+    u = "user-first-voucher"
+
+    r = redeem_voucher_code(u, "foresight-beta", settings=isolated_settings)
+
+    assert r["ok"] is True
+    assert r["credits_granted"] == 15
+    assert r["balance"] == 30
 
 
 def test_admin_unlimited_no_charge(isolated_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
