@@ -50,6 +50,61 @@ _MMR_LAMBDA = 0.75
 _MMR_MAX_PER_THEME = 3
 _LOW_CONF_TOP_GAP = 0.045
 _LOW_CONF_EXPAND_BY = 2
+_QUERY_TYPE_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "have",
+    "been",
+    "were",
+    "your",
+    "about",
+    "should",
+    "would",
+    "could",
+}
+_FACTUAL_MARKERS = {
+    "what",
+    "when",
+    "where",
+    "who",
+    "which",
+    "how",
+    "why",
+    "latest",
+    "news",
+    "fact",
+    "stats",
+    "statistics",
+}
+_PERSONAL_MARKERS = {
+    "remember",
+    "preference",
+    "prefer",
+    "likes",
+    "dislike",
+    "hates",
+    "about",
+    "myself",
+    "personality",
+    "relationship",
+}
+_PLANNING_MARKERS = {
+    "plan",
+    "prioritize",
+    "decide",
+    "decision",
+    "focus",
+    "strategy",
+    "next",
+    "roadmap",
+    "tradeoff",
+    "choose",
+}
 
 
 @dataclass
@@ -264,6 +319,98 @@ def _rrf_score(rank_maps: list[dict[str, int]], key: str, *, k: int = _RRF_K) ->
             continue
         total += 1.0 / (k + r)
     return total
+
+
+def _minmax_normalize(scores: list[float]) -> list[float]:
+    if not scores:
+        return []
+    lo = min(scores)
+    hi = max(scores)
+    span = hi - lo
+    if span <= 1e-12:
+        if hi <= 0.0:
+            return [0.0 for _ in scores]
+        return [1.0 for _ in scores]
+    return [(s - lo) / span for s in scores]
+
+
+def _weighted_minmax_fusion(
+    base_scores: list[float],
+    graph_scores: list[float],
+    *,
+    alpha: float,
+) -> list[float]:
+    """
+    Weighted normalized fusion for hybrid retrieval:
+    fused = (1-alpha) * normalize(base) + alpha * normalize(graph)
+
+    This follows common hybrid-search practice where each signal is min-max normalized
+    before linear interpolation to prevent scale dominance.
+    """
+    if len(base_scores) != len(graph_scores):
+        raise ValueError("base_scores and graph_scores must have identical lengths")
+    if not base_scores:
+        return []
+    a = max(0.0, min(1.0, float(alpha)))
+    graph_has_signal = any(x > 0 for x in graph_scores)
+    if not graph_has_signal:
+        a = 0.0
+    b_norm = _minmax_normalize(base_scores)
+    g_norm = _minmax_normalize(graph_scores) if graph_has_signal else [0.0 for _ in graph_scores]
+    return [(1.0 - a) * b + a * g for b, g in zip(b_norm, g_norm)]
+
+
+def _query_type_tokens(user_state: UserState) -> set[str]:
+    raw = " ".join(
+        [
+            user_state.raw_input or "",
+            " ".join(user_state.goals or []),
+            user_state.current_behavior or "",
+            user_state.decision_type or "",
+        ]
+    ).lower()
+    toks = {w for w in re.findall(r"[a-zA-Z][a-zA-Z'-]{2,}", raw)}
+    return {w for w in toks if w not in _QUERY_TYPE_STOPWORDS}
+
+
+def _classify_query_type(user_state: UserState) -> str:
+    tokens = _query_type_tokens(user_state)
+    text = (user_state.raw_input or "").lower()
+    factual_score = len(tokens & _FACTUAL_MARKERS)
+    personal_score = len(tokens & _PERSONAL_MARKERS)
+    planning_score = len(tokens & _PLANNING_MARKERS)
+
+    if "?" in text and any(x in text for x in ("what", "when", "where", "who", "how many")):
+        factual_score += 1
+    if any(x in text for x in ("what do you know about me", "what do you remember", "my preference")):
+        personal_score += 2
+    if any(x in text for x in ("should i", "which should", "help me decide")):
+        planning_score += 2
+    if (user_state.decision_type or "").strip().lower() not in {"", "general", "unknown"}:
+        planning_score += 1
+
+    if personal_score >= max(factual_score, planning_score, 2):
+        return "personal"
+    if planning_score >= max(factual_score, personal_score, 2):
+        return "planning"
+    if factual_score >= 1:
+        return "factual"
+    return "general"
+
+
+def _dynamic_graph_fusion_alpha(user_state: UserState, settings: Settings) -> float:
+    base = max(0.0, min(1.0, float(settings.graph_fusion_weight)))
+    if not settings.graph_fusion_dynamic_enabled:
+        return base
+    qtype = _classify_query_type(user_state)
+    mult = settings.graph_fusion_mult_general
+    if qtype == "factual":
+        mult = settings.graph_fusion_mult_factual
+    elif qtype == "personal":
+        mult = settings.graph_fusion_mult_personal
+    elif qtype == "planning":
+        mult = settings.graph_fusion_mult_planning
+    return max(0.0, min(1.0, base * float(mult)))
 
 
 def _blend_legacy_with_rrf(
@@ -538,7 +685,14 @@ class UserMemory:
 
         graph_id_set = {str(x).strip() for x in (graph_decision_ids or []) if str(x).strip()}
         graph_boosts = {str(k).strip(): float(v) for k, v in (graph_scores or {}).items() if str(k).strip()}
+        graph_default = (
+            max(0.0, min(1.0, sum(graph_boosts.values()) / len(graph_boosts)))
+            if graph_boosts
+            else 0.0
+        )
         candidates: list[MemoryCandidate] = []
+        base_scores: list[float] = []
+        graph_signals: list[float] = []
         for rank, node in enumerate(raw_nodes):
             md_raw: dict[str, Any] = {}
             inner = getattr(node, "node", None)
@@ -560,19 +714,18 @@ class UserMemory:
             seed_m = _packaged_seed_memory_multiplier(user_state, md0)
             domain_m = _domain_match_multiplier(user_state, md0)
             did = str(md0.get("decision_id", "") or "").strip()
-            graph_m = 1.0
-            if did and did in graph_id_set:
-                graph_m *= 1.08
-            if did and did in graph_boosts:
-                graph_m *= 1.0 + max(0.0, min(1.0, graph_boosts[did])) * 0.4
-            # Relevance × time decay × (1 + priority alignment) × seed-topic × domain match
-            fuse = sim * (0.42 + 0.58 * rec) * (1.0 + 0.38 * pov) * seed_m * domain_m * graph_m
+            # Base (non-graph) retrieval relevance.
+            base = sim * (0.42 + 0.58 * rec) * (1.0 + 0.38 * pov) * seed_m * domain_m
+            # Graph signal from activated decision nodes; if only membership is known, use current-run graph mean.
+            graph_signal = max(0.0, min(1.0, graph_boosts.get(did, 0.0)))
+            if did and did in graph_id_set and did not in graph_boosts:
+                graph_signal = max(graph_signal, graph_default)
             cand = MemoryCandidate(
                 decision_id=did or None,
                 text=_node_document_text(node),
                 metadata=md0,
                 similarity_score=sim,
-                fused_score=fuse,
+                fused_score=base,
                 theme="general",
                 timestamp=str(md0.get("timestamp", "") or "") or None,
                 outcome_quality=(
@@ -585,8 +738,18 @@ class UserMemory:
             )
             cand.theme = _candidate_theme(cand)
             candidates.append(cand)
+            base_scores.append(base)
+            graph_signals.append(graph_signal)
 
-        deduped = _dedupe_candidates_by_decision_id(candidates)
+        fused_scores = _weighted_minmax_fusion(
+            base_scores,
+            graph_signals,
+            alpha=_dynamic_graph_fusion_alpha(user_state, self.settings),
+        )
+        if fused_scores:
+            for idx, fused in enumerate(fused_scores):
+                candidates[idx].fused_score = fused
+
         deduped = _dedupe_candidates_by_decision_id(candidates)
         reranked = _blend_legacy_with_rrf(
             deduped,

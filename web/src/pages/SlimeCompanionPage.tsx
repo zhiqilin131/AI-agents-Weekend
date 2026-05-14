@@ -12,14 +12,14 @@ import { SlimePersonalizationForm } from '../features/slime/SlimePersonalization
 import type { SlimeDecisionSuggestion, SlimeSpeechOutput } from '../features/slime/SlimeVoiceAgent';
 import { BuddyTooltip } from '../features/slime/BuddyTooltip';
 import { SlimeVoiceAgent } from '../features/slime/SlimeVoiceAgent';
-import { MemoryEvidenceParticles } from '../app/components/profile/MemoryEvidenceParticles';
+import { EvidenceDrawer } from '../app/components/profile/EvidenceDrawer';
 import type { MemoryEvidenceItem } from '../app/components/profile/memoryEvidenceTypes';
 import { useAuth } from '../auth/AuthContext';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../hooks/useSlimeProfile';
 import { useDecisionReportStream } from '../hooks/useDecisionReportStream';
 import { apiFetch } from '../utils/apiFetch';
-import { primeSpeechSynthesisFromGesture } from '../app/hooks/useSpeechSynthesis';
 import { SLIME_CALENDAR_BRIEF_CONTEXT_KEY } from '../utils/executionStorageKeys';
+import { unlockSlimeAudioContext } from '../utils/slimeAudioContext';
 
 /** Legacy single-key storage; per-user keys are ``${prefix}:${supabaseUserId}``. */
 const BUDDY_THREAD_STORAGE_PREFIX = 'slimeBuddyShadowThreadId';
@@ -44,13 +44,12 @@ export default function SlimeCompanionPage() {
   const { slimeProfile, updateSlimeProfile, resetSlimeProfile, refreshSlimeProfile } = useSlimeProfile();
   const [slimeDraft, setSlimeDraft] = useState(DEFAULT_SLIME_PROFILE);
   const [panelOpen, setPanelOpen] = useState(false);
-  const [browserVoices, setBrowserVoices] = useState<string[]>([]);
   const [buddyCornerToast, setBuddyCornerToast] = useState<BuddyCornerToast | null>(null);
   const buddyCornerToastTimerRef = useRef<number | null>(null);
   const [advisorState, setAdvisorState] = useState<SlimeAdvisorState>('idle');
   const [speechOutput, setSpeechOutput] = useState<SlimeSpeechOutput | null>(null);
-  const [memoryParticleItems, setMemoryParticleItems] = useState<MemoryEvidenceItem[]>([]);
-  const [memoryParticlesActive, setMemoryParticlesActive] = useState(false);
+  const [evidenceDrawerItems, setEvidenceDrawerItems] = useState<MemoryEvidenceItem[]>([]);
+  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false);
   const [buddyThreadId, setBuddyThreadId] = useState<string | null>(null);
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
@@ -126,7 +125,7 @@ export default function SlimeCompanionPage() {
       flashBuddyCornerToast('No chat thread yet — speak once first so I can link the report.', 'error');
       return;
     }
-    primeSpeechSynthesisFromGesture();
+    unlockSlimeAudioContext();
     const p = prompt.trim() || 'Help me decide.';
     setPendingDecision(null);
     setReportOpen(true);
@@ -175,16 +174,6 @@ export default function SlimeCompanionPage() {
     next.delete('calendar');
     setSearchParams(next, { replace: true });
   }, [flashBuddyCornerToast, searchParams, setSearchParams]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.speechSynthesis === 'undefined') return;
-    const sync = () => setBrowserVoices(window.speechSynthesis.getVoices().map((v) => v.name));
-    sync();
-    window.speechSynthesis.onvoiceschanged = sync;
-    return () => {
-      window.speechSynthesis.onvoiceschanged = null;
-    };
-  }, []);
 
   const saveSlime = async () => {
     try {
@@ -299,7 +288,6 @@ export default function SlimeCompanionPage() {
           {/*
             Voice UI is split z-index inside SlimeVoiceAgent (panels z-32, mic z-52).
             Stage z-44 paints above bubbles/transcript so the buddy stays visible; mic stays on top for taps.
-            Memory particles sit between panels and slime (z-38).
           */}
           <SlimeVoiceAgent
             slimeProfile={slimeDraft}
@@ -309,10 +297,9 @@ export default function SlimeCompanionPage() {
             onDecisionSuggestion={setPendingDecision}
             onAdvisorStateChange={setAdvisorState}
             onSpeechOutputChange={setSpeechOutput}
-            onMemoryEvidenceBurst={(items) => {
-              if (!items.length) return;
-              setMemoryParticleItems(items);
-              setMemoryParticlesActive(true);
+            onMemoryEvidenceItemsChange={(items) => {
+              setEvidenceDrawerItems(items);
+              if (!items.length) setEvidenceDrawerOpen(false);
             }}
             onProfileMemorySaved={(payload) =>
               flashBuddyCornerToast(payload.message, 'memory_saved', payload.details || [])
@@ -328,18 +315,12 @@ export default function SlimeCompanionPage() {
               setSlimeDraft(next);
             }}
           />
-          <div className="pointer-events-none absolute inset-0 z-[38] overflow-visible">
-            <MemoryEvidenceParticles
-              items={memoryParticleItems}
-              active={memoryParticlesActive}
-              onDone={() => setMemoryParticlesActive(false)}
-            />
-          </div>
           <SlimeCompanionStage
             className="relative z-[44]"
             profile={slimeDraft}
             advisorState={advisorState}
             speechOutput={speechOutput}
+            onEvidenceOpen={() => setEvidenceDrawerOpen(true)}
           />
         </div>
 
@@ -413,6 +394,12 @@ export default function SlimeCompanionPage() {
           setReportOpen(false);
           navigate(`/chat?thread=${encodeURIComponent(tid || '')}`);
         }}
+      />
+
+      <EvidenceDrawer
+        open={evidenceDrawerOpen}
+        onClose={() => setEvidenceDrawerOpen(false)}
+        items={evidenceDrawerItems}
       />
 
       {typeof document !== 'undefined'
@@ -517,7 +504,6 @@ export default function SlimeCompanionPage() {
             <SlimePersonalizationForm
               slimeDraft={slimeDraft}
               setSlimeDraft={setSlimeDraft}
-              browserVoices={browserVoices}
               onSave={async () => {
                 await saveSlime();
               }}

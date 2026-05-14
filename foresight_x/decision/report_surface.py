@@ -442,6 +442,56 @@ def _duration_estimate(action: str, deadline: str | None) -> str:
     return "About 20–45 minutes"
 
 
+def _how_answered_line(trace: DecisionTrace) -> str:
+    runtime = trace.runtime
+    provider_parts: list[str] = []
+    if runtime and runtime.provider_per_stage:
+        finalize_provider = (runtime.provider_per_stage.get("finalize") or "").strip()
+        infer_provider = (runtime.provider_per_stage.get("infer") or "").strip()
+        chosen = finalize_provider or infer_provider
+        if chosen and chosen not in ("unknown", "none"):
+            if ":" in chosen:
+                provider_parts.append(f"Answered with {chosen}")
+            else:
+                provider_parts.append(f"Answered with {chosen} model")
+
+        seen = {
+            (d.component or "").strip().lower()
+            for d in trace.degradations
+            if (d.error_kind or "").strip().lower() in {"timeout", "ratelimiterror", "internalservererror", "circuit_open"}
+        }
+        if seen and ("llm:openai" in seen or "openai" in seen):
+            provider_parts[0:0] = [f"Answered with backup {chosen or 'provider'}"]
+
+    cache_part = ""
+    for ev in trace.degradations:
+        comp = (ev.component or "").strip().lower()
+        kind = (ev.error_kind or "").strip().lower()
+        if "tavily" in comp and kind in {"outage", "timeout", "5xx", "circuit_open", "brownout"}:
+            cache_part = "Tavily cached"
+            break
+    if not cache_part and trace.resilience:
+        # Backward compatibility for traces that only carry resilience.events.
+        raw_events = (
+            trace.resilience.events
+            if hasattr(trace.resilience, "events")
+            else (trace.resilience.get("events", []) if isinstance(trace.resilience, dict) else [])
+        )
+        for ev in raw_events:
+            if not isinstance(ev, dict):
+                continue
+            comp = str(ev.get("component") or "").strip().lower()
+            kind = str(ev.get("error_kind") or "").strip().lower()
+            if "tavily" in comp and kind in {"outage", "timeout", "5xx", "circuit_open", "brownout"}:
+                cache_part = "Tavily cached"
+                break
+
+    text = " — ".join([x for x in provider_parts if x])
+    if cache_part:
+        text = f"{text} — {cache_part}" if text else cache_part
+    return text.strip(" —")
+
+
 def build_report_surface(trace: DecisionTrace) -> ReportSurface:
     """Construct UI surface from an assembled trace (after reflection)."""
     chosen_id = trace.recommendation.chosen_option_id.strip()
@@ -579,6 +629,7 @@ def build_report_surface(trace: DecisionTrace) -> ReportSurface:
         grounding_note=grounding,
         grounding_strength=grounding_strength,
         grounding_signals=grounding_signals,
+        how_answered=_how_answered_line(trace),
         personalized_reasons=reasons,
         future_paths=paths,
         key_assumptions=assumptions,

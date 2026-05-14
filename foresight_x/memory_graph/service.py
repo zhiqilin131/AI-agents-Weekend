@@ -77,8 +77,9 @@ class TemporalGraphMemory:
                 ),
             )
 
-        # Add concept-concept co-activation links (cycles allowed).
-        concepts = [x.concept_id for x in concept_links][:12]
+        # Add concept-concept co-activation links (cycles allowed), but avoid dense bridging between
+        # profile-memory facts and task-specific concepts, which can create noisy cross-topic activation.
+        concepts = [x.concept_id for x in concept_links if x.edge_type != "memory_fact_context"][:12]
         max_pairs = 48
         pair_count = 0
         for i, src in enumerate(concepts):
@@ -236,4 +237,12 @@ class TemporalGraphMemory:
             seeds,
             min_score=self.settings.graph_min_influence_score,
             top_k=top_k,
+            query_text=" ".join(
+                [
+                    user_state.raw_input or "",
+                    " ".join(user_state.goals or []),
+                    user_state.current_behavior or "",
+                    user_state.decision_type or "",
+                ]
+            ),
         )

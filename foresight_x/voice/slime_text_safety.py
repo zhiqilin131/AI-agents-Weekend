@@ -48,6 +48,14 @@ _SLURISH_TOKEN_RES: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"\bcoon\b", re.I),
 )
 
+_UNSAFE_PERSONA_STYLE_RE = re.compile(
+    r"\b("
+    r"hateful|racist|racial\s+stereotype|racially\s+stereotyped|supremacist|neo[-\s]?nazi|"
+    r"(?:use|using|speak|speaking)\s+(?:african\s+american|black|asian|latino|hispanic|jewish|chinese|indian)\s+slang(?:s)?"
+    r")\b",
+    re.I,
+)
+
 _SAFE_SLIME_NAME_FALLBACK = "your Slime Buddy"
 
 
@@ -72,6 +80,8 @@ def contains_blocked_identity_theme(text: str) -> bool:
     for rx in _SLURISH_TOKEN_RES:
         if rx.search(low):
             return True
+    if _UNSAFE_PERSONA_STYLE_RE.search(low):
+        return True
     return False
 
 
@@ -130,4 +140,3 @@ def sanitize_user_nickname_text(raw: str | None, *, max_len: int = 24) -> str | 
     if contains_unsafe_identity_phrase(s) or contains_blocked_identity_theme(s):
         return None
     return s[:max_len]
-

@@ -72,6 +72,25 @@ STOPWORDS = {
     "your",
 }
 
+SAFETY_QUERY_KEYWORDS = {
+    "allergy",
+    "allergic",
+    "food",
+    "diet",
+    "eat",
+    "eating",
+    "meal",
+    "meals",
+    "restaurant",
+    "seafood",
+    "salmon",
+    "fish",
+    "nutrition",
+    "health",
+    "medical",
+    "avoid",
+}
+
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]+", "_", text.strip().lower()).strip("_")[:80]
@@ -129,6 +148,9 @@ def concept_links_from_user_state(user_state: UserState) -> list[ConceptLink]:
         ]
     )
     query_tokens = _tokenize(context_text)
+    query_mentions_safety = any(tok in SAFETY_QUERY_KEYWORDS for tok in query_tokens)
+    if (user_state.decision_type or "").strip().lower() in {"health", "medical", "nutrition"}:
+        query_mentions_safety = True
     links: list[ConceptLink] = []
 
     for g in user_state.goals[:MAX_GOAL_LINKS]:
@@ -185,8 +207,10 @@ def concept_links_from_user_state(user_state: UserState) -> list[ConceptLink]:
         f_tokens = _tokenize(" ".join([subj, pred, obj, text]))
         ov = _overlap_score(f_tokens, query_tokens)
         safety_constraint = any(x in f_tokens for x in ("allergy", "allergic", "seafood", "constraint", "avoid"))
-        if ov <= 0 and not safety_constraint:
-            continue
+        if ov <= 0:
+            # Keep broad safety facts only when the current question is explicitly safety/food related.
+            if not (safety_constraint and query_mentions_safety):
+                continue
 
         cat_raw = getattr(fact, "category", "other")
         cat = str(getattr(cat_raw, "value", cat_raw)).lower()
@@ -201,7 +225,7 @@ def concept_links_from_user_state(user_state: UserState) -> list[ConceptLink]:
         ctype = ctype_map.get(cat, "belief")
         cid = f"concept:{ctype}:{_slug(label)}"
         weight = 0.66 + 0.3 * ov
-        if safety_constraint:
+        if safety_constraint and query_mentions_safety:
             weight = max(weight, 0.82)
         fact_candidates.append(
             (

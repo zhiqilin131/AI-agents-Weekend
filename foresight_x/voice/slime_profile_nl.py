@@ -94,7 +94,7 @@ Allowed top-level patch keys:
 - shape: classic | orb | robot | crystal | ghost
 - accessory: none | glasses | halo | antenna | scarf | spark
 - motion: subtle | normal | expressive
-- voice: {{ enabled: bool, rate: number 0.5-2, pitch: number 0.5-2, preferred_voice_name: string optional }}
+- voice: {{ enabled: bool, rate: number 0.5-2, pitch: number 0.5-2, preferred_voice_name: onyx|echo|fable|alloy|nova|shimmer optional }}
 
 Nested persona object (partial merge) — optional keys:
 - user_nickname or userNickname (how slime addresses the human)

@@ -8,7 +8,7 @@ import { DecisionReportPanel } from './DecisionReportPanel';
 import { MainNavButtons } from './MainNavButtons';
 import { ModePill } from './ModePill';
 import { ModeSuggestionBanner } from './ModeSuggestionBanner';
-import { primeSpeechSynthesisFromGesture } from '../hooks/useSpeechSynthesis';
+import { unlockSlimeAudioContext } from '../../utils/slimeAudioContext';
 
 type Message = {
   id: string;
@@ -46,7 +46,7 @@ export function UnifiedChat() {
 
   const callUnified = async (payload: Record<string, unknown>) => {
     if (payload.user_action === 'generate_decision_report') {
-      primeSpeechSynthesisFromGesture();
+      unlockSlimeAudioContext();
     }
     const res = await apiFetch('/api/chat/unified', {
       method: 'POST',
@@ -139,4 +139,3 @@ export function UnifiedChat() {
     </div>
   );
 }
-

@@ -52,6 +52,7 @@ export interface ReportSurface {
   groundingNote: string;
   groundingStrength: GroundingStrength;
   groundingSignals: GroundingSignal[];
+  howAnswered?: string;
   personalizedReasons: PersonalizedFitReason[];
   futurePaths: FuturePath[];
   keyAssumptions: string[];

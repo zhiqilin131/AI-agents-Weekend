@@ -21,6 +21,16 @@ _ROUTER_SLIME_KEYS = frozenset({"name", "color_theme", "shape"})
 
 _QUICK_COLOR_THEME_TOKENS = frozenset({"aurora", "violet", "mint", "sunset", "lime", "silver"})
 
+_VOICE_NAME_ALIASES: dict[str, str] = {
+    "onyx": "onyx",
+    "eddy": "onyx",
+    "echo": "echo",
+    "fable": "fable",
+    "alloy": "alloy",
+    "nova": "nova",
+    "shimmer": "shimmer",
+}
+
 _COLOR_THEME_ALIASES: dict[str, str] = {
     "aurora": "aurora",
     "northern lights": "aurora",
@@ -82,7 +92,9 @@ _RENAME_VOICE_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _USER_NICKNAME_VOICE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)^(?:please\s+)?call\s+me\s+(.+)$"),
-    re.compile(r"(?i)^(?:from\s+now\s+on\s+)?(?:call|address)\s+me\s+as\s+(.+)$"),
+    re.compile(r"(?i)^(?:from\s+now\s+on[\s,]*)?(?:please\s+)?(?:call|address)\s+me(?:\s+as)?\s+(.+)$"),
+    re.compile(r"(?i)^(?:from\s+now\s+on[\s,]*)?you\s+(?:should\s+|can\s+)?call\s+me(?:\s+as)?\s+(.+)$"),
+    re.compile(r"(?i)^you\s+(?:should\s+|can\s+)?call\s+me(?:\s+as)?\s+(.+?)(?:\s+from\s+now\s+on)?$"),
     re.compile(r"(?i)^refer\s+to\s+me\s+as\s+(.+)$"),
     re.compile(r"(?i)^you\s+can\s+call\s+me\s+(.+)$"),
     re.compile(r"^(?:以后\s*)?(?:你)?叫我\s*(.+)$"),
@@ -239,6 +251,39 @@ def _quick_slime_color_theme_patch(transcript: str) -> dict[str, Any] | None:
     return None
 
 
+def _quick_slime_voice_patch(transcript: str) -> dict[str, Any] | None:
+    """Deterministic voice-name/speed commands so Slime Studio changes work without router LLM."""
+    raw = (transcript or "").strip()
+    if not raw or len(raw) > 140:
+        return None
+    low = raw.lower()
+    is_voice_request = any(x in low for x in ("voice", "sound", "speak", "talk")) or any(
+        x in raw for x in ("声音", "嗓音", "语速", "说话")
+    )
+    is_action = any(x in low for x in ("change", "switch", "set", "use", "make", "turn", "speak")) or any(
+        x in raw for x in ("换", "改", "用", "变", "说")
+    )
+    if not (is_voice_request and is_action):
+        return None
+
+    patch: dict[str, Any] = {"voice": {"enabled": True}}
+    matched = False
+    for token, voice in _VOICE_NAME_ALIASES.items():
+        if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", low):
+            patch["voice"]["preferred_voice_name"] = voice
+            matched = True
+            break
+    if re.search(r"\b(faster|quicker|speed up)\b", low) or any(x in raw for x in ("快一点", "快点")):
+        patch["voice"]["rate"] = 1.15
+        matched = True
+    elif re.search(r"\b(slower|slow down)\b", low) or any(x in raw for x in ("慢一点", "慢点")):
+        patch["voice"]["rate"] = 0.85
+        matched = True
+    if not matched:
+        return None
+    return {"patch": patch}
+
+
 _FAST_CONVERSATION_BLOCKERS_EN = (
     "calendar",
     "planner",
@@ -367,6 +412,34 @@ def _try_fast_conversational_no_op(transcript: str) -> SlimeVoiceRouteResult | N
     )
 
 
+def _try_fast_memory_search(transcript: str) -> SlimeVoiceRouteResult | None:
+    """Fast path for direct recall questions; avoids a router LLM hop before memory search."""
+    raw = (transcript or "").strip()
+    if not raw or len(raw) > 500:
+        return None
+    low = raw.lower()
+    if re.search(r"\b(remember|save|note)\s+(that|this)\b", low) or re.search(r"记住|保存|帮我记", raw):
+        return None
+    recall_like = bool(
+        re.search(
+            r"\b("
+            r"who is my|who's my|what is my|what's my|what do you remember|"
+            r"what do you know about|do you remember|tell me what you know about|"
+            r"have i told you|did i tell you|my life|about me"
+            r")\b",
+            low,
+        )
+    ) or bool(re.search(r"你.*(记得|知道).*吗|关于我|我是谁|谁是我的|我的.+是什么|我的生活", raw))
+    if not recall_like:
+        return None
+    return SlimeVoiceRouteResult(
+        intent="memory_search",
+        tool_name="search_memory",
+        arguments={"query": raw[:500], "scope": "all"},
+        requires_confirmation=False,
+    )
+
+
 def _explicit_report_schedule_intent(transcript: str) -> bool:
     """
     True when the user is clearly asking to schedule items **from an existing decision report**
@@ -483,7 +556,7 @@ Allowed tools:
    Top-level patch keys: name, color_theme (aurora|violet|mint|sunset|lime|silver|custom), custom_colors {{primary,secondary,glow}} hex,
    personality (calm|direct|encouraging|analytical|playful|cautious), shape (classic|orb|robot|crystal|ghost),
    accessory (none|glasses|halo|antenna|scarf|spark), motion (subtle|normal|expressive),
-   voice {{enabled, rate 0.5-2, pitch 0.5-2, preferred_voice_name optional}}.
+   voice {{enabled, rate 0.5-2, pitch 0.5-2, preferred_voice_name optional TTS voice: onyx|echo|fable|alloy|nova|shimmer}}.
    Nested patch.persona (partial): user_nickname, companion_relationship, personality_preset, tone, warmth/humor/directness 0-3,
    reply_length (short|balanced|detailed), role_identity, catchphrases (≤3), donts (≤5).
    You may also set patch.role or patch.role_identity (string) as shorthand for persona.role_identity (same meaning).
@@ -561,6 +634,20 @@ def route_slime_voice_command(
             requires_confirmation=False,
             assistant_hint=None,
         )
+
+    voice_patch = _quick_slime_voice_patch(transcript.strip())
+    if voice_patch is not None:
+        return SlimeVoiceRouteResult(
+            intent="profile_update",
+            tool_name="update_slime_profile",
+            arguments=voice_patch,
+            requires_confirmation=False,
+            assistant_hint=None,
+        )
+
+    fast_memory = _try_fast_memory_search(transcript.strip())
+    if fast_memory is not None:
+        return fast_memory
 
     fast_convo = _try_fast_conversational_no_op(transcript.strip())
     if fast_convo is not None:

@@ -4,9 +4,7 @@ import { Mic, Square } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import type { SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
-import { EvidenceDrawer } from '../../app/components/profile/EvidenceDrawer';
 import type { MemoryEvidenceItem } from '../../app/components/profile/memoryEvidenceTypes';
-import { primeSpeechSynthesisFromGesture, useSpeechSynthesis } from '../../app/hooks/useSpeechSynthesis';
 import { playMp3BlobWithWebAudio, unlockSlimeAudioContext } from '../../utils/slimeAudioContext';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import type { SlimeProfile } from '../../app/model';
@@ -31,6 +29,7 @@ import { useSlimeCredits } from '../../app/components/credits/SlimeCreditsContex
 import { ModelSelector } from '../models/ModelSelector';
 import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
 import { BuddyTooltip } from './BuddyTooltip';
+import { normalizeTtsVoiceName } from '../../utils/ttsVoices';
 
 export type VoiceAgentState =
   | 'idle'
@@ -41,6 +40,7 @@ export type VoiceAgentState =
   | 'searching_memory'
   | 'synthesizing'
   | 'thinking'
+  | 'preparing_voice'
   | 'speaking'
   | 'executing_tool'
   | 'awaiting_confirmation'
@@ -59,13 +59,14 @@ export type SlimeSpeechOutput = {
   text: string;
   speaking: boolean;
   source: 'assistant' | 'system' | 'error';
+  evidenceItems?: MemoryEvidenceItem[];
 };
 
 export type SlimeVoiceAgentProps = {
   slimeProfile: SlimeProfile;
   onUpdateSlimeProfile?: (patch: Partial<SlimeProfile>) => Promise<void> | void;
   onAdvisorStateChange?: (s: SlimeAdvisorState) => void;
-  onMemoryEvidenceBurst?: (items: MemoryEvidenceItem[]) => void;
+  onMemoryEvidenceItemsChange?: (items: MemoryEvidenceItem[]) => void;
   /** Shadow chat thread id (persist across Buddy sessions). */
   threadId?: string;
   onThreadId?: (id: string) => void;
@@ -113,6 +114,20 @@ type PendingCalendarMutation = {
   message: string;
 };
 
+type RunTtsOptions = {
+  /**
+   * Bypass `voice.enabled === false` so playback still runs for explicit voice-command replies
+   * and “Play reply” taps.
+   */
+  force?: boolean;
+  source?: SlimeSpeechOutput['source'];
+  onMayHaveBlocked?: () => void;
+  onStart?: () => void;
+  onComplete?: () => void;
+  evidenceItems?: MemoryEvidenceItem[];
+  displayText?: string;
+};
+
 function mapVoiceToAdvisor(v: VoiceAgentState): SlimeAdvisorState {
   switch (v) {
     case 'listening':
@@ -126,6 +141,7 @@ function mapVoiceToAdvisor(v: VoiceAgentState): SlimeAdvisorState {
     case 'executing_tool':
     case 'searching_memory':
     case 'synthesizing':
+    case 'preparing_voice':
     case 'awaiting_confirmation':
       return 'thinking';
     case 'speaking':
@@ -153,6 +169,8 @@ function statusLabel(s: VoiceAgentState): string {
       return 'Putting the memories together…';
     case 'thinking':
       return 'Thinking…';
+    case 'preparing_voice':
+      return 'Preparing voice…';
     case 'executing_tool':
       return 'Working on it…';
     case 'speaking':
@@ -248,6 +266,19 @@ function readEvidenceItems(data: VoiceResponse): MemoryEvidenceItem[] {
   return raw.filter((x) => x && typeof x.id === 'string') as MemoryEvidenceItem[];
 }
 
+function normalizeSpeechText(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function firstSpeakableSentence(text: string): string {
+  const t = normalizeSpeechText(text);
+  if (t.length < 18) return '';
+  const m = t.match(/^(.{18,220}?[.!?。！？])(\s|$)/);
+  if (m?.[1]) return m[1].trim();
+  if (t.length >= 120) return `${t.slice(0, 120).replace(/\s+\S*$/, '').trim()}.`;
+  return '';
+}
+
 function speechPhaseLabel(phase: VoiceRecorderSpeechPhase, recording: boolean): string | null {
   if (!recording) return null;
   if (phase === 'waiting_speech') return 'Listening…';
@@ -315,7 +346,7 @@ export function SlimeVoiceAgent({
   slimeProfile,
   onUpdateSlimeProfile,
   onAdvisorStateChange,
-  onMemoryEvidenceBurst,
+  onMemoryEvidenceItemsChange,
   threadId,
   onThreadId,
   onDecisionSuggestion,
@@ -355,8 +386,6 @@ export function SlimeVoiceAgent({
       void sendVoiceBlobRef.current(blob);
     },
   });
-  const { supported: ttsSupported, speak, cancel: cancelTts, isSpeaking } = useSpeechSynthesis();
-
   const [voiceState, setVoiceState] = useState<VoiceAgentState>('idle');
   const [transcriptPreview, setTranscriptPreview] = useState<string | null>(null);
   const [lastReplyText, setLastReplyText] = useState<string | null>(null);
@@ -374,6 +403,11 @@ export function SlimeVoiceAgent({
   const buddyTtsLoadPendingRef = useRef(false);
   /** Bumps when a new TTS request or recording session invalidates in-flight playback. */
   const ttsGenRef = useRef(0);
+  const ttsPrefetchRef = useRef<{
+    key: string;
+    text: string;
+    promise: Promise<Blob | null>;
+  } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     patch: Record<string, unknown>;
@@ -381,9 +415,6 @@ export function SlimeVoiceAgent({
   const [pendingCalendar, setPendingCalendar] = useState<ResolvedCalendar | null>(null);
   const [pendingCalendarMutation, setPendingCalendarMutation] = useState<PendingCalendarMutation | null>(null);
   const [pendingAgentDraftId, setPendingAgentDraftId] = useState<string | null>(null);
-  const [drawerItems, setDrawerItems] = useState<MemoryEvidenceItem[]>([]);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [showEvidenceCta, setShowEvidenceCta] = useState(false);
 
   useEffect(() => {
     onAdvisorStateChange?.(mapVoiceToAdvisor(voiceState));
@@ -394,7 +425,14 @@ export function SlimeVoiceAgent({
   }, [onSpeechOutputChange]);
 
   const showSpeechOutput = useCallback(
-    (text: string, opts?: { speaking?: boolean; source?: SlimeSpeechOutput['source'] }) => {
+    (
+      text: string,
+      opts?: {
+        speaking?: boolean;
+        source?: SlimeSpeechOutput['source'];
+        evidenceItems?: MemoryEvidenceItem[];
+      },
+    ) => {
       const trimmed = text.trim();
       setLastReplyText(trimmed || null);
       onSpeechOutputChange?.(
@@ -403,6 +441,7 @@ export function SlimeVoiceAgent({
               text: trimmed,
               speaking: opts?.speaking ?? false,
               source: opts?.source ?? 'assistant',
+              evidenceItems: opts?.evidenceItems,
             }
           : null,
       );
@@ -451,152 +490,266 @@ export function SlimeVoiceAgent({
     [],
   );
 
-  const runTts = useCallback(
-    (
-      text: string,
-      opts?: {
-        /**
-         * Bypass `voice.enabled === false` (Personalize “Voice output: Off”) so playback still runs.
-         * Use for “Play reply” taps and for replies right after a voice-command / mic flow.
-         */
-        force?: boolean;
-        source?: SlimeSpeechOutput['source'];
-        onMayHaveBlocked?: () => void;
-        onStart?: () => void;
-        onComplete?: () => void;
-      },
-    ) => {
+  const ttsRequestKey = useCallback(
+    (text: string) =>
+      [
+        normalizeSpeechText(text),
+        normalizeTtsVoiceName(slimeProfile.voice?.preferredVoiceName) || 'default',
+        typeof slimeProfile.voice?.rate === 'number' ? slimeProfile.voice.rate : 'default-rate',
+        voiceModelOptionId || 'default-model',
+      ].join('|'),
+    [slimeProfile.voice?.preferredVoiceName, slimeProfile.voice?.rate, voiceModelOptionId],
+  );
+
+  const fetchTtsBlob = useCallback(
+    async (text: string, prefix: string, notify: boolean): Promise<Blob | null> => {
       const trimmed = text.trim();
+      if (!trimmed) return null;
+      const ttsCredit =
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${prefix}-${Date.now()}`;
+      const ttsVoice = normalizeTtsVoiceName(slimeProfile.voice?.preferredVoiceName);
+      const r = await apiFetch('/api/slime/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Credit-Request-Id': ttsCredit,
+        },
+        body: JSON.stringify({
+          text: trimmed,
+          ...(ttsVoice ? { voice: ttsVoice } : {}),
+          ...(typeof slimeProfile.voice?.rate === 'number' ? { speed: slimeProfile.voice.rate } : {}),
+          ...(voiceModelOptionId ? { model_option_id: voiceModelOptionId } : {}),
+        }),
+      });
+      if (r.status === 402) {
+        if (notify) {
+          let j: Record<string, unknown> = {};
+          try {
+            j = (await r.json()) as Record<string, unknown>;
+          } catch {
+            /* ignore */
+          }
+          showInsufficient({
+            required: Number(j.required ?? 0),
+            balance: typeof j.balance === 'number' ? j.balance : null,
+            message:
+              typeof j.message === 'string'
+                ? j.message
+                : 'You need more Slime Credits for this action.',
+          });
+        }
+        return null;
+      }
+      if (r.status === 503) {
+        if (notify) setTtsHint('Voice needs OPENAI_API_KEY on the API (same as chat).');
+        return null;
+      }
+      if (!r.ok) throw new Error(await r.text());
+      return r.blob();
+    },
+    [showInsufficient, slimeProfile.voice, voiceModelOptionId],
+  );
+
+  const playTtsBlob = useCallback(
+    async (
+      blob: Blob,
+      gen: number,
+      spokenText: string,
+      opts: RunTtsOptions | undefined,
+      onComplete: () => void,
+      displayText = spokenText,
+    ): Promise<boolean> => {
+      if (gen !== ttsGenRef.current) return false;
+      let started = false;
+      const startOutput = () => {
+        if (gen !== ttsGenRef.current || started) return;
+        started = true;
+        setVoiceState('speaking');
+        showSpeechOutput(displayText, {
+          speaking: true,
+          source: opts?.source,
+          evidenceItems: opts?.evidenceItems,
+        });
+        opts?.onStart?.();
+      };
+      const completeOutput = () => {
+        if (gen === ttsGenRef.current && displayText.trim()) {
+          showSpeechOutput(displayText, {
+            speaking: false,
+            source: opts?.source,
+            evidenceItems: opts?.evidenceItems,
+          });
+        }
+        onComplete();
+      };
+      buddyTtsLoadPendingRef.current = false;
+      setBuddyAudioPlaying(true);
+      const finishOutput = () => {
+        cancelBuddyAudio();
+        if (gen === ttsGenRef.current) setVoiceState('idle');
+        completeOutput();
+      };
+      const webOk = await playMp3BlobWithWebAudio(blob, {
+        onStart: startOutput,
+        onEnded: finishOutput,
+        trackSource: (node) => {
+          buddyWebAudioSourceRef.current = node;
+        },
+      });
+      if (gen !== ttsGenRef.current) return false;
+      if (webOk) return true;
+
+      const url = URL.createObjectURL(blob);
+      buddyObjectUrlRef.current = url;
+      const audio = new Audio();
+      buddyAudioRef.current = audio;
+      audio.setAttribute('playsinline', 'true');
+      audio.preload = 'auto';
+      audio.src = url;
+      audio.onended = finishOutput;
+      audio.onerror = () => {
+        cancelBuddyAudio();
+        setVoiceState('idle');
+        setTtsHint('Could not play audio — check API / OPENAI_API_KEY, or try again.');
+        opts?.onMayHaveBlocked?.();
+        completeOutput();
+      };
+      try {
+        await audio.play();
+        startOutput();
+        return true;
+      } catch {
+        cancelBuddyAudio();
+        if (gen !== ttsGenRef.current) return false;
+        setVoiceState('idle');
+        setTtsHint('Could not play TTS audio — tap again after interacting with the page.');
+        opts?.onMayHaveBlocked?.();
+        completeOutput();
+        return false;
+      }
+    },
+    [cancelBuddyAudio, showSpeechOutput],
+  );
+
+  const runTts = useCallback(
+    (text: string, opts?: RunTtsOptions) => {
+      const trimmed = text.trim();
+      const displayText = opts?.displayText || trimmed;
       const voiceOff = slimeProfile.voice?.enabled === false;
-      const useTts = ttsSupported && Boolean(text?.trim()) && (opts?.force === true || !voiceOff);
+      const useTts = Boolean(trimmed) && (opts?.force === true || !voiceOff);
       if (!useTts) {
-        if (trimmed) showSpeechOutput(trimmed, { speaking: false, source: opts?.source });
+        if (displayText) {
+          showSpeechOutput(displayText, {
+            speaking: false,
+            source: opts?.source,
+            evidenceItems: opts?.evidenceItems,
+          });
+        }
         setVoiceState('idle');
         opts?.onComplete?.();
         return;
       }
 
-      cancelTts();
       cancelBuddyAudio();
       const gen = ++ttsGenRef.current;
-      setVoiceState('speaking');
+      setVoiceState('preparing_voice');
       buddyTtsLoadPendingRef.current = true;
-      const onComplete = opts?.onComplete;
-      let started = false;
-      const startOutput = () => {
-        if (gen !== ttsGenRef.current) return;
-        if (started) return;
-        started = true;
-        showSpeechOutput(trimmed, { speaking: true, source: opts?.source });
-        opts?.onStart?.();
-      };
-      const completeOutput = () => {
-        if (gen === ttsGenRef.current && trimmed) {
-          showSpeechOutput(trimmed, { speaking: false, source: opts?.source });
-        }
-        onComplete?.();
-      };
-
-      const synthOpts = {
-        rate: slimeProfile.voice?.rate,
-        pitch: slimeProfile.voice?.pitch,
-        preferredVoiceName: slimeProfile.voice?.preferredVoiceName,
-        onUtteranceStart: startOutput,
-        onMayHaveBlocked: opts?.onMayHaveBlocked,
-        onUtteranceEnd: () => {
-          if (gen === ttsGenRef.current) setVoiceState('idle');
-          completeOutput();
-        },
-      };
-
       void (async () => {
         try {
-          const ttsCredit =
-            typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tts-${Date.now()}`;
-          const r = await apiFetch('/api/slime/tts', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Credit-Request-Id': ttsCredit,
-            },
-            body: JSON.stringify({
-              text,
-              ...(voiceModelOptionId ? { model_option_id: voiceModelOptionId } : {}),
-            }),
-          });
-          if (gen !== ttsGenRef.current) return;
-          if (r.status === 402) {
-            let j: Record<string, unknown> = {};
-            try {
-              j = (await r.json()) as Record<string, unknown>;
-            } catch {
-              /* ignore */
-            }
-            showInsufficient({
-              required: Number(j.required ?? 0),
-              balance: typeof j.balance === 'number' ? j.balance : null,
-              message:
-                typeof j.message === 'string'
-                  ? j.message
-                  : 'You need more Slime Credits for this action.',
-            });
-          }
-          if (r.ok) {
-            const blob = await r.blob();
-            if (gen !== ttsGenRef.current) return;
+          const blob = await fetchTtsBlob(trimmed, 'tts', true);
+          if (!blob || gen !== ttsGenRef.current) {
             buddyTtsLoadPendingRef.current = false;
-            setBuddyAudioPlaying(true);
-            const finishOutput = () => {
-              cancelBuddyAudio();
-              if (gen === ttsGenRef.current) setVoiceState('idle');
-              completeOutput();
-            };
-            const webOk = await playMp3BlobWithWebAudio(blob, {
-              onStart: startOutput,
-              onEnded: finishOutput,
-              trackSource: (node) => {
-                buddyWebAudioSourceRef.current = node;
-              },
-            });
-            if (gen !== ttsGenRef.current) return;
-            if (webOk) return;
-
-            const url = URL.createObjectURL(blob);
-            buddyObjectUrlRef.current = url;
-            const audio = new Audio();
-            buddyAudioRef.current = audio;
-            audio.setAttribute('playsinline', 'true');
-            audio.preload = 'auto';
-            audio.src = url;
-            audio.onended = finishOutput;
-            audio.onerror = () => {
-              cancelBuddyAudio();
+            if (gen === ttsGenRef.current) {
+              if (displayText) {
+                showSpeechOutput(displayText, {
+                  speaking: false,
+                  source: opts?.source,
+                  evidenceItems: opts?.evidenceItems,
+                });
+              }
               setVoiceState('idle');
-              setTtsHint('Could not play audio — check API / OPENAI_API_KEY, or try again.');
-              completeOutput();
-            };
-            try {
-              await audio.play();
-              startOutput();
-            } catch {
-              cancelBuddyAudio();
-              if (gen !== ttsGenRef.current) return;
-              speak(text, synthOpts);
             }
+            opts?.onComplete?.();
             return;
           }
-          if (r.status === 503) {
-            setTtsHint('Voice needs OPENAI_API_KEY on the API (same as chat). Falling back to browser speech…');
-          }
+          await playTtsBlob(blob, gen, trimmed, opts, () => opts?.onComplete?.(), displayText);
         } catch {
-          /* fall through */
+          setTtsHint('TTS voice was unavailable — check API / credits, then try again.');
+          buddyTtsLoadPendingRef.current = false;
+          if (gen !== ttsGenRef.current) return;
+          if (displayText) {
+            showSpeechOutput(displayText, {
+              speaking: false,
+              source: opts?.source,
+              evidenceItems: opts?.evidenceItems,
+            });
+          }
+          setVoiceState('idle');
+          opts?.onComplete?.();
         }
-        buddyTtsLoadPendingRef.current = false;
-        if (gen !== ttsGenRef.current) return;
-        speak(text, synthOpts);
       })();
     },
-    [ttsSupported, slimeProfile.voice, speak, cancelTts, cancelBuddyAudio, showInsufficient, voiceModelOptionId, showSpeechOutput],
+    [cancelBuddyAudio, fetchTtsBlob, playTtsBlob, showSpeechOutput, slimeProfile.voice],
+  );
+
+  const runTtsWithPrefetch = useCallback(
+    (text: string, opts?: RunTtsOptions) => {
+      const trimmed = normalizeSpeechText(text);
+      const prefetched = ttsPrefetchRef.current;
+      if (
+        prefetched &&
+        trimmed.startsWith(prefetched.text) &&
+        prefetched.key === ttsRequestKey(prefetched.text)
+      ) {
+        ttsPrefetchRef.current = null;
+        const rest = trimmed.slice(prefetched.text.length).trim();
+        cancelBuddyAudio();
+        const gen = ++ttsGenRef.current;
+        setVoiceState('preparing_voice');
+        buddyTtsLoadPendingRef.current = true;
+        void (async () => {
+          try {
+            const blob = await prefetched.promise;
+            if (gen !== ttsGenRef.current) return;
+            if (!blob) {
+              runTts(trimmed, opts);
+              return;
+            }
+            await playTtsBlob(
+              blob,
+              gen,
+              prefetched.text,
+              opts,
+              () => {
+                if (rest) runTts(rest, { ...opts, displayText: trimmed });
+                else opts?.onComplete?.();
+              },
+              trimmed,
+            );
+          } catch {
+            if (gen === ttsGenRef.current) runTts(trimmed, opts);
+          }
+        })();
+        return;
+      }
+      runTts(trimmed, opts);
+    },
+    [cancelBuddyAudio, playTtsBlob, runTts, ttsRequestKey],
+  );
+
+  const maybePrefetchStreamTts = useCallback(
+    (streamedText: string) => {
+      const first = firstSpeakableSentence(streamedText);
+      if (!first) return;
+      const key = ttsRequestKey(first);
+      if (ttsPrefetchRef.current?.key === key) return;
+      ttsPrefetchRef.current = {
+        key,
+        text: first,
+        promise: fetchTtsBlob(first, 'tts-prefetch', false).catch(() => null),
+      };
+    },
+    [fetchTtsBlob, ttsRequestKey],
   );
 
   const runSpokenSequence = useCallback(
@@ -744,7 +897,7 @@ export function SlimeVoiceAgent({
   );
 
   const onConfirmCalendar = useCallback(async () => {
-    primeSpeechSynthesisFromGesture();
+    unlockSlimeAudioContext();
     try {
       if (pendingAgentDraftId) {
         const events = await confirmCalendarDraft(pendingAgentDraftId);
@@ -803,7 +956,7 @@ export function SlimeVoiceAgent({
 
   const onConfirmCalendarMutation = useCallback(async () => {
     if (!pendingCalendarMutation) return;
-    primeSpeechSynthesisFromGesture();
+    unlockSlimeAudioContext();
     try {
       if (pendingCalendarMutation.kind === 'delete') {
         const res = await apiFetch(`/api/calendar/events/${encodeURIComponent(pendingCalendarMutation.event.id)}`, {
@@ -863,10 +1016,7 @@ export function SlimeVoiceAgent({
       }
 
       const evidenceItems = readEvidenceItems(data);
-      setDrawerItems(evidenceItems);
-      setShowEvidenceCta(
-        Boolean(evidenceItems.length && (data.voice_ui?.should_show_evidence_drawer ?? true)),
-      );
+      onMemoryEvidenceItemsChange?.(evidenceItems);
 
       if (hadServerMemorySearch && evidenceItems.length > 0) {
         onMemoryEvidenceRetrieved?.(evidenceItems.length);
@@ -943,8 +1093,6 @@ export function SlimeVoiceAgent({
       setPendingCalendarMutation(null);
       setVoiceState('executing_tool');
 
-      if (evidenceItems.length) onMemoryEvidenceBurst?.(evidenceItems);
-
       if (fe?.type === 'navigate') {
         applySlimeVoiceFrontendAction(navigate, fe);
       }
@@ -972,8 +1120,9 @@ export function SlimeVoiceAgent({
         return;
       }
 
-      runTts(toSpeak, {
+      runTtsWithPrefetch(toSpeak, {
         force: true,
+        evidenceItems,
         onMayHaveBlocked: () =>
           setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
       });
@@ -983,11 +1132,12 @@ export function SlimeVoiceAgent({
       onThreadId,
       onProfileMemorySaved,
       onMemoryEvidenceRetrieved,
+      onMemoryEvidenceItemsChange,
       prepareCalendarMutation,
       onDecisionSuggestion,
       runTts,
+      runTtsWithPrefetch,
       navigate,
-      onMemoryEvidenceBurst,
       runSpokenSequence,
     ],
   );
@@ -995,7 +1145,6 @@ export function SlimeVoiceAgent({
   const sendVoiceBlob = useCallback(
     async (blob: Blob | null) => {
       unlockSlimeAudioContext();
-      primeSpeechSynthesisFromGesture();
       setVoiceState('transcribing');
       setLatencyHint(null);
       const requestGen = ++inFlightRequestRef.current;
@@ -1107,8 +1256,8 @@ export function SlimeVoiceAgent({
             const delta = String(ev.delta || '').trim();
             if (!delta) return;
             streamedText = streamedText ? `${streamedText} ${delta}` : delta;
-            setVoiceState('speaking');
-            showSpeechOutput(streamedText, { speaking: false, source: 'assistant' });
+            setVoiceState('preparing_voice');
+            maybePrefetchStreamTts(streamedText);
           } else if (type === 'error') {
             streamError = String(ev.message || 'voice_stream_failed');
           } else if (type === 'done') {
@@ -1157,6 +1306,7 @@ export function SlimeVoiceAgent({
       voiceModelOptionId,
       showSpeechOutput,
       handleVoiceResponse,
+      maybePrefetchStreamTts,
     ],
   );
 
@@ -1170,13 +1320,11 @@ export function SlimeVoiceAgent({
     setLatencyHint(null);
     if (recording) {
       unlockSlimeAudioContext();
-      primeSpeechSynthesisFromGesture();
       const blob = await stopRecording();
       await sendVoiceBlob(blob);
       return;
     }
 
-    cancelTts();
     cancelBuddyAudio();
     ttsGenRef.current += 1;
     setTranscriptPreview(null);
@@ -1185,14 +1333,22 @@ export function SlimeVoiceAgent({
     setPendingConfirm(null);
     setPendingCalendar(null);
     setPendingCalendarMutation(null);
-    setDrawerOpen(false);
-    setShowEvidenceCta(false);
+    onMemoryEvidenceItemsChange?.([]);
     setVoiceState('listening');
     recordingStartedAtRef.current = performance.now();
-    primeSpeechSynthesisFromGesture({ skipUtterance: true });
+    unlockSlimeAudioContext();
     const ok = await startRecording();
     if (!ok) setVoiceState('error');
-  }, [recording, stopRecording, startRecording, sendVoiceBlob, cancelBuddyAudio, cancelTts, setError, clearSpeechOutput]);
+  }, [
+    recording,
+    stopRecording,
+    startRecording,
+    sendVoiceBlob,
+    cancelBuddyAudio,
+    setError,
+    clearSpeechOutput,
+    onMemoryEvidenceItemsChange,
+  ]);
 
   const onConfirmPatch = useCallback(async () => {
     if (!pendingConfirm?.patch || !onUpdateSlimeProfile) {
@@ -1200,7 +1356,7 @@ export function SlimeVoiceAgent({
       setVoiceState('idle');
       return;
     }
-    primeSpeechSynthesisFromGesture();
+    unlockSlimeAudioContext();
     try {
       const normalized = normalizeVoiceSlimePatch(pendingConfirm.patch) as Partial<SlimeProfile>;
       await onUpdateSlimeProfile(normalized);
@@ -1239,31 +1395,18 @@ export function SlimeVoiceAgent({
           </p>
         ) : null}
 
-        {lastReplyText && ttsSupported && !recording ? (
-          <BuddyTooltip content="Speak the assistant's last reply with your browser voice (unlocks audio on first use).">
+        {lastReplyText && !recording ? (
+          <BuddyTooltip content="Play the assistant's last reply with the saved TTS voice.">
             <button
               type="button"
               className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
               onClick={() => {
                 setTtsHint(null);
                 unlockSlimeAudioContext();
-                primeSpeechSynthesisFromGesture();
                 runTts(lastReplyText, { force: true });
               }}
             >
-              {isSpeaking || buddyAudioPlaying ? 'Replay reply' : 'Play reply'}
-            </button>
-          </BuddyTooltip>
-        ) : null}
-
-        {showEvidenceCta && drawerItems.length ? (
-          <BuddyTooltip content="Open a drawer with memories and snippets that influenced this answer.">
-            <button
-              type="button"
-              className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
-              onClick={() => setDrawerOpen(true)}
-            >
-              View evidence
+              {buddyAudioPlaying ? 'Replay reply' : 'Play reply'}
             </button>
           </BuddyTooltip>
         ) : null}
@@ -1464,7 +1607,6 @@ export function SlimeVoiceAgent({
         </div>
       ) : null}
 
-      <EvidenceDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} items={drawerItems} />
     </>
   );
 }

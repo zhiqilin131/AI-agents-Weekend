@@ -56,3 +56,6 @@ def test_run_pipeline_stage_resume_with_partial_state(tmp_path, monkeypatch):
     )
     assert resumed.decision_id == "resume-trace"
     assert resumed.recommendation.chosen_option_id
+    assert resumed.runtime is not None
+    assert resumed.runtime.provider_per_stage
+    assert isinstance(resumed.degradations, list)

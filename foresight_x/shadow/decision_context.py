@@ -129,6 +129,7 @@ def build_shadow_decision_context_block(
     thread_id: str | None = None,
     retrieval_mode: str = "chat_fast",
     minimal_long_term_context: bool = False,
+    recent_messages: list[dict] | None = None,
 ) -> str:
     """Single block for the Shadow system prompt: traces on disk + optional Chroma matches."""
     s = settings or load_settings()
@@ -153,9 +154,10 @@ def build_shadow_decision_context_block(
             retrieval_mode == "chat_fast"
             and should_use_memory_cache(
                 last_user_message,
-                None,
+                recent_messages,
                 cached,
                 source_version=source_version,
+                min_topic_overlap=float(s.memory_cache_min_topic_overlap),
             )
         ):
             mem_part = cached.memory_block

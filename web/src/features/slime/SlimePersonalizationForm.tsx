@@ -25,6 +25,7 @@ import {
   SLIME_TONE_OPTIONS,
   patchForPersonalityPreset,
 } from './slimePersonaPresets';
+import { normalizeTtsVoiceName, OPENAI_TTS_VOICES } from '../../utils/ttsVoices';
 
 const RELATIONSHIP_OPTIONS: Array<{ id: SlimeCompanionRelationship; label: string }> = [
   { id: 'helper_pet_companion', label: 'Helper + pet + companion (default)' },
@@ -52,14 +53,12 @@ function hexForColorInput(raw: string | undefined, fallback: string): string {
 export function SlimePersonalizationForm({
   slimeDraft,
   setSlimeDraft,
-  browserVoices,
   onSave,
   onReset,
   idPrefix = 'slime',
 }: {
   slimeDraft: SlimeProfile;
   setSlimeDraft: Dispatch<SetStateAction<SlimeProfile>>;
-  browserVoices: string[];
   onSave: () => void | Promise<void>;
   onReset: () => void | Promise<void>;
   idPrefix?: string;
@@ -78,6 +77,22 @@ export function SlimePersonalizationForm({
   }, [slimeModels.ready, slimeModels.defaultModel, previewModelOptionId]);
 
   const persona = slimeDraft.persona ?? DEFAULT_SLIME_PERSONA;
+  const selectedTtsVoice = normalizeTtsVoiceName(slimeDraft.voice?.preferredVoiceName) ?? '';
+
+  useEffect(() => {
+    const raw = slimeDraft.voice?.preferredVoiceName;
+    const normalized = normalizeTtsVoiceName(raw);
+    if (!raw || raw === normalized) return;
+    setSlimeDraft((s) => ({
+      ...s,
+      voice: {
+        enabled: s.voice?.enabled !== false,
+        rate: s.voice?.rate ?? 1,
+        pitch: s.voice?.pitch ?? 1,
+        preferredVoiceName: normalized,
+      },
+    }));
+  }, [setSlimeDraft, slimeDraft.voice?.preferredVoiceName]);
 
   const setPersona = (patch: Partial<typeof persona>) => {
     setSlimeDraft((s) => ({
@@ -559,7 +574,7 @@ export function SlimePersonalizationForm({
       </div>
 
       <div className="rounded-lg border border-violet-100/80 bg-white/60 p-2.5">
-        <p className="text-[11px] font-medium text-gray-800">Read aloud (reports)</p>
+        <p className="text-[11px] font-medium text-gray-800">TTS voice (Buddy + reports)</p>
         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
           <select
             value={slimeDraft.voice?.enabled === false ? 'disabled' : 'enabled'}
@@ -618,31 +633,29 @@ export function SlimePersonalizationForm({
             className="h-9 text-xs"
           />
         </div>
-        {browserVoices.length > 0 ? (
-          <select
-            value={slimeDraft.voice?.preferredVoiceName ?? ''}
-            onChange={(e) => {
-              const name = e.target.value;
-              setSlimeDraft((s) => ({
-                ...s,
-                voice: {
-                  enabled: s.voice?.enabled !== false,
-                  rate: s.voice?.rate ?? 1,
-                  pitch: s.voice?.pitch ?? 1,
-                  preferredVoiceName: name || undefined,
-                },
-              }));
-            }}
-            className={cn(fieldSelectClass, 'mt-2 h-9 text-xs')}
-          >
-            <option value="">System voice: default</option>
-            {browserVoices.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        ) : null}
+        <select
+          value={selectedTtsVoice}
+          onChange={(e) => {
+            const name = e.target.value;
+            setSlimeDraft((s) => ({
+              ...s,
+              voice: {
+                enabled: s.voice?.enabled !== false,
+                rate: s.voice?.rate ?? 1,
+                pitch: s.voice?.pitch ?? 1,
+                preferredVoiceName: name || undefined,
+              },
+            }));
+          }}
+          className={cn(fieldSelectClass, 'mt-2 h-9 text-xs')}
+        >
+          <option value="">Server default</option>
+          {OPENAI_TTS_VOICES.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="flex flex-wrap gap-2 pt-1">

@@ -4,6 +4,7 @@ import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/repor
 import { TypewriterText } from '../../app/components/TypewriterText';
 import { cn } from '../../app/components/ui/utils';
 import type { SlimeProfile } from '../../app/model';
+import type { MemoryEvidenceItem } from '../../app/components/profile/memoryEvidenceTypes';
 import type { SlimeSpeechOutput } from './SlimeVoiceAgent';
 
 /** Approximate radius of the slime “body” for obstacle clearance (viewport px). */
@@ -106,6 +107,21 @@ function pickSafeRoamDelta(
   return clampOffsetToStage(stageEl, curX, curY);
 }
 
+function memoryChipLabel(item: MemoryEvidenceItem): string {
+  const genericLabel = /^(profile|memory|evidence|chat history|decision report|calendar)(\s+memory)?$/i;
+  const fromLabel = item.label?.trim();
+  const raw = fromLabel && !genericLabel.test(fromLabel)
+    ? fromLabel
+    : (item.shortText || item.fullText || fromLabel || 'memory').trim();
+  const cleaned = raw
+    .replace(/\s+/g, ' ')
+    .replace(/^(profile|memory|evidence|chat history|decision report|calendar)\s*[:·-]\s*/i, '')
+    .replace(/^(the\s+)?user\s+(prefers|likes|wants|plans|asked|mentioned|said|is|has|calls|thinks|feels)\s+/i, '')
+    .trim();
+  if (!cleaned) return 'memory';
+  return cleaned.length > 34 ? `${cleaned.slice(0, 31).trim()}…` : cleaned;
+}
+
 /**
  * Roaming pet: wander from current spot; drag merges into roam (no snap-back); clamped to stage.
  */
@@ -113,11 +129,13 @@ export function SlimeCompanionStage({
   profile,
   advisorState = 'idle',
   speechOutput,
+  onEvidenceOpen,
   className,
 }: {
   profile: SlimeProfile;
   advisorState?: SlimeAdvisorState;
   speechOutput?: SlimeSpeechOutput | null;
+  onEvidenceOpen?: () => void;
   /** Merged onto the stage root (e.g. z-index vs voice UI layers). */
   className?: string;
 }) {
@@ -291,7 +309,7 @@ export function SlimeCompanionStage({
                 exit={{ opacity: 0, y: 6, scale: 0.96 }}
                 transition={{ type: 'spring', stiffness: 420, damping: 26 }}
                 className={cn(
-                  'slime-comic-bubble pointer-events-none absolute left-[72%] top-[-18%] z-20 max-w-[min(74vw,25rem)]',
+                  'slime-comic-bubble pointer-events-auto absolute left-[72%] top-[-18%] z-20 max-w-[min(78vw,34rem)]',
                   speechOutput.source === 'error' && 'slime-comic-bubble-error',
                   speechOutput.source === 'system' && 'slime-comic-bubble-system',
                 )}
@@ -305,6 +323,36 @@ export function SlimeCompanionStage({
                   intervalMs={18}
                   className="break-keep text-[15px] font-medium leading-relaxed text-slate-800"
                 />
+                {speechOutput.evidenceItems?.length ? (
+                  <div className="mt-3 flex max-w-full flex-wrap gap-1.5 border-t border-violet-100/80 pt-2">
+                    {speechOutput.evidenceItems.slice(0, 3).map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="max-w-full truncate rounded-full border border-violet-200/75 bg-violet-50/85 px-2 py-1 text-[10px] font-semibold text-violet-800 shadow-sm transition hover:border-violet-300 hover:bg-white"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEvidenceOpen?.();
+                        }}
+                        title={item.fullText || item.shortText || item.label}
+                      >
+                        remembered: {memoryChipLabel(item)}
+                      </button>
+                    ))}
+                    {speechOutput.evidenceItems.length > 3 ? (
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-200 bg-white/80 px-2 py-1 text-[10px] font-semibold text-slate-600 transition hover:bg-white"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEvidenceOpen?.();
+                        }}
+                      >
+                        +{speechOutput.evidenceItems.length - 3}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </motion.div>
             ) : null}
           </motion.div>

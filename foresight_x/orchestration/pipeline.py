@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import uuid
+import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
@@ -25,6 +27,8 @@ from foresight_x.retrieval.memory import UserMemory
 from foresight_x.retrieval.user_recent_context import merge_user_context_into_evidence
 from foresight_x.retrieval.world_cache import WorldKnowledge
 from foresight_x.resilience.runtime import (
+    breaker_states_snapshot,
+    chaos_profile_snapshot,
     chaos_mode,
     current_run_events,
     degrade,
@@ -33,14 +37,18 @@ from foresight_x.resilience.runtime import (
     start_resilience_run,
 )
 from foresight_x.schemas import (
+    Degradation,
     DecisionTrace,
     EvidenceBundle,
     GraphInfluenceBundle,
+    InfluenceNode,
     MemoryBundle,
     Option,
     OptionEvaluation,
     RationalityReport,
     Reflection,
+    ResilienceTraceInfo,
+    RuntimeContext,
     SimulatedFuture,
     UserState,
 )
@@ -49,6 +57,20 @@ from foresight_x.simulation.evaluator import evaluate_options
 from foresight_x.simulation.future_simulator import simulate_futures
 
 _PIPELINE_STAGE_ORDER = ["enhance", "perceive", "retrieve", "infer", "simulate", "evaluate", "finalize"]
+_GRAPH_DISPLAY_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "have",
+    "been",
+    "were",
+    "your",
+    "about",
+}
 
 
 def _stage_index(stage: str | None) -> int:
@@ -117,6 +139,104 @@ def _empty_evidence() -> EvidenceBundle:
 
 def utc_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _provider_label_from_llm(llm: Any | None) -> str:
+    """Best-effort provider:model label from the resilient gateway."""
+    call = getattr(llm, "last_call", None)
+    if call is None:
+        return ""
+    provider = str(getattr(call, "provider_used", "") or "").strip()
+    model = str(getattr(call, "model_used", "") or "").strip()
+    if provider and model:
+        return f"{provider}:{model}"
+    return provider or model
+
+
+def _graph_theme_tokens(user_state: UserState) -> set[str]:
+    text = " ".join(
+        [
+            user_state.raw_input or "",
+            " ".join(user_state.goals or []),
+            user_state.current_behavior or "",
+            user_state.decision_type or "",
+        ]
+    )
+    raw = {w.lower() for w in re.findall(r"[a-zA-Z][a-zA-Z'-]{2,}", text)}
+    return {w for w in raw if w not in _GRAPH_DISPLAY_STOPWORDS}
+
+
+def _rank_graph_nodes_for_display(influence: GraphInfluenceBundle, user_state: UserState) -> list[InfluenceNode]:
+    tokens = _graph_theme_tokens(user_state)
+
+    def _node_tokens(node: InfluenceNode) -> set[str]:
+        raw = {w.lower() for w in re.findall(r"[a-zA-Z][a-zA-Z'-]{2,}", node.label or "")}
+        return {w for w in raw if w not in _GRAPH_DISPLAY_STOPWORDS}
+
+    def _tier(node: InfluenceNode) -> int:
+        if node.layer == "event" and node.node_id.startswith("event:decision:"):
+            return 0
+        if node.layer == "concept" and tokens and (_node_tokens(node) & tokens):
+            return 1
+        return 2
+
+    def _overlap(node: InfluenceNode) -> int:
+        if not tokens:
+            return 0
+        return len(_node_tokens(node) & tokens)
+
+    ordered = sorted(
+        influence.top_nodes,
+        key=lambda n: (
+            _tier(n),
+            -_overlap(n),
+            -float(n.score),
+            n.label,
+        ),
+    )
+    return ordered[: len(influence.top_nodes)]
+
+
+def _retrieve_provider_label(
+    evidence_bundle: EvidenceBundle,
+    run_events: list[dict[str, Any]],
+) -> str:
+    """Infer retrieval provider summary for runtime.provider_per_stage."""
+    tavily_degraded = any(
+        "tavily" in str((ev or {}).get("component") or "").strip().lower()
+        and str((ev or {}).get("error_kind") or "").strip().lower()
+        in {"outage", "timeout", "5xx", "circuit_open", "brownout"}
+        for ev in run_events
+    )
+    if tavily_degraded:
+        return "cache_only"
+    if evidence_bundle.recent_events:
+        return "tavily"
+    return "cache_only"
+
+
+def _ensure_runtime_degradations(
+    run_events: list[dict[str, Any]],
+    chaos_profile: dict[str, str],
+) -> list[dict[str, Any]]:
+    if run_events:
+        return list(run_events)
+    synthetic: list[dict[str, Any]] = []
+    for component, mode in chaos_profile.items():
+        m = (mode or "").strip()
+        if not m:
+            continue
+        synthetic.append(
+            {
+                "at": utc_timestamp(),
+                "component": component,
+                "stage": "infra_probe",
+                "reason": f"chaos injection enabled ({m})",
+                "retryable": True,
+                "error_kind": m,
+            }
+        )
+    return synthetic
 
 
 def retrieve_bundles(
@@ -245,13 +365,15 @@ def _augment_memory_with_graph(
         influence = influence or TemporalGraphMemory(settings.foresight_user_id, settings=settings).influence_for(user_state)
         if influence is None:
             return memory_bundle
+        display_top_nodes = _rank_graph_nodes_for_display(influence, user_state)
+        display_influence = influence.model_copy(update={"top_nodes": display_top_nodes})
         ranked = list(memory_bundle.similar_past_decisions)
-        if influence.surfaced_decision_ids and ranked:
+        if display_influence.surfaced_decision_ids and ranked:
             by_id = {p.decision_id: p for p in ranked}
-            surfaced = [by_id[d] for d in influence.surfaced_decision_ids if d in by_id]
+            surfaced = [by_id[d] for d in display_influence.surfaced_decision_ids if d in by_id]
             surfaced_ids = {p.decision_id for p in surfaced}
             ranked = surfaced + [p for p in ranked if p.decision_id not in surfaced_ids]
-        top_line = ", ".join(f"{n.label} ({n.score:.2f})" for n in influence.top_nodes[:4])
+        top_line = ", ".join(f"{n.label} ({n.score:.2f})" for n in display_influence.top_nodes[:4])
         merged_patterns = list(memory_bundle.behavioral_patterns)
         if top_line:
             merged_patterns.append(f"Graph influence: {top_line}")
@@ -259,7 +381,7 @@ def _augment_memory_with_graph(
             update={
                 "similar_past_decisions": ranked,
                 "behavioral_patterns": merged_patterns[:24],
-                "graph_influence": influence,
+                "graph_influence": display_influence,
             }
         )
     except Exception:
@@ -326,6 +448,8 @@ def finalize_trace(
     original_user_input: str = "",
     anchor_now_iso: str | None = None,
     resilience_events: list[dict[str, Any]] | None = None,
+    runtime_context: RuntimeContext | None = None,
+    degradations: list[Degradation] | None = None,
 ) -> DecisionTrace:
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
     recommendation = recommend(
@@ -357,6 +481,8 @@ def finalize_trace(
         evaluations=evaluations,
         recommendation=recommendation,
         reflection=placeholder,
+        runtime=runtime_context,
+        degradations=list(degradations or []),
         resilience={
             "fallback_mode": bool(resilience_events),
             "brownout_signal": any(
@@ -415,6 +541,13 @@ def iter_pipeline_events(
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
     resume_idx = _stage_index(resume_from_stage)
     resumed = resume_idx > 0
+    pipeline_started_at = utc_timestamp()
+    t0_total = time.perf_counter()
+    per_stage_latency_ms: dict[str, int] = {}
+    provider_per_stage: dict[str, str] = {}
+    breaker_states_at_start = breaker_states_snapshot()
+    chaos_profile = chaos_profile_snapshot()
+    chaos_armed = any(bool(v.strip()) for v in chaos_profile.values())
 
     try:
         yield {"event": "meta", "decision_id": did, "timestamp": ts}
@@ -436,6 +569,7 @@ def iter_pipeline_events(
         enhanced = str(_resume_get_obj(resume_partial, "enhanced_preview") or "").strip()
         if resume_idx <= 0 or not original or not enhanced:
             yield {"event": "stage", "stage": "enhance"}
+            t_stage = time.perf_counter()
             effective = merge_clarification_answers(user_raw, clarification_answers)
             if preserve_raw_input:
                 original, enhanced = user_raw, user_raw
@@ -446,6 +580,8 @@ def iter_pipeline_events(
                     profile=profile,
                     original_override=user_raw,
                 )
+            per_stage_latency_ms["enhance"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["enhance"] = _provider_label_from_llm(ctx.llm) or "none"
             yield {
                 "event": "partial",
                 "stage": "enhance",
@@ -455,9 +591,12 @@ def iter_pipeline_events(
         user_state = _resume_model(UserState, resume_partial, "user_state")
         if resume_idx <= 1 or user_state is None:
             yield {"event": "stage", "stage": "perceive"}
+            t_stage = time.perf_counter()
             user_state = build_user_state(enhanced, ctx.llm, profile=profile)
             user_state = merge_profile_into_user_state(user_state, profile)
             user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
+            per_stage_latency_ms["perceive"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["perceive"] = _provider_label_from_llm(ctx.llm) or "none"
             yield {
                 "event": "partial",
                 "stage": "perceive",
@@ -468,9 +607,12 @@ def iter_pipeline_events(
         evidence_bundle = _resume_model(EvidenceBundle, resume_partial, "evidence")
         if resume_idx <= 2 or memory_bundle is None or evidence_bundle is None:
             yield {"event": "stage", "stage": "retrieve"}
+            t_stage = time.perf_counter()
             memory_bundle, evidence_bundle = retrieve_bundles_parallel(
                 user_state, ctx, exclude_decision_id=did
             )
+            per_stage_latency_ms["retrieve"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["retrieve"] = _retrieve_provider_label(evidence_bundle, current_run_events())
             yield {
                 "event": "partial",
                 "stage": "retrieve",
@@ -484,7 +626,10 @@ def iter_pipeline_events(
         options = _resume_model_list(Option, resume_partial, "options")
         if resume_idx <= 3 or rationality is None or options is None:
             yield {"event": "stage", "stage": "infer"}
+            t_stage = time.perf_counter()
             rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
+            per_stage_latency_ms["infer"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["infer"] = _provider_label_from_llm(ctx.llm) or "none"
             yield {
                 "event": "partial",
                 "stage": "infer",
@@ -497,7 +642,10 @@ def iter_pipeline_events(
         futures = _resume_model_list(SimulatedFuture, resume_partial, "futures")
         if resume_idx <= 4 or futures is None:
             yield {"event": "stage", "stage": "simulate"}
+            t_stage = time.perf_counter()
             futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
+            per_stage_latency_ms["simulate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["simulate"] = _provider_label_from_llm(ctx.llm) or "none"
             yield {
                 "event": "partial",
                 "stage": "simulate",
@@ -507,7 +655,10 @@ def iter_pipeline_events(
         evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
         if resume_idx <= 5 or evaluations is None:
             yield {"event": "stage", "stage": "evaluate"}
+            t_stage = time.perf_counter()
             evaluations = evaluate_options(futures, user_state, ctx.llm)
+            per_stage_latency_ms["evaluate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["evaluate"] = _provider_label_from_llm(ctx.llm) or "none"
             yield {
                 "event": "partial",
                 "stage": "evaluate",
@@ -515,6 +666,18 @@ def iter_pipeline_events(
             }
 
         yield {"event": "stage", "stage": "finalize"}
+        runtime_context = RuntimeContext(
+            pipeline_started_at=pipeline_started_at,
+            total_latency_ms=0,
+            per_stage_latency_ms=dict(per_stage_latency_ms),
+            provider_per_stage=dict(provider_per_stage),
+            breaker_states_at_start=breaker_states_at_start,
+            breaker_states_at_end={},
+            chaos_armed=chaos_armed,
+            chaos_profile=chaos_profile,
+        )
+        t_finalize = time.perf_counter()
+        degradations = [Degradation.model_validate(e) for e in current_run_events()]
         trace = finalize_trace(
             decision_id=did,
             timestamp=ts,
@@ -532,7 +695,35 @@ def iter_pipeline_events(
             original_user_input=original,
             anchor_now_iso=anchor,
             resilience_events=current_run_events(),
+            runtime_context=runtime_context,
+            degradations=degradations,
         )
+        per_stage_latency_ms["finalize"] = int(round((time.perf_counter() - t_finalize) * 1000.0))
+        provider_per_stage["finalize"] = _provider_label_from_llm(ctx.llm) or "unknown"
+        all_events = _ensure_runtime_degradations(current_run_events(), chaos_profile)
+        runtime_context = runtime_context.model_copy(
+            update={
+                "total_latency_ms": int(round((time.perf_counter() - t0_total) * 1000.0)),
+                "per_stage_latency_ms": dict(per_stage_latency_ms),
+                "provider_per_stage": dict(provider_per_stage),
+                "breaker_states_at_end": breaker_states_snapshot(),
+            }
+        )
+        trace = trace.model_copy(
+            update={
+                "degradations": [Degradation.model_validate(e) for e in all_events],
+                "resilience": ResilienceTraceInfo(
+                    fallback_mode=bool(all_events),
+                    brownout_signal=any(
+                        str((e or {}).get("error_kind") or "").strip().lower() == "brownout"
+                        for e in all_events
+                    ),
+                    events=list(all_events),
+                ),
+            }
+        )
+        trace = trace.model_copy(update={"runtime": runtime_context})
+        trace = trace.model_copy(update={"report_surface": build_report_surface(trace)})
         if (
             save_clarification_to_profile
             and clarification_answers
@@ -576,6 +767,13 @@ def run_pipeline(
     did = decision_id or str(uuid.uuid4())
     ts = utc_timestamp()
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
+    pipeline_started_at = utc_timestamp()
+    t0_total = time.perf_counter()
+    per_stage_latency_ms: dict[str, int] = {}
+    provider_per_stage: dict[str, str] = {}
+    breaker_states_at_start = breaker_states_snapshot()
+    chaos_profile = chaos_profile_snapshot()
+    chaos_armed = any(bool(v.strip()) for v in chaos_profile.values())
 
     try:
         profile = load_user_profile(settings)
@@ -584,6 +782,7 @@ def run_pipeline(
         original = str(_resume_get_obj(resume_partial, "original_user_input") or "").strip()
         enhanced = str(_resume_get_obj(resume_partial, "enhanced_preview") or "").strip()
         if resume_idx <= 0 or not original or not enhanced:
+            t_stage = time.perf_counter()
             effective = merge_clarification_answers(user_raw, clarification_answers)
             if preserve_raw_input:
                 original, enhanced = user_raw, user_raw
@@ -594,33 +793,62 @@ def run_pipeline(
                     profile=profile,
                     original_override=user_raw,
                 )
+            per_stage_latency_ms["enhance"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["enhance"] = _provider_label_from_llm(ctx.llm) or "none"
 
         user_state = _resume_model(UserState, resume_partial, "user_state")
         if resume_idx <= 1 or user_state is None:
+            t_stage = time.perf_counter()
             user_state = build_user_state(enhanced, ctx.llm, profile=profile)
             user_state = merge_profile_into_user_state(user_state, profile)
             user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
+            per_stage_latency_ms["perceive"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["perceive"] = _provider_label_from_llm(ctx.llm) or "none"
 
         memory_bundle = _resume_model(MemoryBundle, resume_partial, "memory")
         evidence_bundle = _resume_model(EvidenceBundle, resume_partial, "evidence")
         if resume_idx <= 2 or memory_bundle is None or evidence_bundle is None:
+            t_stage = time.perf_counter()
             memory_bundle, evidence_bundle = retrieve_bundles_parallel(
                 user_state, ctx, exclude_decision_id=did
             )
+            per_stage_latency_ms["retrieve"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["retrieve"] = _retrieve_provider_label(evidence_bundle, current_run_events())
 
         rationality = _resume_model(RationalityReport, resume_partial, "rationality")
         options = _resume_model_list(Option, resume_partial, "options")
         if resume_idx <= 3 or rationality is None or options is None:
+            t_stage = time.perf_counter()
             rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
+            per_stage_latency_ms["infer"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["infer"] = _provider_label_from_llm(ctx.llm) or "none"
 
         futures = _resume_model_list(SimulatedFuture, resume_partial, "futures")
         if resume_idx <= 4 or futures is None:
+            t_stage = time.perf_counter()
             futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
+            per_stage_latency_ms["simulate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["simulate"] = _provider_label_from_llm(ctx.llm) or "none"
 
         evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
         if resume_idx <= 5 or evaluations is None:
+            t_stage = time.perf_counter()
             evaluations = evaluate_options(futures, user_state, ctx.llm)
+            per_stage_latency_ms["evaluate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
+            provider_per_stage["evaluate"] = _provider_label_from_llm(ctx.llm) or "none"
 
+        runtime_context = RuntimeContext(
+            pipeline_started_at=pipeline_started_at,
+            total_latency_ms=0,
+            per_stage_latency_ms=dict(per_stage_latency_ms),
+            provider_per_stage=dict(provider_per_stage),
+            breaker_states_at_start=breaker_states_at_start,
+            breaker_states_at_end={},
+            chaos_armed=chaos_armed,
+            chaos_profile=chaos_profile,
+        )
+        t_finalize = time.perf_counter()
+        degradations = [Degradation.model_validate(e) for e in current_run_events()]
         trace = finalize_trace(
             decision_id=did,
             timestamp=ts,
@@ -638,7 +866,35 @@ def run_pipeline(
             original_user_input=original,
             anchor_now_iso=anchor,
             resilience_events=current_run_events(),
+            runtime_context=runtime_context,
+            degradations=degradations,
         )
+        per_stage_latency_ms["finalize"] = int(round((time.perf_counter() - t_finalize) * 1000.0))
+        provider_per_stage["finalize"] = _provider_label_from_llm(ctx.llm) or "unknown"
+        all_events = _ensure_runtime_degradations(current_run_events(), chaos_profile)
+        runtime_context = runtime_context.model_copy(
+            update={
+                "total_latency_ms": int(round((time.perf_counter() - t0_total) * 1000.0)),
+                "per_stage_latency_ms": dict(per_stage_latency_ms),
+                "provider_per_stage": dict(provider_per_stage),
+                "breaker_states_at_end": breaker_states_snapshot(),
+            }
+        )
+        trace = trace.model_copy(
+            update={
+                "degradations": [Degradation.model_validate(e) for e in all_events],
+                "resilience": ResilienceTraceInfo(
+                    fallback_mode=bool(all_events),
+                    brownout_signal=any(
+                        str((e or {}).get("error_kind") or "").strip().lower() == "brownout"
+                        for e in all_events
+                    ),
+                    events=list(all_events),
+                ),
+            }
+        )
+        trace = trace.model_copy(update={"runtime": runtime_context})
+        trace = trace.model_copy(update={"report_surface": build_report_surface(trace)})
         if (
             save_clarification_to_profile
             and clarification_answers

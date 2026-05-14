@@ -217,3 +217,28 @@ def resilience_health_report() -> dict[str, Any]:
             "linear_mcp": chaos_mode("linear_mcp"),
         },
     }
+
+
+def breaker_states_snapshot() -> dict[str, Any]:
+    """Return a copy of current breaker states for trace runtime metadata."""
+    with _LOCK:
+        breakers = {k: dict(v) for k, v in _BREAKERS.items()}
+    now = time.time()
+    out: dict[str, Any] = {}
+    for provider, row in breakers.items():
+        open_until = float(row.get("open_until", 0.0))
+        out[provider] = {
+            "state": "open" if now < open_until else "closed",
+            "failures": int(row.get("failures", 0.0)),
+            "open_until_epoch": open_until,
+        }
+    return out
+
+
+def chaos_profile_snapshot() -> dict[str, str]:
+    """Snapshot active chaos profile for provider/runtime diagnostics."""
+    return {
+        "openai": chaos_mode("openai"),
+        "tavily": chaos_mode("tavily"),
+        "linear_mcp": chaos_mode("linear_mcp"),
+    }

@@ -72,6 +72,17 @@ def _run_probe(mode_openai: str, mode_tavily: str, mode_linear: str) -> dict:
     trace = complete.get("trace")
     if not isinstance(trace, dict) or not trace.get("decision_id"):
         raise RuntimeError("complete event missing decision trace")
+    degradations = trace.get("degradations")
+    if not isinstance(degradations, list):
+        raise RuntimeError("trace missing degradations list")
+    runtime = trace.get("runtime")
+    if not isinstance(runtime, dict):
+        raise RuntimeError("trace missing runtime metadata")
+    provider_per_stage = runtime.get("provider_per_stage")
+    if not isinstance(provider_per_stage, dict) or not provider_per_stage:
+        raise RuntimeError("trace runtime.provider_per_stage is empty")
+    if (mode_openai or mode_tavily or mode_linear) and not degradations:
+        raise RuntimeError("chaos scenario produced empty trace.degradations")
     degraded_events = [e for e in events if e.get("event") == "degraded"]
     if (mode_openai or mode_tavily or mode_linear) and not degraded_events:
         raise RuntimeError("fault scenario produced no degraded event")
@@ -89,6 +100,8 @@ def _run_probe(mode_openai: str, mode_tavily: str, mode_linear: str) -> dict:
         "sse_complete": True,
         "decision_id": trace.get("decision_id"),
         "degraded_events_seen": len(degraded_events),
+        "trace_degradations_seen": len(degradations),
+        "provider_per_stage_keys": sorted(list(provider_per_stage.keys())),
         "never_500": stream_res.status_code != 500,
     }
     return body

@@ -145,13 +145,23 @@ def build_influence_bundle(
     *,
     min_score: float,
     top_k: int,
+    query_text: str = "",
 ) -> GraphInfluenceBundle:
     by_id = {n.node_id: n for n in snapshot.nodes}
+    query_tokens = _tokens(query_text)
     blended: dict[str, float] = {}
     for node_id, r in ranks.items():
         s = seeds.get(node_id, 0.0)
         # Blend graph centrality with direct query match so surfaced nodes stay relevant to this run.
-        blended[node_id] = 0.68 * r + 0.32 * s
+        score = 0.68 * r + 0.32 * s
+        node = by_id.get(node_id)
+        if node and query_tokens and node.layer == "concept" and node_id not in seeds:
+            n_tokens = _tokens(node.label + " " + " ".join(str(v) for v in (node.metadata or {}).values()))
+            if n_tokens and not (query_tokens & n_tokens):
+                # Guardrail for old noisy graph links: downweight concept nodes that are not lexically related
+                # to the current query unless they are direct seed matches.
+                score *= 0.35
+        blended[node_id] = score
     ordered = sorted(blended.items(), key=lambda x: x[1], reverse=True)
     top_nodes: list[InfluenceNode] = []
     surfaced_decision_ids: list[str] = []

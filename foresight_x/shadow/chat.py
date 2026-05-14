@@ -8,6 +8,7 @@ import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
@@ -120,6 +121,27 @@ def _schedule_shadow_memory_persist(
 def _extract_atomic_claims_for_turn(settings: Settings, last_user_text: str) -> list[Any]:
     llm_claims = build_openai_llm(settings, temperature=0.12)
     return run_atomic_claims(last_user_text, llm_claims, max_claims=12)
+
+
+def _collect_atomic_claims_or_empty(
+    atomic_future: Any,
+    *,
+    settings: Settings,
+    last_user_text: str,
+) -> list[Any]:
+    timeout_s = float(max(0.1, min(15.0, settings.shadow_atomic_claims_timeout_sec)))
+    try:
+        return list(atomic_future.result(timeout=timeout_s))
+    except FuturesTimeout:
+        _log.debug(
+            "atomic claim extraction timed out (timeout_s=%.2f, chars=%s)",
+            timeout_s,
+            len(last_user_text or ""),
+        )
+        return []
+    except Exception:
+        _log.debug("atomic claim extraction failed", exc_info=True)
+        return []
 
 
 class ShadowMemoryFactDraft(BaseModel):
@@ -450,6 +472,9 @@ CONTEXT PRIORITY:
 - If the user asks a direct memory-recall question (\"who is my girlfriend?\", \"what do you know about my life?\",
   \"what have I told you about me?\"), answer with concrete details from USER MEMORY / profile / indexed recall.
   Use \"You mentioned…\" / \"You've told me…\" and do not turn it into generic relationship or lifestyle advice.
+- When memory is relevant to the answer, explicitly name at least one remembered detail (a person, place, project,
+  preference, goal, or constraint). Do not merely make the tone sound familiar; the user should be able to tell what
+  evidence you used from the words of the reply itself.
 - Do NOT treat jokes, roleplay, hypotheticals, or thread-only notes as real identity — unless the user explicitly asks
   you to remember them long-term or clearly states a real correction (\"my real name is…\").
 
@@ -462,8 +487,8 @@ VOICE:
 - Direct address (you) for the human. Stay concrete and useful; playful is OK if it doesn't obscure accuracy.
 - If they ask for your opinion, taste, ranking, or "should I X?", answer directly first:
   "My take: yes/no", "I'd choose A", or "I like X more." Then give the reason and caveat.
-- Do not hide behind "both are valid" unless the user truly has not given enough context; even then, state a provisional pick
-  and what would change it.
+- The first sentence must contain the lean or answer. Do not hide behind "both are valid" unless the user truly has
+  not given enough context; even then, state a provisional pick and what would change it.
 - For medical, legal, safety, finance, or irreversible high-stakes choices, stay careful — but still say the direction you
   lean and what evidence/constraint matters most.
 - Short paragraphs. No numbered homework or life plans unless asked.
@@ -579,16 +604,17 @@ def run_shadow_turn(
             thread_id=thread_id,
             retrieval_mode=retrieval_mode,
             minimal_long_term_context=prioritize_local,
+            recent_messages=classifier_msgs,
         )
 
         working_summary_block = (working_summary or "").strip() or "(none yet — start of thread.)"
         temporary_context_block = (temporary_context_prompt or "").strip() or "(none)"
 
-        try:
-            atomic_claims = atomic_future.result()
-        except Exception:
-            _log.debug("atomic claim extraction failed", exc_info=True)
-            atomic_claims = []
+        atomic_claims = _collect_atomic_claims_or_empty(
+            atomic_future,
+            settings=s,
+            last_user_text=last_user_text,
+        )
     finally:
         atomic_executor.shutdown(wait=False, cancel_futures=False)
     atomic_claims_block = _format_atomic_claims_block(atomic_claims)

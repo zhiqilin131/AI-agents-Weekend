@@ -40,6 +40,7 @@ describe('reportSurfaceFromTrace', () => {
         },
       ],
       key_assumptions: ['A1'],
+      how_answered: 'Answered with backup model (Claude) — Tavily cached',
       primary_next_action: { text: 'Do X', duration_estimate: '20 min', deadline: null },
     };
     const s = parseReportSurface(raw);
@@ -47,6 +48,7 @@ describe('reportSurfaceFromTrace', () => {
     expect(s?.groundingStrength).toBe('thin');
     expect(s?.groundingSignals[0]?.label).toBe('User context');
     expect(s?.futurePaths).toHaveLength(3);
+    expect(s?.howAnswered).toContain('backup model');
     expect(s?.primaryNextAction.text).toBe('Do X');
   });
 

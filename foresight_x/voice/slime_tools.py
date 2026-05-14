@@ -357,7 +357,7 @@ def tool_search_memory(
             },
             {
                 "type": "show_memory_result",
-                "payload": {"evidence_items": [], "display_mode": "particles"},
+                "payload": {"evidence_items": [], "display_mode": "chips"},
             },
         )
 
@@ -373,7 +373,7 @@ def tool_search_memory(
             "type": "show_memory_result",
             "payload": {
                 "evidence_items": evidence_items,
-                "display_mode": "particles",
+                "display_mode": "chips",
             },
         },
     )
@@ -712,6 +712,11 @@ def tool_update_slime_profile(
     persona_fragments: dict[str, Any] = (
         dict(raw_patch["persona"]) if isinstance(raw_patch.get("persona"), dict) else {}
     )
+    for tk in ("user_nickname", "userNickname", "nickname"):
+        if tk in raw_patch and raw_patch[tk] is not None:
+            val = raw_patch[tk]
+            if isinstance(val, str) and val.strip():
+                persona_fragments["user_nickname"] = val.strip()
     for tk, pk in (
         ("role_identity", "role_identity"),
         ("roleIdentity", "role_identity"),

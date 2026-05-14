@@ -14,17 +14,15 @@ import RegisterPage from './pages/RegisterPage';
 import AppErrorPage from './pages/AppErrorPage';
 import { AuthProvider } from './auth/AuthContext';
 import { RequireAuthLayout } from './auth/RequireAuthLayout';
-import { primeSpeechSynthesisFromGesture } from './app/hooks/useSpeechSynthesis';
 import { unlockSlimeAudioContext } from './utils/slimeAudioContext';
 import './styles/index.css';
 
-/** One user gesture warms speechSynthesis + AudioContext so later TTS is less likely to be blocked. */
+/** One user gesture warms AudioContext so later TTS playback is less likely to be blocked. */
 if (typeof window !== 'undefined') {
   window.addEventListener(
     'pointerdown',
     () => {
       unlockSlimeAudioContext();
-      primeSpeechSynthesisFromGesture({ skipUtterance: true });
     },
     { once: true, passive: true },
   );
