@@ -31,6 +31,11 @@ class MemoryEvidenceItem(BaseModel):
     fullText: str | None = None
     sourceId: str | None = None
     confidence: float | None = None
+    category: str | None = None
+    importance: float | None = None
+    createdAt: str | None = None
+    updatedAt: str | None = None
+    lastReinforcedAt: str | None = None
 
 
 class SlimeSynthesizedAnswer(BaseModel):
@@ -79,6 +84,11 @@ def evidence_items_from_hits(hits: list[dict[str, Any]]) -> list[MemoryEvidenceI
                 fullText=text[:4000] if text else None,
                 sourceId=sid[:120],
                 confidence=float(score) if isinstance(score, int | float) else None,
+                category=str(h.get("category") or "").strip() or None,
+                importance=float(h.get("importance")) if isinstance(h.get("importance"), int | float) else None,
+                createdAt=str(h.get("created_at") or "").strip() or None,
+                updatedAt=str(h.get("updated_at") or "").strip() or None,
+                lastReinforcedAt=str(h.get("last_reinforced_at") or "").strip() or None,
             )
         )
     return out

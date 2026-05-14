@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { VoiceRecorderSpeechPhase } from '../../hooks/useVoiceRecorder';
-import { Mic, Square } from 'lucide-react';
+import { Mic, RotateCcw, Square } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import type { SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
@@ -139,11 +139,13 @@ function mapVoiceToAdvisor(v: VoiceAgentState): SlimeAdvisorState {
     case 'transcribing':
     case 'thinking':
     case 'executing_tool':
-    case 'searching_memory':
-    case 'synthesizing':
-    case 'preparing_voice':
     case 'awaiting_confirmation':
       return 'thinking';
+    case 'searching_memory':
+    case 'synthesizing':
+      return 'remembering';
+    case 'preparing_voice':
+      return 'preparing';
     case 'speaking':
       return 'speaking';
     case 'error':
@@ -184,6 +186,41 @@ function statusLabel(s: VoiceAgentState): string {
     default:
       return '';
   }
+}
+
+function voiceStatusSteps(s: VoiceAgentState): Array<{ key: string; label: string; active: boolean; done: boolean }> {
+  const order = ['heard', 'memory', 'thinking', 'voice', 'speaking'];
+  const activeKey =
+    s === 'auto_stopping' || s === 'transcribing'
+      ? 'heard'
+      : s === 'searching_memory' || s === 'synthesizing'
+        ? 'memory'
+        : s === 'thinking' || s === 'executing_tool' || s === 'decision_prompt'
+          ? 'thinking'
+          : s === 'preparing_voice'
+            ? 'voice'
+            : s === 'speaking'
+              ? 'speaking'
+              : '';
+  const activeIdx = activeKey ? order.indexOf(activeKey) : -1;
+  return [
+    { key: 'heard', label: 'heard' },
+    { key: 'memory', label: 'memory' },
+    { key: 'thinking', label: 'thinking' },
+    { key: 'voice', label: 'voice' },
+    { key: 'speaking', label: 'speaking' },
+  ].map((step, idx) => ({
+    ...step,
+    active: step.key === activeKey,
+    done: activeIdx > idx,
+  }));
+}
+
+function voiceStatusProgress(s: VoiceAgentState): number {
+  const steps = voiceStatusSteps(s);
+  const activeIdx = steps.findIndex((step) => step.active);
+  if (activeIdx < 0) return 0;
+  return steps.length <= 1 ? 100 : (activeIdx / (steps.length - 1)) * 100;
 }
 
 type VoiceResponse = {
@@ -295,7 +332,19 @@ function normalizeCalendarText(s: string): string {
     .trim();
 }
 
+function isSlimeProfileVoiceIntent(text: string): boolean {
+  const raw = text || '';
+  const t = normalizeCalendarText(raw);
+  return (
+    /\b(?:change|rename|set|make|update)\s+(?:your|the)?\s*(?:slime\s+)?name\s+(?:to|into|as)\b/.test(t) ||
+    /\b(?:your\s+name\s+is|i\s+will\s+call\s+you|i ll\s+call\s+you|call\s+you|rename\s+you|rename\s+yourself)\b/.test(t) ||
+    /\b(?:call|address|refer\s+to)\s+me\s+(?:as\s+)?\b/.test(t) ||
+    /(?:你就叫|你叫|你的名字|你名字|把你的名字|把你名字|给你取名|给你起名|叫我|称呼我|把我叫)/.test(raw)
+  );
+}
+
 function calendarMutationKind(text: string): PendingCalendarMutation['kind'] | null {
+  if (isSlimeProfileVoiceIntent(text)) return null;
   const t = normalizeCalendarText(text);
   const wantsDelete = /\b(delete|remove|cancel|drop|clear|get rid of)\b/.test(t) || /删除|取消|删掉|移除|去掉/.test(text);
   if (wantsDelete) return 'delete';
@@ -1100,13 +1149,12 @@ export function SlimeVoiceAgent({
       if (convTurn && data.decision_suggestion?.should_show) {
         onDecisionSuggestion?.(data.decision_suggestion);
         setVoiceState('decision_prompt');
-        const seq =
-          data.spoken_sequence && data.spoken_sequence.length > 0
-            ? data.spoken_sequence
-            : [assistant, String(data.decision_suggestion.spoken_prompt || '').trim()].filter(Boolean);
-        runSpokenSequence(seq, {
+        runTtsWithPrefetch(toSpeak || assistant, {
           force: true,
-          onAllComplete: () => setVoiceState('idle'),
+          evidenceItems,
+          onComplete: () => setVoiceState('idle'),
+          onMayHaveBlocked: () =>
+            setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
         });
         return;
       }
@@ -1333,6 +1381,7 @@ export function SlimeVoiceAgent({
     setPendingConfirm(null);
     setPendingCalendar(null);
     setPendingCalendarMutation(null);
+    onDecisionSuggestion?.(null);
     onMemoryEvidenceItemsChange?.([]);
     setVoiceState('listening');
     recordingStartedAtRef.current = performance.now();
@@ -1347,6 +1396,7 @@ export function SlimeVoiceAgent({
     cancelBuddyAudio,
     setError,
     clearSpeechOutput,
+    onDecisionSuggestion,
     onMemoryEvidenceItemsChange,
   ]);
 
@@ -1372,6 +1422,9 @@ export function SlimeVoiceAgent({
 
   /** Bottom-anchored lane; split z-index so SlimeCompanionStage can paint between panels and mic (see Buddy page). */
   const voiceLane = 'absolute left-1/2 w-[min(100%,380px)] -translate-x-1/2';
+  const voiceDockLane = 'absolute left-1/2 w-[min(92vw,500px)] -translate-x-1/2';
+  const showVoiceDockMeta = Boolean(transcriptPreview || (lastReplyText && !recording));
+  const showVoiceDockStatus = !recording && voiceState !== 'idle' && Boolean(statusLabel(voiceState));
 
   return (
     <>
@@ -1388,28 +1441,6 @@ export function SlimeVoiceAgent({
         {latencyHint ? <p className="max-w-xs text-center text-[11px] text-violet-900/90">{latencyHint}</p> : null}
 
         {error ? <p className="max-w-xs text-center text-xs text-red-700">{error}</p> : null}
-
-        {transcriptPreview ? (
-          <p className="max-w-sm text-center text-[11px] text-gray-600">
-            <span className="font-semibold text-gray-700">You said:</span> {transcriptPreview}
-          </p>
-        ) : null}
-
-        {lastReplyText && !recording ? (
-          <BuddyTooltip content="Play the assistant's last reply with the saved TTS voice.">
-            <button
-              type="button"
-              className="text-[11px] font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
-              onClick={() => {
-                setTtsHint(null);
-                unlockSlimeAudioContext();
-                runTts(lastReplyText, { force: true });
-              }}
-            >
-              {buddyAudioPlaying ? 'Replay reply' : 'Play reply'}
-            </button>
-          </BuddyTooltip>
-        ) : null}
 
         {pendingConfirm ? (
           <div className="flex max-w-sm flex-col items-center gap-2 rounded-2xl border border-amber-200/85 bg-amber-50 px-3 py-2 shadow-md backdrop-blur-md">
@@ -1541,47 +1572,132 @@ export function SlimeVoiceAgent({
 
       <div
         data-slime-avoid
-        className={cn(voiceLane, 'bottom-2 z-[52] flex flex-col items-center gap-2 pointer-events-auto sm:bottom-3')}
+        className={cn(voiceDockLane, 'bottom-2 z-[52] pointer-events-auto sm:bottom-3')}
       >
-        <div className="relative">
-          {recording ? (
-            <motion.span
-              className="pointer-events-none absolute inset-0 rounded-full bg-violet-400/25"
-              animate={{ scale: [1, 1.35, 1], opacity: [0.5, 0.15, 0.5] }}
-              transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
-            />
-          ) : null}
-          <BuddyTooltip
-            side="top"
-            content={
-              supported
-                ? `Tap to start or stop recording and send to ${petName}. Works like push-to-talk.`
-                : 'Voice input is not available in this browser.'
-            }
-          >
-            <span className="inline-flex rounded-full">
-              <button
-                type="button"
-                disabled={!supported}
-                onClick={() => void pushToTalk()}
-                aria-label={recording ? 'Stop recording' : `Talk to ${petName}`}
-                className={cn(
-                  'relative flex h-14 w-14 items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-lg transition hover:scale-[1.03] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-40',
-                  recording && 'ring-4 ring-cyan-300/80',
-                )}
-              >
-                {recording ? <Square className="h-6 w-6 fill-current" aria-hidden /> : <Mic className="h-6 w-6" aria-hidden />}
-              </button>
-            </span>
-          </BuddyTooltip>
-        </div>
+        <div
+          className={cn(
+            'relative mx-auto flex w-full flex-col items-center gap-2 overflow-visible rounded-[26px] border border-white/55 bg-white/38 px-3 py-3 shadow-[0_18px_52px_rgba(124,58,237,0.12)] backdrop-blur-xl transition',
+            !showVoiceDockMeta && !showVoiceDockStatus && 'w-auto rounded-full border-transparent bg-transparent px-2 py-2 shadow-none backdrop-blur-0',
+          )}
+        >
+          {showVoiceDockMeta ? (
+            <div className="relative z-10 flex w-full items-center justify-center gap-2">
+              {transcriptPreview ? (
+                <div className="min-w-0 max-w-[min(66vw,360px)] rounded-full border border-white/65 bg-white/62 px-3 py-1.5 text-center text-[11px] leading-snug text-slate-600 shadow-sm backdrop-blur-md">
+                  <span className="font-semibold text-violet-900">You said</span>
+                  <span className="mx-1 text-violet-300">•</span>
+                  <span className="line-clamp-1 align-bottom">{transcriptPreview}</span>
+                </div>
+              ) : null}
 
-        {recording && speechPhaseLabel(speechPhase, recording) ? (
-          <p className="text-center text-xs font-medium text-cyan-900/90">{speechPhaseLabel(speechPhase, recording)}</p>
-        ) : null}
-        {!recording && voiceState !== 'idle' && statusLabel(voiceState) ? (
-          <p className="text-center text-xs font-medium text-violet-950/90">{statusLabel(voiceState)}</p>
-        ) : null}
+              {lastReplyText && !recording ? (
+                <BuddyTooltip content="Play the assistant's last reply with the saved TTS voice.">
+                  <button
+                    type="button"
+                    className={cn(
+                      'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-violet-200/80 bg-white/80 px-2.5 text-[11px] font-semibold text-violet-800 shadow-sm transition hover:border-violet-300 hover:bg-violet-50',
+                      buddyAudioPlaying && 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800',
+                    )}
+                    onClick={() => {
+                      setTtsHint(null);
+                      unlockSlimeAudioContext();
+                      runTts(lastReplyText, { force: true });
+                    }}
+                  >
+                    <RotateCcw className={cn('h-3.5 w-3.5', buddyAudioPlaying && 'animate-spin')} aria-hidden />
+                    <span className="hidden sm:inline">{buddyAudioPlaying ? 'Replaying' : 'Replay'}</span>
+                  </button>
+                </BuddyTooltip>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="relative z-10">
+            {recording ? (
+              <motion.span
+                className="pointer-events-none absolute inset-0 rounded-full bg-violet-400/25"
+                animate={{ scale: [1, 1.35, 1], opacity: [0.5, 0.15, 0.5] }}
+                transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+              />
+            ) : null}
+            <BuddyTooltip
+              side="top"
+              content={
+                supported
+                  ? `Tap to start or stop recording and send to ${petName}. Works like push-to-talk.`
+                  : 'Voice input is not available in this browser.'
+              }
+            >
+              <span className="inline-flex rounded-full">
+                <button
+                  type="button"
+                  disabled={!supported}
+                  onClick={() => void pushToTalk()}
+                  aria-label={recording ? 'Stop recording' : `Talk to ${petName}`}
+                  className={cn(
+                    'relative flex h-14 w-14 items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-lg transition hover:scale-[1.03] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-40',
+                    recording && 'ring-4 ring-cyan-300/80',
+                  )}
+                >
+                  {recording ? <Square className="h-6 w-6 fill-current" aria-hidden /> : <Mic className="h-6 w-6" aria-hidden />}
+                </button>
+              </span>
+            </BuddyTooltip>
+          </div>
+
+          {recording && speechPhaseLabel(speechPhase, recording) ? (
+            <p className="relative z-10 text-center text-xs font-medium text-cyan-900/90">{speechPhaseLabel(speechPhase, recording)}</p>
+          ) : null}
+          {showVoiceDockStatus ? (
+            <div
+              className="relative z-10 w-full overflow-hidden rounded-full border border-white/55 bg-white/32 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]"
+              aria-label={statusLabel(voiceState)}
+            >
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-white/45 via-violet-100/30 to-cyan-100/25" />
+              <motion.div
+                className="pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/75 to-transparent blur-sm"
+                animate={{ x: ['0%', '420%'] }}
+                transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
+              />
+              <div className="relative mx-4 mb-1.5 mt-1 h-1 rounded-full bg-slate-200/70">
+                <motion.div
+                  className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-300 via-cyan-300 to-violet-500 shadow-[0_0_16px_rgba(139,92,246,0.45)]"
+                  initial={false}
+                  animate={{ width: `${voiceStatusProgress(voiceState)}%` }}
+                  transition={{ type: 'spring', stiffness: 150, damping: 24 }}
+                />
+              </div>
+              <div className="relative grid grid-cols-5 gap-1">
+                {voiceStatusSteps(voiceState).map((step) => (
+                  <div key={step.key} className="flex min-w-0 flex-col items-center gap-1">
+                    <motion.span
+                      className={cn(
+                        'relative h-2.5 w-2.5 rounded-full border transition',
+                        step.active && 'border-white bg-violet-600 shadow-[0_0_18px_rgba(124,58,237,0.75)]',
+                        step.done && 'border-white bg-emerald-300 shadow-[0_0_14px_rgba(45,212,191,0.55)]',
+                        !step.active && !step.done && 'border-slate-200 bg-white/80',
+                      )}
+                      animate={step.active ? { scale: [1, 1.3, 1], opacity: [0.9, 1, 0.9] } : { scale: 1, opacity: 1 }}
+                      transition={step.active ? { duration: 1.1, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
+                    >
+                      {step.active ? <span className="absolute inset-[-5px] rounded-full border border-violet-300/50" /> : null}
+                    </motion.span>
+                    <span
+                      className={cn(
+                        'max-w-full truncate text-[9px] font-semibold uppercase tracking-[0.12em] transition',
+                        step.active && 'text-violet-900',
+                        step.done && 'text-emerald-700',
+                        !step.active && !step.done && 'text-slate-400',
+                      )}
+                    >
+                      {step.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {!hideModelSelector ? (

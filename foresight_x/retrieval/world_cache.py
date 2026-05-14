@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import chromadb
@@ -134,6 +137,53 @@ def _meta_truthy(val: Any) -> bool:
     return s in ("true", "1", "yes")
 
 
+def _query_signature(text: str) -> str:
+    toks = re.findall(r"[A-Za-z0-9]{3,}|[\u4e00-\u9fff]{2,}", (text or "").lower())
+    if not toks:
+        return ""
+    # Stable, compact topic signature (order-insensitive).
+    uniq = sorted(set(toks))[:32]
+    blob = " ".join(uniq)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def _safe_parse_iso(raw: str) -> datetime | None:
+    t = (raw or "").strip()
+    if not t:
+        return None
+    if t.endswith("Z"):
+        t = t[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(t)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _cached_tavily_fact_eligible(
+    md: dict[str, Any],
+    *,
+    query_signature: str,
+    max_age_days: int,
+    query_scoped: bool,
+) -> bool:
+    if not _meta_truthy(md.get("from_tavily")):
+        return True
+    if query_scoped and query_signature:
+        cached_sig = str(md.get("tavily_query_sig") or "").strip()
+        if cached_sig and cached_sig != query_signature:
+            return False
+    if max_age_days >= 0:
+        at = _safe_parse_iso(str(md.get("tavily_ingested_at") or ""))
+        if at is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+            if at < cutoff:
+                return False
+    return True
+
+
 def _scalar_metadata(meta: dict[str, Any]) -> dict[str, str | int | float | bool]:
     out: dict[str, str | int | float | bool] = {}
     for k, v in meta.items():
@@ -208,13 +258,16 @@ class WorldKnowledge:
             meta["packaged_seed"] = True
         self._index.insert(Document(text=text, metadata=_scalar_metadata(meta)))
 
-    def _ingest_tavily_facts(self, facts: list[Fact]) -> None:
+    def _ingest_tavily_facts(self, facts: list[Fact], *, query_signature: str = "") -> None:
         """Store web results as ``web_reference`` so retrieval surfaces them under baseline, not \"recent news\"."""
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for f in facts:
             meta = _scalar_metadata(
                 {
                     "kind": "web_reference",
                     "from_tavily": True,
+                    "tavily_query_sig": query_signature,
+                    "tavily_ingested_at": now_iso,
                     "source_url": f.source_url or "",
                     "confidence": f.confidence,
                     "doc_id": str(uuid.uuid4()),
@@ -245,7 +298,12 @@ class WorldKnowledge:
         # Same embedding query string as ``UserMemory`` (Chroma alignment).
         query = build_unified_vector_query(user_state)
         # Dedicated string for live web search (user question first — avoids irrelevant cached baselines).
-        tavily_query = build_tavily_query_for_decision(user_state, extra)
+        tavily_query = build_tavily_query_for_decision(
+            user_state,
+            extra,
+            include_profile=bool(self.settings.tavily_include_profile_in_query),
+        )
+        tavily_query_sig = _query_signature(tavily_query)
         fetch_k = min(36, max(top_k * 4, 16))
         retriever = self._index.as_retriever(similarity_top_k=fetch_k)
         raw_nodes = retriever.retrieve(query)
@@ -288,7 +346,7 @@ class WorldKnowledge:
         tavily_urls: set[str] = set()
         if need_tavily:
             web_facts = self._tavily.search_as_facts(tavily_query)
-            self._ingest_tavily_facts(web_facts)
+            self._ingest_tavily_facts(web_facts, query_signature=tavily_query_sig)
             for wf in web_facts:
                 u = (wf.source_url or "").strip()
                 if u:
@@ -312,6 +370,13 @@ class WorldKnowledge:
                     continue
                 chroma_base_rates.append(fact)
             elif kind == "web_reference" or _meta_truthy(md.get("from_tavily")):
+                if not _cached_tavily_fact_eligible(
+                    md,
+                    query_signature=tavily_query_sig,
+                    max_age_days=int(self.settings.tavily_cached_web_max_age_days),
+                    query_scoped=bool(self.settings.tavily_query_scoped_cache),
+                ):
+                    continue
                 # Cached web snippets — keep as secondary baselines after this run's fresh Tavily hits.
                 chroma_base_rates.append(_tavily_fact_as_base_rate(fact))
             elif kind in ("recent_event", "event"):
@@ -329,7 +394,7 @@ class WorldKnowledge:
         if self._tavily is not None and not web_facts and not facts and not chroma_base_rates and not recent_events:
             # Last-resort freshness guard: local cache returned nothing usable after filtering.
             web_facts = self._tavily.search_as_facts(tavily_query)
-            self._ingest_tavily_facts(web_facts)
+            self._ingest_tavily_facts(web_facts, query_signature=tavily_query_sig)
 
         kept_web = [wf for wf in web_facts if keep_baseline_fact(user_state, wf, tavily_query=tavily_query)]
         fresh_baselines = [_tavily_fact_as_base_rate(wf) for wf in kept_web]

@@ -6,4 +6,9 @@ export type MemoryEvidenceItem = {
   fullText?: string;
   sourceId?: string;
   confidence?: number | null;
+  category?: string | null;
+  importance?: number | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  lastReinforcedAt?: string | null;
 };

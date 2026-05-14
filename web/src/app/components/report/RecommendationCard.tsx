@@ -99,9 +99,10 @@ export function RecommendationCard({
   const startCloudReadAloud = useCallback(() => {
     const text = speechText.trim();
     if (!text) return;
-    const gen = ++cloudTtsGenRef.current;
     setReadAloudHint('');
-    cancel();
+    // Cancel any in-flight TTS generation from previous presses.
+    cloudTtsGenRef.current += 1;
+    const gen = cloudTtsGenRef.current;
     cleanupCloudAudio();
     setCloudLoading(true);
 

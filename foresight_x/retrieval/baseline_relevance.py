@@ -50,17 +50,33 @@ _STOP_EN = frozenset(
         "been",
         "were",
         "being",
+        "into",
+        "over",
+        "under",
+        "many",
+        "more",
+        "most",
+        "much",
+        "like",
+        "than",
+        "then",
+        "there",
+        "here",
+        "each",
+        "every",
+        "across",
     }
 )
 
 
 def _needle_for_overlap(user_state: UserState, tavily_query: str) -> str:
-    parts = [
-        user_state.raw_input or "",
-        " ".join(user_state.goals or []),
-        tavily_query or "",
-    ]
-    return " ".join(parts).strip()
+    raw = (user_state.raw_input or "").strip()
+    if raw:
+        return raw
+    goals = " ".join(user_state.goals or []).strip()
+    if goals:
+        return goals
+    return (tavily_query or "").strip()
 
 
 def _stale_academic_blob_not_in_question(fact_text: str, needle: str) -> bool:
@@ -88,32 +104,46 @@ def _stale_academic_blob_not_in_question(fact_text: str, needle: str) -> bool:
     return True
 
 
+def _core_query_tokens(text: str) -> tuple[set[str], set[str]]:
+    words = {w for w in re.findall(r"[a-zA-Z]{4,}", text.lower()) if w not in _STOP_EN}
+    cjk = {seg for seg in re.findall(r"[\u4e00-\u9fff]{2,}", text)}
+    return words, cjk
+
+
+def _anchor_tokens(text: str) -> set[str]:
+    # Proper nouns, acronyms, and IDs/numbers are strong anchors.
+    caps = {x.lower() for x in re.findall(r"\b[A-Z][A-Za-z0-9+._-]{2,}\b", text)}
+    acr = {x.lower() for x in re.findall(r"\b[A-Z]{2,}\b", text)}
+    nums = {x.lower() for x in re.findall(r"\b[A-Za-z]*\d+[A-Za-z0-9-]*\b", text)}
+    return caps | acr | nums
+
+
 def _lexical_overlap(needle: str, haystack: str) -> bool:
-    """Require at least one strong signal that the snippet is about the same topic as the question."""
+    """Require meaningful topical overlap, not just one incidental token."""
     n = (needle or "").strip()
     h = (haystack or "").lower()
     if len(n) < 4:
         return True
 
-    # English tokens (length >= 4) from the question must appear in the snippet text.
-    words = {w for w in re.findall(r"[a-zA-Z]{4,}", n.lower()) if w not in _STOP_EN}
-    cjk_segs = re.findall(r"[\u4e00-\u9fff]{2,}", n)
+    words, cjk_segs = _core_query_tokens(n)
     if not words and not cjk_segs:
-        # Very short / numeric prompts — do not strip everything.
         return True
 
-    if words and any(w in h for w in words):
-        return True
+    if cjk_segs and not any(seg in h for seg in cjk_segs):
+        return False
 
-    for seg in cjk_segs:
-        if seg in h:
-            return True
+    # For EN, require either anchor hit or sufficient coverage.
+    if words:
+        matched = {w for w in words if w in h}
+        anchors = _anchor_tokens(n)
+        if anchors and not any(a in h for a in anchors):
+            return False
+        coverage = len(matched) / max(len(words), 1)
+        if len(words) <= 2:
+            return coverage >= 0.5
+        return coverage >= 0.34
 
-    short_kw = {w for w in re.findall(r"[a-zA-Z]{3}", n.lower()) if w not in _STOP_EN}
-    if short_kw and any(w in h for w in short_kw):
-        return True
-
-    return False
+    return True
 
 
 def keep_baseline_fact(

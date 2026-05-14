@@ -127,13 +127,18 @@ def _regex_fallback(transcript: str) -> CalendarDraft:
     )
 
 
-def parse_calendar_command(transcript: str, *, settings: Settings | None = None) -> CalendarDraft:
+def parse_calendar_command(
+    transcript: str,
+    *,
+    settings: Settings | None = None,
+    prefer_regex: bool = False,
+) -> CalendarDraft:
     t = (transcript or "").strip()
     if not t:
         return CalendarDraft(confidence=0.1)
 
     s = settings
-    if not s or not (s.openai_api_key or "").strip():
+    if prefer_regex or not s or not (s.openai_api_key or "").strip():
         return _regex_fallback(t)
 
     prompt = _PARSE_PROMPT.format(transcript=t[:3000])
@@ -165,7 +170,11 @@ def merge_calendar_args_with_transcript(
     settings: Settings | None = None,
 ) -> CalendarDraft:
     """Router args win when present; parser fills gaps from transcript."""
-    parsed = parse_calendar_command(transcript, settings=settings)
+    parsed = parse_calendar_command(
+        transcript,
+        settings=settings,
+        prefer_regex=bool(args.get("_fast_parse") or args.get("fast_parse")),
+    )
     title = str(args.get("title") or "").strip()
     if not title:
         title = parsed.title

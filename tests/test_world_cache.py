@@ -11,7 +11,7 @@ from llama_index.core.embeddings import MockEmbedding
 from foresight_x.config import Settings
 from foresight_x.retrieval.seed import ingest_world_markdown
 from foresight_x.retrieval.tavily_client import build_tavily_query_for_decision
-from foresight_x.retrieval.world_cache import WorldKnowledge
+from foresight_x.retrieval.world_cache import WorldKnowledge, _cached_tavily_fact_eligible
 from foresight_x.schemas import Fact, Reversibility, TimePressure, UserState
 
 
@@ -115,3 +115,29 @@ def test_tavily_supplements_when_sparse(settings: Settings, embed_model: MockEmb
     assert "recruiting" in br
     # Tavily hits are not pushed to recent_events (only base_rates).
     assert not any("live web snippet about recruiting" in (f.text or "").lower() for f in ev.recent_events)
+
+
+def test_cached_tavily_fact_eligible_requires_query_signature_match() -> None:
+    md = {
+        "from_tavily": True,
+        "tavily_query_sig": "abc123",
+        "tavily_ingested_at": "2026-05-10T12:00:00Z",
+    }
+    assert (
+        _cached_tavily_fact_eligible(
+            md,
+            query_signature="zzz999",
+            max_age_days=7,
+            query_scoped=True,
+        )
+        is False
+    )
+    assert (
+        _cached_tavily_fact_eligible(
+            md,
+            query_signature="abc123",
+            max_age_days=7,
+            query_scoped=True,
+        )
+        is True
+    )

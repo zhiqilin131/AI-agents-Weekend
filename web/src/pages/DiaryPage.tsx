@@ -360,16 +360,9 @@ export default function DiaryPage() {
 
         <header>
           <div>
-            <p className="inline-flex items-center gap-2 rounded-full border border-violet-200/80 bg-white/78 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-violet-700 shadow-sm backdrop-blur-sm">
-              <Compass className="h-3.5 w-3.5" aria-hidden />
-              Chronicle Atlas
-            </p>
             <h1 className="mt-4 max-w-3xl text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl">
               Diary Journey
             </h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
-              A daily synthesis layer for timestamped chats, voice turns, decisions, calendar items, and memories.
-            </p>
           </div>
         </header>
 

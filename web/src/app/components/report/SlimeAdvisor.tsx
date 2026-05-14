@@ -5,7 +5,15 @@ import type { SlimeProfile } from '../../model';
 import { DEFAULT_SLIME_PROFILE } from '../../../hooks/useSlimeProfile';
 import { slimeThemePalette } from '../../../features/slime/slimeThemePalette';
 
-export type SlimeAdvisorState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'cautious' | 'celebrating';
+export type SlimeAdvisorState =
+  | 'idle'
+  | 'listening'
+  | 'thinking'
+  | 'remembering'
+  | 'preparing'
+  | 'speaking'
+  | 'cautious'
+  | 'celebrating';
 
 export type SlimeAdvisorProps = {
   state?: SlimeAdvisorState;
@@ -39,7 +47,9 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
   const gSpecular = `slime-spec-${uid}`;
   const isSpeaking = state === 'speaking';
   const isListening = state === 'listening';
-  const isThinking = state === 'thinking';
+  const isRemembering = state === 'remembering';
+  const isPreparing = state === 'preparing';
+  const isThinking = state === 'thinking' || isRemembering || isPreparing;
   const isCautious = state === 'cautious';
   const isCelebrating = state === 'celebrating';
   const hoverBright = state === 'idle' || state === 'celebrating' || isListening;
@@ -104,6 +114,39 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
               transition={{ duration: 1.45, repeat: Infinity, ease: [0.2, 0.8, 0.2, 1], delay: i * 0.38 }}
             />
           ))}
+        </div>
+      ) : null}
+
+      {companionMode && isRemembering ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden>
+          {[0, 1, 2].map((i) => (
+            <motion.span
+              key={`mem-${i}`}
+              className="absolute h-2 w-2 rounded-full bg-cyan-300/80 shadow-[0_0_14px_rgba(34,211,238,0.45)]"
+              style={{ left: '50%', top: '50%', marginLeft: -4, marginTop: -4 }}
+              animate={{
+                x: [0, Math.cos((i / 3) * Math.PI * 2) * dim * 0.62, 0],
+                y: [0, Math.sin((i / 3) * Math.PI * 2) * dim * 0.44, 0],
+                opacity: [0.15, 0.9, 0.15],
+              }}
+              transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut', delay: i * 0.18 }}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {companionMode && isPreparing ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden>
+          <motion.div
+            className="absolute rounded-full border border-fuchsia-300/60"
+            style={{
+              width: dim * 0.92,
+              height: dim * 0.92,
+              boxShadow: '0 0 24px rgba(217,70,239,0.24)',
+            }}
+            animate={{ scale: [0.95, 1.18, 0.95], opacity: [0.28, 0.72, 0.28] }}
+            transition={{ duration: 1.05, repeat: Infinity, ease: 'easeInOut' }}
+          />
         </div>
       ) : null}
 

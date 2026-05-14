@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from foresight_x.retrieval.tavily_client import TAVILY_MAX_QUERY_CHARS, TavilyGateway
+from foresight_x.retrieval.tavily_client import (
+    TAVILY_MAX_QUERY_CHARS,
+    TavilyGateway,
+    build_tavily_query_for_decision,
+)
+from foresight_x.schemas import Reversibility, TimePressure, UserState
 
 
 @pytest.fixture
@@ -56,3 +61,44 @@ def test_long_query_truncated_for_tavily_api(tavily_response: dict) -> None:
     gw.search_as_facts(long_q)
     passed = mock_client.search.call_args[0][0]
     assert len(passed) <= TAVILY_MAX_QUERY_CHARS
+
+
+def test_build_tavily_query_excludes_profile_by_default() -> None:
+    us = UserState(
+        raw_input="Should I choose CMU over USC for transfer this fall?",
+        goals=["make a transfer decision"],
+        time_pressure=TimePressure.MEDIUM,
+        stress_level=6,
+        workload=5,
+        current_behavior="researching",
+        decision_type="academic",
+        reversibility=Reversibility.PARTIAL,
+    )
+    q = build_tavily_query_for_decision(
+        us,
+        "profile: I love salmon and weekend football and random old preferences",
+    )
+    ql = q.lower()
+    assert "salmon" not in ql
+    assert "weekend football" not in ql
+    assert "cmu" in ql or "usc" in ql
+
+
+def test_build_tavily_query_can_include_compact_profile_hint_when_enabled() -> None:
+    us = UserState(
+        raw_input="visa question?",
+        goals=["avoid status risk"],
+        time_pressure=TimePressure.HIGH,
+        stress_level=7,
+        workload=6,
+        current_behavior="urgent",
+        decision_type="career",
+        reversibility=Reversibility.PARTIAL,
+    )
+    q = build_tavily_query_for_decision(
+        us,
+        "F-1 CPT USCIS random lifestyle notes",
+        include_profile=True,
+    )
+    ql = q.lower()
+    assert "f-1" in ql or "uscis" in ql

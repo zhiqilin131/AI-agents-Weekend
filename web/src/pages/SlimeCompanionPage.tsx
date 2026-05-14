@@ -50,6 +50,7 @@ export default function SlimeCompanionPage() {
   const [speechOutput, setSpeechOutput] = useState<SlimeSpeechOutput | null>(null);
   const [evidenceDrawerItems, setEvidenceDrawerItems] = useState<MemoryEvidenceItem[]>([]);
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false);
+  const [flaggedEvidenceIds, setFlaggedEvidenceIds] = useState<Set<string>>(() => new Set());
   const [buddyThreadId, setBuddyThreadId] = useState<string | null>(null);
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
@@ -107,6 +108,38 @@ export default function SlimeCompanionPage() {
       flashBuddyCornerToast('Removed that memory.', 'neutral');
     } catch {
       flashBuddyCornerToast('Could not delete that memory right now.', 'error');
+    }
+  }, [flashBuddyCornerToast]);
+
+  const flagEvidenceWrong = useCallback((item: MemoryEvidenceItem) => {
+    setFlaggedEvidenceIds((prev) => new Set(prev).add(item.id));
+    flashBuddyCornerToast('Marked that memory as questionable for this answer.', 'neutral');
+  }, [flashBuddyCornerToast]);
+
+  const editEvidenceMemory = useCallback((item: MemoryEvidenceItem) => {
+    const fid = (item.sourceId || '').trim();
+    if (!fid || item.type !== 'profile') {
+      flashBuddyCornerToast('This evidence came from chat context, so edit it from the original chat.', 'neutral');
+      return;
+    }
+    setEvidenceDrawerOpen(false);
+    navigate(`/profile?memory=${encodeURIComponent(fid)}`);
+  }, [flashBuddyCornerToast, navigate]);
+
+  const deleteEvidenceMemory = useCallback(async (item: MemoryEvidenceItem) => {
+    const fid = (item.sourceId || '').trim();
+    if (!fid || item.type !== 'profile') {
+      setEvidenceDrawerItems((prev) => prev.filter((x) => x.id !== item.id));
+      flashBuddyCornerToast('Hidden for this answer. I can only delete saved profile memories directly.', 'neutral');
+      return;
+    }
+    try {
+      const res = await apiFetch(`/api/profile/memory-fact/${encodeURIComponent(fid)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await res.text());
+      setEvidenceDrawerItems((prev) => prev.filter((x) => x.id !== item.id));
+      flashBuddyCornerToast('Removed that saved memory.', 'neutral');
+    } catch {
+      flashBuddyCornerToast('Could not remove that memory right now.', 'error');
     }
   }, [flashBuddyCornerToast]);
 
@@ -299,6 +332,7 @@ export default function SlimeCompanionPage() {
             onSpeechOutputChange={setSpeechOutput}
             onMemoryEvidenceItemsChange={(items) => {
               setEvidenceDrawerItems(items);
+              setFlaggedEvidenceIds(new Set());
               if (!items.length) setEvidenceDrawerOpen(false);
             }}
             onProfileMemorySaved={(payload) =>
@@ -320,42 +354,11 @@ export default function SlimeCompanionPage() {
             profile={slimeDraft}
             advisorState={advisorState}
             speechOutput={speechOutput}
+            decisionSuggestion={pendingDecision}
             onEvidenceOpen={() => setEvidenceDrawerOpen(true)}
+            onDecisionStart={(prompt) => void startDecisionReportFlow(prompt)}
           />
         </div>
-
-        {pendingDecision?.should_show ? (
-          <div
-            data-slime-avoid
-            className="relative z-50 mx-auto mt-8 flex w-[min(100%,400px)] flex-col gap-2 rounded-2xl border border-violet-200/90 bg-white/90 px-4 py-3 text-left shadow-lg backdrop-blur-md sm:mt-10"
-          >
-            <p className="text-sm font-semibold text-violet-950">{pendingDecision.display_text || 'Activate Decision Mode?'}</p>
-            <p className="text-xs leading-relaxed text-gray-700">
-              {pendingDecision.description ||
-                'I can turn this into a structured decision report with options, trade-offs, risks, and an action plan.'}
-            </p>
-            <div className="mt-1 flex flex-wrap gap-2">
-              <BuddyTooltip content="Run a structured decision report from this topic — options, trade-offs, risks, and an action plan.">
-                <button
-                  type="button"
-                  className="rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-2 text-xs font-semibold text-white shadow-sm"
-                  onClick={() => void startDecisionReportFlow(pendingDecision.decision_prompt || '')}
-                >
-                  Activate Decision Mode
-                </button>
-              </BuddyTooltip>
-              <BuddyTooltip content="Dismiss this suggestion and stay in casual voice chat.">
-                <button
-                  type="button"
-                  className="rounded-full border border-gray-300 bg-white px-4 py-2 text-xs font-medium text-gray-800"
-                  onClick={() => setPendingDecision(null)}
-                >
-                  Keep Chatting
-                </button>
-              </BuddyTooltip>
-            </div>
-          </div>
-        ) : null}
       </div>
 
       <DecisionReportStreamingPanel
@@ -400,6 +403,10 @@ export default function SlimeCompanionPage() {
         open={evidenceDrawerOpen}
         onClose={() => setEvidenceDrawerOpen(false)}
         items={evidenceDrawerItems}
+        flaggedIds={flaggedEvidenceIds}
+        onFlagWrong={flagEvidenceWrong}
+        onEdit={editEvidenceMemory}
+        onDelete={deleteEvidenceMemory}
       />
 
       {typeof document !== 'undefined'

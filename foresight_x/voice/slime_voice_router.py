@@ -74,7 +74,9 @@ _ZH_COLOR_THEME_ALIASES: tuple[tuple[str, str], ...] = (
 
 _RENAME_VOICE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\b(?:from\s+now\s+on\s+)?your\s+name\s+is\s+(.+)$"),
-    re.compile(r"(?i)\bchange\s+your\s+name\s+to\s+(.+)$"),
+    re.compile(r"(?i)\bchange\s+your\s+(?:slime\s+)?name\s+(?:to|into|as)\s+(.+)$"),
+    re.compile(r"(?i)\bchange\s+(?:the\s+)?slime\s+name\s+(?:to|into|as)\s+(.+)$"),
+    re.compile(r"(?i)\brename\s+(?:the\s+)?slime\s+(?:to|as)\s+(.+)$"),
     re.compile(r"(?i)^(?:i'?ll|i\s+will)\s+call\s+you\s+(.+)$"),
     re.compile(r"(?i)^(?:can|could)\s+i\s+call\s+you\s+(.+)$"),
     re.compile(r"(?i)^let'?s\s+call\s+you\s+(.+)$"),
