@@ -301,6 +301,53 @@ def test_voice_pipeline_route_timeout_falls_back_to_noop(monkeypatch, tmp_path: 
     assert body.get("route_timeout_fallback") is True
 
 
+def test_voice_pipeline_route_timeout_calendar_add_still_returns_confirm_card(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    settings = Settings(
+        foresight_user_id="u_voice_route_timeout_calendar",
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="sk-test",
+        slime_voice_route_timeout_ms=100,
+    )
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "profile" / "u_voice_route_timeout_calendar.json").write_text(
+        json.dumps({"user_id": "u_voice_route_timeout_calendar", "memory_facts": [], "priority_lines": [], "about_me": ""}),
+        encoding="utf-8",
+    )
+    tr = TranscriptionResult(
+        text="Please add 6 a.m. on Saturday morning for me to watch Arsenal game on execution calendar.",
+        provider="faster_whisper",
+        language="en",
+        timing={},
+    )
+
+    def _slow_route(*_a, **_k):
+        time.sleep(0.2)
+        return SlimeVoiceRouteResult(
+            intent="calendar_create",
+            tool_name="create_calendar_draft",
+            arguments={"title": "ignored"},
+            requires_confirmation=False,
+        )
+
+    with patch("foresight_x.voice.asr.transcribe_audio", return_value=tr):
+        with patch("foresight_x.voice.slime_voice_router.route_slime_voice_command", side_effect=_slow_route):
+            body = _run_slime_voice_pipeline(
+                b"bytes",
+                "a.webm",
+                "/buddy",
+                None,
+                None,
+                None,
+                settings,
+            )
+    assert body["tool_call"]["name"] == "create_calendar_draft"
+    assert body.get("route_timeout_fallback") is True
+    assert body["frontend_action"]["type"] == "calendar_draft_confirm"
+    assert body.get("tool_timeout_fallback") is False
+
+
 def test_voice_pipeline_async_tool_postprocess_can_return_pending(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     settings = Settings(
