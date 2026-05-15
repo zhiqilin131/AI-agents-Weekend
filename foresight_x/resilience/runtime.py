@@ -201,9 +201,11 @@ def resilience_health_report() -> dict[str, Any]:
     breaker_view: dict[str, Any] = {}
     for p, b in breakers.items():
         open_until = float(b.get("open_until", 0.0))
+        failures = int(b.get("failures", 0.0))
+        state = "open" if now < open_until else ("half_open" if failures > 0 and open_until > 0 else "closed")
         breaker_view[p] = {
-            "state": "open" if now < open_until else "closed",
-            "failures": int(b.get("failures", 0.0)),
+            "state": state,
+            "failures": failures,
             "open_until_epoch": open_until,
         }
     return {
@@ -227,9 +229,11 @@ def breaker_states_snapshot() -> dict[str, Any]:
     out: dict[str, Any] = {}
     for provider, row in breakers.items():
         open_until = float(row.get("open_until", 0.0))
+        failures = int(row.get("failures", 0.0))
+        state = "open" if now < open_until else ("half_open" if failures > 0 and open_until > 0 else "closed")
         out[provider] = {
-            "state": "open" if now < open_until else "closed",
-            "failures": int(row.get("failures", 0.0)),
+            "state": state,
+            "failures": failures,
             "open_until_epoch": open_until,
         }
     return out

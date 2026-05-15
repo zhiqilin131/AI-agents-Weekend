@@ -1,5 +1,12 @@
+import { useState } from 'react';
+import { useResilienceHealth } from '../../../hooks/useResilienceHealth';
 import { mapTraceToReport } from '../../../utils/mapTrace';
 import { journeyStateFromProgress } from '../../../utils/reportAgentJourney';
+import {
+  canRetryDegradation,
+  RESILIENCE_STAGE_LABEL,
+  type ResilienceDegradationNotice,
+} from '../../../utils/resilienceUi';
 import { ReportCompact } from '../ReportCompact';
 import { ReportAgentJourney } from './ReportAgentJourney';
 
@@ -22,14 +29,16 @@ export function DecisionReportStreamingPanel({
   progressStep: string;
   isStreaming: boolean;
   error: string | null;
-  degradedWarnings?: string[];
-  onRetryStage?: () => void;
+  degradedWarnings?: ResilienceDegradationNotice[];
+  onRetryStage?: (stage?: string) => void;
   onClose: () => void;
   onContinueChat: () => void;
   onOpenExecutionCalendar: (decisionId: string) => void;
   onReviseReport: (decisionId: string) => void;
   shadowThreadId?: string | null;
 }) {
+  const resilience = useResilienceHealth();
+  const [dismissedWarnings, setDismissedWarnings] = useState<string[]>([]);
   if (!open) return null;
   const report = trace ? mapTraceToReport(trace) : null;
   const decisionId = typeof trace?.decision_id === 'string' ? trace.decision_id : '';
@@ -79,14 +88,46 @@ export function DecisionReportStreamingPanel({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {degradedWarnings.length > 0 ? (
-            <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <p className="font-semibold">Degraded mode</p>
-              <ul className="mt-1 space-y-1">
-                {degradedWarnings.slice(-2).map((w) => (
-                  <li key={w}>{w}</li>
-                ))}
-              </ul>
+          {degradedWarnings.filter((w) => !dismissedWarnings.includes(w.id)).length > 0 ? (
+            <div className="mb-3 space-y-2">
+              {degradedWarnings
+                .filter((w) => !dismissedWarnings.includes(w.id))
+                .map((w) => {
+                  const retryable = canRetryDegradation(w, resilience.health);
+                  return (
+                    <div
+                      key={w.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-sm"
+                    >
+                      <div>
+                        <p className="font-semibold">
+                          {RESILIENCE_STAGE_LABEL[w.stage] || w.stage || 'Runtime'} running in safe mode
+                        </p>
+                        <p className="mt-0.5">{w.message}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {retryable && onRetryStage ? (
+                          <button
+                            type="button"
+                            className="rounded-full border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-100"
+                            onClick={() => onRetryStage(w.stage)}
+                          >
+                            Retry this step
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="rounded-full px-2 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                          onClick={() =>
+                            setDismissedWarnings((prev) => (prev.includes(w.id) ? prev : [...prev, w.id]))
+                          }
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           ) : null}
           {error ? (
@@ -96,7 +137,7 @@ export function DecisionReportStreamingPanel({
                 <button
                   type="button"
                   className="mt-2 rounded-full border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-900 hover:bg-red-100"
-                  onClick={onRetryStage}
+                  onClick={() => onRetryStage?.()}
                 >
                   Retry this stage
                 </button>

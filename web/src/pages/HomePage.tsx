@@ -18,6 +18,15 @@ import { ModelSelector } from '../features/models/ModelSelector';
 import { buildCheaperModelHint } from '../features/models/slimeModelsApi';
 import { useSlimeModelCatalog } from '../features/models/useSlimeModelCatalog';
 import { useSlimeProfile } from '../hooks/useSlimeProfile';
+import { useResilienceHealth } from '../hooks/useResilienceHealth';
+import {
+  canRetryDegradation,
+  mergeDegradationNotice,
+  networkReconnectNotice,
+  noticeFromDegradation,
+  RESILIENCE_STAGE_LABEL,
+  type ResilienceDegradationNotice,
+} from '../utils/resilienceUi';
 
 const PIPELINE_STAGES = ['enhance', 'perceive', 'retrieve', 'infer', 'simulate', 'evaluate', 'finalize'] as const;
 
@@ -37,19 +46,20 @@ function stageToProgress(stage: string): number {
   return Math.round(((i + 1) / PIPELINE_STAGES.length) * 100);
 }
 
+const STREAM_RECONNECT_LIMIT = 4;
+const STREAM_RECONNECT_BASE_MS = 700;
+const STREAM_RECONNECT_MAX_MS = 8_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 type StreamOpts = {
   clarification_answers?: Record<string, string>;
   save_clarification_to_profile?: boolean;
   preserve_raw_input?: boolean;
   resume_from_stage?: string;
   resume_partial?: Record<string, unknown>;
-};
-
-type DegradeNotice = {
-  at: string;
-  message: string;
-  stage?: string;
-  retryable?: boolean;
 };
 
 type Tier3ProfileView = {
@@ -75,6 +85,7 @@ export default function HomePage() {
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const slimeModels = useSlimeModelCatalog();
   const { slimeProfile } = useSlimeProfile();
+  const resilience = useResilienceHealth();
   const [runModelOptionId, setRunModelOptionId] = useState('');
   useEffect(() => {
     if (slimeModels.ready && slimeModels.defaultModel && !runModelOptionId) {
@@ -100,7 +111,8 @@ export default function HomePage() {
   const [clarifyPayload, setClarifyPayload] = useState<{ questions: ClarifyQuestion[]; note: string } | null>(null);
   /** Shown only when clarify fails or LLM is missing — not when the model simply says no extra questions. */
   const [clarifyGateHint, setClarifyGateHint] = useState<string | null>(null);
-  const [degradeNotices, setDegradeNotices] = useState<DegradeNotice[]>([]);
+  const [degradeNotices, setDegradeNotices] = useState<ResilienceDegradationNotice[]>([]);
+  const [dismissedDegradeIds, setDismissedDegradeIds] = useState<string[]>([]);
   const [lastFailedStage, setLastFailedStage] = useState<string | null>(null);
   const loadingStageRef = useRef<string | null>(null);
   useEffect(() => {
@@ -197,8 +209,11 @@ export default function HomePage() {
       setLiveTrace(null);
       setFullTrace(null);
       setLastFailedStage(null);
-      setDegradeNotices([]);
-      if (!opts?.resume_from_stage) retrySnapshotRef.current = null;
+      if (!opts?.resume_from_stage) {
+        setDegradeNotices([]);
+        setDismissedDegradeIds([]);
+        retrySnapshotRef.current = null;
+      }
 
       const controller = new AbortController();
       const RUN_TIMEOUT_MS = 300_000;
@@ -229,60 +244,19 @@ export default function HomePage() {
 
         const runCredit =
           typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `run-${Date.now()}`;
-        const res = await apiFetch('/api/run/stream', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Credit-Request-Id': runCredit,
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-        if (res.status === 402) {
-          let j: Record<string, unknown> = {};
-          try {
-            j = (await res.json()) as Record<string, unknown>;
-          } catch {
-            /* ignore */
-          }
-          const mid = runModelOptionId || slimeModels.defaultModel || 'little';
-          const cheaperHint =
-            slimeModels.models.length > 0
-              ? await buildCheaperModelHint('decision_report', mid, slimeModels.models)
-              : undefined;
-          showInsufficient({
-            required: Number(j.required ?? 0),
-            balance: typeof j.balance === 'number' ? j.balance : null,
-            message:
-              typeof j.message === 'string'
-                ? j.message
-                : 'You need more Slime Credits for this action.',
-            cheaperHint,
-          });
-          window.clearTimeout(timeoutId);
-          setLoadingStage(null);
-          setState('empty');
-          setRunProgress(0);
-          setRunStageLabel('Ready');
-          return;
-        }
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || res.statusText);
-        }
-        const reader = res.body?.getReader();
-        if (!reader) throw new Error('No response body');
-
-        const decoder = new TextDecoder();
-        let buf = '';
         let gotNotes: string[] = [];
         let trace: Record<string, unknown> | null = null;
         let path: string | null = null;
+        let reconnectAttempt = 0;
+        let resumeStage = opts?.resume_from_stage || '';
+        let resumePartial = opts?.resume_partial;
+        let streamEventError: Error | null = null;
 
         const consume = (data: Record<string, unknown>) => {
           if (data.event === 'error') {
             const d = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
-            throw new Error(d || 'Pipeline error');
+            streamEventError = new Error(d || 'Pipeline error');
+            throw streamEventError;
           }
           if (data.event === 'notes' && Array.isArray(data.notes)) {
             gotNotes = data.notes as string[];
@@ -311,19 +285,9 @@ export default function HomePage() {
           }
           if (data.event === 'degraded' && data.degraded && typeof data.degraded === 'object') {
             const d = data.degraded as Record<string, unknown>;
-            const msg = String(d.reason || 'Running in degraded mode');
-            const key = `${String(d.at || '')}:${msg}`;
+            const notice = noticeFromDegradation(d);
             setDegradeNotices((prev) => {
-              if (prev.some((x) => `${x.at}:${x.message}` === key)) return prev;
-              return [
-                ...prev.slice(-3),
-                {
-                  at: String(d.at || new Date().toISOString()),
-                  message: msg,
-                  stage: String(d.stage || ''),
-                  retryable: Boolean(d.retryable),
-                },
-              ];
+              return mergeDegradationNotice(prev, notice);
             });
           }
           if (data.event === 'complete' && data.trace && typeof data.trace === 'object') {
@@ -334,16 +298,91 @@ export default function HomePage() {
           }
         };
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          buf = parseSseBlocks(buf, consume);
+        while (!trace) {
+          const requestBody = {
+            ...body,
+            ...(resumeStage ? { resume_from_stage: resumeStage } : {}),
+            ...(resumeStage && resumePartial && typeof resumePartial === 'object'
+              ? { resume_partial: resumePartial }
+              : {}),
+          };
+          let transportError: Error | null = null;
+          let buf = '';
+          const res = await apiFetch('/api/run/stream', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Credit-Request-Id': runCredit,
+            },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal,
+          });
+          if (res.status === 402) {
+            let j: Record<string, unknown> = {};
+            try {
+              j = (await res.json()) as Record<string, unknown>;
+            } catch {
+              /* ignore */
+            }
+            const mid = runModelOptionId || slimeModels.defaultModel || 'little';
+            const cheaperHint =
+              slimeModels.models.length > 0
+                ? await buildCheaperModelHint('decision_report', mid, slimeModels.models)
+                : undefined;
+            showInsufficient({
+              required: Number(j.required ?? 0),
+              balance: typeof j.balance === 'number' ? j.balance : null,
+              message:
+                typeof j.message === 'string'
+                  ? j.message
+                  : 'You need more Slime Credits for this action.',
+              cheaperHint,
+            });
+            window.clearTimeout(timeoutId);
+            setLoadingStage(null);
+            setState('empty');
+            setRunProgress(0);
+            setRunStageLabel('Ready');
+            return;
+          }
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || res.statusText);
+          }
+          const reader = res.body?.getReader();
+          if (!reader) throw new Error('No response body');
+          const decoder = new TextDecoder();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += decoder.decode(value, { stream: true });
+              buf = parseSseBlocks(buf, consume);
+            }
+            if (buf.trim()) {
+              parseSseBlocks(`${buf}\n\n`, consume);
+            }
+          } catch (readErr) {
+            if (streamEventError && readErr === streamEventError) throw streamEventError;
+            transportError = readErr instanceof Error ? readErr : new Error('Connection lost');
+          }
+          if (trace) break;
+          if (controller.signal.aborted) throw new DOMException('aborted', 'AbortError');
+          if (!streamTrace || reconnectAttempt >= STREAM_RECONNECT_LIMIT) {
+            throw transportError || new Error('Incomplete response (no trace)');
+          }
+          resumeStage = loadingStageRef.current || resumeStage || 'enhance';
+          resumePartial = streamTrace;
+          retrySnapshotRef.current = streamTrace;
+          reconnectAttempt += 1;
+          const waitMs = Math.min(
+            STREAM_RECONNECT_MAX_MS,
+            STREAM_RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt - 1),
+          );
+          setDegradeNotices((prev) => mergeDegradationNotice(prev, networkReconnectNotice(resumeStage)));
+          setRunStageLabel(`Reconnecting to ${STAGE_LABEL[resumeStage] ?? resumeStage}…`);
+          await sleep(waitMs);
         }
-        if (buf.trim()) {
-          parseSseBlocks(`${buf}\n\n`, consume);
-        }
-        if (!trace) throw new Error('Incomplete response (no trace)');
 
         void refreshCredits();
         setLiveTrace(null);
@@ -484,6 +523,19 @@ export default function HomePage() {
     (fullTrace && typeof fullTrace.decision_id === 'string' ? fullTrace.decision_id : null) ??
     (liveTrace && typeof liveTrace.decision_id === 'string' ? liveTrace.decision_id : null);
 
+  const visibleDegradeNotices = degradeNotices.filter((n) => !dismissedDegradeIds.includes(n.id));
+  const handleRetryDegradedStage = useCallback(
+    (stage: string) => {
+      const resumePartial = retrySnapshotRef.current ?? liveTrace ?? fullTrace ?? undefined;
+      void runPipelineStream({
+        resume_from_stage: stage || lastFailedStage || 'enhance',
+        resume_partial: resumePartial || undefined,
+        preserve_raw_input: true,
+      });
+    },
+    [fullTrace, lastFailedStage, liveTrace, runPipelineStream],
+  );
+
   type CommitInfo = { chosen_option_id: string; matches_recommendation: boolean; committed_at: string };
   const [commitInfo, setCommitInfo] = useState<CommitInfo | null>(null);
   const [commitBusy, setCommitBusy] = useState(false);
@@ -556,14 +608,43 @@ export default function HomePage() {
 
       <DecisionQuestionStrip decisionInput={decisionInput} report={displayReport} />
 
-      {degradeNotices.length > 0 && (
-        <div className="mb-4 rounded-xl border border-amber-200/90 bg-amber-50/95 px-4 py-2.5 text-xs text-amber-950">
-          <p className="font-semibold">Degraded mode detected</p>
-          <ul className="mt-1 space-y-1">
-            {degradeNotices.slice(-2).map((n) => (
-              <li key={`${n.at}:${n.message}`}>{n.message}</li>
-            ))}
-          </ul>
+      {visibleDegradeNotices.length > 0 && (
+        <div className="mb-4 space-y-2">
+          {visibleDegradeNotices.map((n) => {
+            const retryable = canRetryDegradation(n, resilience.health);
+            return (
+              <div
+                key={n.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200/90 bg-amber-50/95 px-4 py-2.5 text-xs text-amber-950 shadow-sm"
+              >
+                <div>
+                  <p className="font-semibold">
+                    {RESILIENCE_STAGE_LABEL[n.stage] || n.stage || 'Runtime'} running in safe mode
+                  </p>
+                  <p className="mt-0.5">{n.message}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {retryable ? (
+                    <button
+                      type="button"
+                      className="rounded-full border border-amber-300 bg-white px-3 py-1.5 font-semibold text-amber-950 hover:bg-amber-100"
+                      onClick={() => handleRetryDegradedStage(n.stage)}
+                    >
+                      Retry this step
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="rounded-full px-2 py-1 font-semibold text-amber-900 hover:bg-amber-100"
+                    onClick={() => setDismissedDegradeIds((prev) => (prev.includes(n.id) ? prev : [...prev, n.id]))}
+                    aria-label="Dismiss degraded-mode banner"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 

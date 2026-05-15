@@ -245,6 +245,8 @@ type VoiceResponse = {
   tool_call?: { name?: string };
   frontend_action?: SlimeVoiceFrontendAction;
   tool_result?: { evidence_items?: MemoryEvidenceItem[]; conversation_turn?: boolean };
+  route_timeout_fallback?: boolean;
+  tool_timeout_fallback?: boolean;
   voice_ui?: {
     intent?: string;
     memory_phases?: string[];
@@ -1077,6 +1079,8 @@ export function SlimeVoiceAgent({
       }
       const assistant = (data.assistant_text || '').trim();
       const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
+      const safeModeLine =
+        data.route_timeout_fallback || data.tool_timeout_fallback ? 'I am running in safe mode.' : '';
       setLastReplyText(toSpeak || null);
 
       const fe = data.frontend_action;
@@ -1149,6 +1153,13 @@ export function SlimeVoiceAgent({
       if (convTurn && data.decision_suggestion?.should_show) {
         onDecisionSuggestion?.(data.decision_suggestion);
         setVoiceState('decision_prompt');
+        if (safeModeLine) {
+          runSpokenSequence([safeModeLine, toSpeak || assistant], {
+            force: true,
+            onAllComplete: () => setVoiceState('idle'),
+          });
+          return;
+        }
         runTtsWithPrefetch(toSpeak || assistant, {
           force: true,
           evidenceItems,
@@ -1161,7 +1172,15 @@ export function SlimeVoiceAgent({
 
       onDecisionSuggestion?.(null);
       if (convTurn && data.spoken_sequence && data.spoken_sequence.length > 0) {
-        runSpokenSequence(data.spoken_sequence, {
+        runSpokenSequence(safeModeLine ? [safeModeLine, ...data.spoken_sequence] : data.spoken_sequence, {
+          force: true,
+          onAllComplete: () => setVoiceState('idle'),
+        });
+        return;
+      }
+
+      if (safeModeLine && toSpeak) {
+        runSpokenSequence([safeModeLine, toSpeak], {
           force: true,
           onAllComplete: () => setVoiceState('idle'),
         });

@@ -9,6 +9,7 @@ import { isSupabaseEnvConfigured } from '../../auth/RequireAuthLayout';
 import { SlimeCreditsChipNav } from './credits/SlimeCreditsContext';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../../hooks/useSlimeProfile';
 import { BuddyTooltip } from '../../features/slime/BuddyTooltip';
+import { ResilienceHealthPill } from './ResilienceHealthPill';
 
 type NavIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
@@ -182,7 +183,8 @@ export function MainNavButtons({
             <div className={scrollClass}>
               <div className="flex w-max flex-nowrap items-center justify-center gap-2 px-1">{navPills}</div>
             </div>
-            <div className="flex shrink-0 items-center self-center">
+            <div className="flex shrink-0 items-center gap-2 self-center">
+              <ResilienceHealthPill />
               <SlimeCreditsChipNav />
             </div>
           </div>
@@ -192,7 +194,8 @@ export function MainNavButtons({
             <div className={scrollClass}>
               <div className="flex w-max flex-nowrap items-center justify-center gap-2">{navPills}</div>
             </div>
-            <div className="flex shrink-0 items-center self-center">
+            <div className="flex shrink-0 items-center gap-2 self-center">
+              <ResilienceHealthPill compact />
               <SlimeCreditsChipNav compact />
             </div>
           </div>

@@ -4,8 +4,21 @@ import { buildCheaperModelHint, fetchSlimeModelCatalog } from '../features/model
 import { apiFetch } from '../utils/apiFetch';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
 import { parseSseBlocks } from '../utils/parseSse';
+import {
+  mergeDegradationNotice,
+  networkReconnectNotice,
+  noticeFromDegradation,
+  type ResilienceDegradationNotice,
+} from '../utils/resilienceUi';
 
 type StreamStatus = 'idle' | 'streaming' | 'done' | 'error';
+const STREAM_RECONNECT_LIMIT = 4;
+const STREAM_RECONNECT_BASE_MS = 700;
+const STREAM_RECONNECT_MAX_MS = 8_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 export type DecisionReportStreamResult = {
   trace: Record<string, unknown> | null;
@@ -20,7 +33,7 @@ export function useDecisionReportStream() {
   const [finalTrace, setFinalTrace] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [degradedWarnings, setDegradedWarnings] = useState<string[]>([]);
+  const [degradedWarnings, setDegradedWarnings] = useState<ResilienceDegradationNotice[]>([]);
   const controllerRef = useRef<AbortController | null>(null);
   const lastStartParamsRef = useRef<{
     threadId: string;
@@ -54,6 +67,7 @@ export function useDecisionReportStream() {
     let streamError: string | null = null;
     let lastStage = (params.resumeFromStage || '').trim();
     let snapshotTrace: Record<string, unknown> | null = params.resumePartial ?? null;
+    let eventError: Error | null = null;
 
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -82,9 +96,15 @@ export function useDecisionReportStream() {
       } else if (type === 'error') {
         streamError = String(ev.message || 'Report failed');
         setError(streamError);
+        eventError = new Error(streamError);
+        throw eventError;
       } else if (type === 'warning') {
-        const msg = String(ev.message || 'Running in degraded mode');
-        setDegradedWarnings((prev) => (prev.includes(msg) ? prev : [...prev.slice(-2), msg]));
+        const raw =
+          ev.degraded && typeof ev.degraded === 'object'
+            ? (ev.degraded as Record<string, unknown>)
+            : ({ reason: ev.message } as Record<string, unknown>);
+        const notice = noticeFromDegradation(raw, String(ev.message || 'Running in degraded mode'));
+        setDegradedWarnings((prev) => mergeDegradationNotice(prev, notice));
       } else if (type === 'done') {
         setIsStreaming(false);
         if (ev.stream_error) {
@@ -110,87 +130,99 @@ export function useDecisionReportStream() {
     try {
       const creditReq =
         typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `dr-${Date.now()}`;
-      const res = await apiFetch(
-        `/api/shadow-chat/threads/${encodeURIComponent(params.threadId)}/decision-report/stream`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Credit-Request-Id': creditReq },
-          body: JSON.stringify({
-            decision_prompt: params.decisionPrompt,
-            clarification_answers: params.clarificationAnswers,
-            save_clarification_to_profile: Boolean(params.saveClarificationToProfile),
-            credit_request_id: creditReq,
-            ...(params.modelOptionId ? { model_option_id: params.modelOptionId } : {}),
-            ...(params.resumeFromStage ? { resume_from_stage: params.resumeFromStage } : {}),
-            ...(params.resumePartial ? { resume_partial: params.resumePartial } : {}),
-          }),
-          signal: controller.signal,
-        },
-      );
-      if (res.status === 402) {
-        let j: Record<string, unknown> = {};
-        try {
-          j = (await res.json()) as Record<string, unknown>;
-        } catch {
-          /* ignore */
+      let reconnectAttempt = 0;
+      while (!capturedTrace && !streamError) {
+        const resumeFromStage = (lastStage || params.resumeFromStage || '').trim();
+        const res = await apiFetch(
+          `/api/shadow-chat/threads/${encodeURIComponent(params.threadId)}/decision-report/stream`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Credit-Request-Id': creditReq },
+            body: JSON.stringify({
+              decision_prompt: params.decisionPrompt,
+              clarification_answers: params.clarificationAnswers,
+              save_clarification_to_profile: Boolean(params.saveClarificationToProfile),
+              credit_request_id: creditReq,
+              ...(params.modelOptionId ? { model_option_id: params.modelOptionId } : {}),
+              ...(resumeFromStage ? { resume_from_stage: resumeFromStage } : {}),
+              ...(resumeFromStage && snapshotTrace ? { resume_partial: snapshotTrace } : {}),
+            }),
+            signal: controller.signal,
+          },
+        );
+        if (res.status === 402) {
+          let j: Record<string, unknown> = {};
+          try {
+            j = (await res.json()) as Record<string, unknown>;
+          } catch {
+            /* ignore */
+          }
+          let cheaperHint: string | undefined;
+          try {
+            const cat = await fetchSlimeModelCatalog();
+            const mid = (params.modelOptionId || cat.default_model || '').trim() || 'little';
+            cheaperHint =
+              cat.models.length > 0 ? await buildCheaperModelHint('decision_report', mid, cat.models) : undefined;
+          } catch {
+            cheaperHint = undefined;
+          }
+          showInsufficient({
+            required: Number(j.required ?? 0),
+            balance: typeof j.balance === 'number' ? j.balance : null,
+            message:
+              typeof j.message === 'string'
+                ? j.message
+                : 'You need more Slime Credits for this action.',
+            cheaperHint,
+          });
+          setPartialTrace(null);
+          setFinalTrace(null);
+          setError(null);
+          setProgressStep('Structuring decision');
+          setStatus('idle');
+          setIsStreaming(false);
+          return { trace: null, error: 'insufficient_credits' };
         }
-        let cheaperHint: string | undefined;
-        try {
-          const cat = await fetchSlimeModelCatalog();
-          const mid = (params.modelOptionId || cat.default_model || '').trim() || 'little';
-          cheaperHint =
-            cat.models.length > 0 ? await buildCheaperModelHint('decision_report', mid, cat.models) : undefined;
-        } catch {
-          cheaperHint = undefined;
+        if (!res.ok || !res.body) {
+          const t = await res.text();
+          throw new Error(t || res.statusText);
         }
-        showInsufficient({
-          required: Number(j.required ?? 0),
-          balance: typeof j.balance === 'number' ? j.balance : null,
-          message:
-            typeof j.message === 'string'
-              ? j.message
-              : 'You need more Slime Credits for this action.',
-          cheaperHint,
-        });
-        // Reset stream UI: callers close the report panel; without this, error stays null and the
-        // journey panel looks "stuck" on Structuring while credits modal sits underneath.
-        setPartialTrace(null);
-        setFinalTrace(null);
-        setError(null);
-        setProgressStep('Structuring decision');
-        setStatus('idle');
-        setIsStreaming(false);
-        return { trace: null, error: 'insufficient_credits' };
-      }
-      if (!res.ok || !res.body) {
-        const t = await res.text();
-        throw new Error(t || res.statusText);
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        let chunk: ReadableStreamReadResult<Uint8Array>;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let transportError: Error | null = null;
         try {
-          chunk = await reader.read();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            buffer = parseSseBlocks(buffer, onEvent);
+          }
+          if (buffer.trim()) {
+            parseSseBlocks(`${buffer}\n\n`, onEvent);
+          }
         } catch (readErr) {
-          streamError = readErr instanceof Error ? readErr.message : 'Connection lost';
+          if (eventError && readErr === eventError) throw eventError;
+          transportError = readErr instanceof Error ? readErr : new Error('Connection lost');
+        }
+        if (capturedTrace || streamError) break;
+        if (!snapshotTrace || reconnectAttempt >= STREAM_RECONNECT_LIMIT) {
+          streamError = transportError?.message || 'Stream ended before the report finished';
           setError(streamError);
           setStatus('error');
           break;
         }
-        const { done, value } = chunk;
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        buffer = parseSseBlocks(buffer, onEvent);
-      }
-      if (buffer.trim()) {
-        parseSseBlocks(`${buffer}\n\n`, onEvent);
-      }
-      if (!capturedTrace && !streamError) {
-        streamError = 'Stream ended before the report finished';
-        setError(streamError);
-        setStatus('error');
+        reconnectAttempt += 1;
+        lastStartParamsRef.current = {
+          ...params,
+          resumeFromStage: lastStage || 'enhance',
+          resumePartial: snapshotTrace ?? undefined,
+        };
+        setDegradedWarnings((prev) =>
+          mergeDegradationNotice(prev, networkReconnectNotice(lastStage || 'enhance')),
+        );
+        setProgressStep('Reconnecting to the decision pipeline');
+        await sleep(Math.min(STREAM_RECONNECT_MAX_MS, STREAM_RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt - 1)));
       }
       if (streamError) {
         lastStartParamsRef.current = {
@@ -222,12 +254,12 @@ export function useDecisionReportStream() {
     setIsStreaming(false);
   }, []);
 
-  const retryFromCurrentStage = useCallback(async () => {
+  const retryFromCurrentStage = useCallback(async (stage?: string) => {
     const p = lastStartParamsRef.current;
     if (!p) return { trace: null, error: 'missing_previous_params' } as DecisionReportStreamResult;
     return start({
       ...p,
-      resumeFromStage: p.resumeFromStage || 'enhance',
+      resumeFromStage: stage || p.resumeFromStage || 'enhance',
       resumePartial: p.resumePartial,
     });
   }, [start]);
