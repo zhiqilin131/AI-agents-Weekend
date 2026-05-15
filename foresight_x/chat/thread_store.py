@@ -79,6 +79,7 @@ def _default_thread_payload(*, user_id: str, thread_id: str, title: str | None =
         "temporary_context": [],
         "clarification_events": [],
         "clarification_state": default_clarification_state(),
+        "decision_trigger_state": {},
     }
 
 
@@ -130,6 +131,7 @@ def _local_load_thread(thread_id: str | None, *, user_id: str, allow_create: boo
         t.setdefault("working_summary", "")
         t.setdefault("temporary_context", [])
         t.setdefault("clarification_events", [])
+        t.setdefault("decision_trigger_state", {})
         if not isinstance(t.get("clarification_state"), dict):
             t["clarification_state"] = default_clarification_state()
         else:
@@ -196,6 +198,7 @@ def _thread_metadata_from_thread(thread: dict[str, Any]) -> dict[str, Any]:
         "temporary_context": thread.get("temporary_context", []),
         "clarification_events": thread.get("clarification_events", []),
         "clarification_state": thread.get("clarification_state", default_clarification_state()),
+        "decision_trigger_state": thread.get("decision_trigger_state", {}),
     }
 
 
@@ -224,6 +227,7 @@ def _hydrate_thread_from_row(
         "temporary_context": md.get("temporary_context", []),
         "clarification_events": md.get("clarification_events", []),
         "clarification_state": md.get("clarification_state", default_clarification_state()),
+        "decision_trigger_state": md.get("decision_trigger_state", {}),
     }
 
     if not isinstance(out["clarification_state"], dict):
@@ -232,6 +236,8 @@ def _hydrate_thread_from_row(
         base = default_clarification_state()
         base.update(out["clarification_state"])
         out["clarification_state"] = base
+    if not isinstance(out.get("decision_trigger_state"), dict):
+        out["decision_trigger_state"] = {}
     return out
 
 

@@ -4,6 +4,8 @@ import re
 
 from pydantic import BaseModel, Field
 
+from foresight_x.chat.decision_trigger import is_explicit_decision_mode_command
+
 
 class ChatModeDetection(BaseModel):
     intent: str = "normal"
@@ -72,6 +74,13 @@ def detect_chat_mode_intent(
     text = (user_message or "").strip().lower()
     if not text:
         return ChatModeDetection()
+    if is_explicit_decision_mode_command(text):
+        return ChatModeDetection(
+            intent="decision_candidate",
+            confidence=0.98,
+            reasons=["explicit decision mode command"],
+            suggested_action="show_decision_report_prompt",
+        )
 
     role_hits = [k for k in ROLEPLAY_KEYWORDS if k in text]
     decision_hits = [k for k in DECISION_KEYWORDS if k in text]
@@ -82,6 +91,12 @@ def detect_chat_mode_intent(
     if "option a" in text and "option b" in text:
         decision_conf = max(decision_conf, 0.72)
         reasons.append("contains explicit A/B options")
+    if "whether" in text and len(text) > 24 and any(k in text for k in ("busy", "conflict", "at the same time", "but also")):
+        decision_conf = min(1.0, decision_conf + 0.24)
+        reasons.append("whether + competing commitment")
+    if " or " in text and len(text) > 12:
+        decision_conf = min(1.0, decision_conf + 0.18)
+        reasons.append("binary fork phrasing (or)")
     if GAMBLING_DECISION_RE.search(text):
         decision_conf = max(decision_conf, 0.74)
         reasons.append("chance/gambling choice request")
