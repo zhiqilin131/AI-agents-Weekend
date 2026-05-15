@@ -29,6 +29,7 @@ import { useSlimeCredits } from '../../app/components/credits/SlimeCreditsContex
 import { ModelSelector } from '../models/ModelSelector';
 import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
 import { BuddyTooltip } from './BuddyTooltip';
+import { calendarMutationKindFromTranscript } from './slimeVoiceIntentGuards';
 import { normalizeTtsVoiceName } from '../../utils/ttsVoices';
 
 export type VoiceAgentState =
@@ -363,15 +364,7 @@ function isSlimeProfileVoiceIntent(text: string): boolean {
 }
 
 function calendarMutationKind(text: string): PendingCalendarMutation['kind'] | null {
-  if (isSlimeProfileVoiceIntent(text)) return null;
-  const t = normalizeCalendarText(text);
-  const wantsDelete = /\b(delete|remove|cancel|drop|clear|get rid of)\b/.test(t) || /删除|取消|删掉|移除|去掉/.test(text);
-  if (wantsDelete) return 'delete';
-  const wantsUpdate =
-    /\b(change|edit|modify|update|move|reschedule|rename|shift|postpone)\b/.test(t) ||
-    /修改|更改|改成|改到|改为|挪到|换到|推迟|提前/.test(text);
-  if (wantsUpdate) return 'update';
-  return null;
+  return calendarMutationKindFromTranscript(text, isSlimeProfileVoiceIntent(text));
 }
 
 function scoreCalendarEvent(ev: SlimeCalendarEvent, transcript: string): number {
@@ -1129,15 +1122,35 @@ export function SlimeVoiceAgent({
       }
 
       setTranscriptPreview(data.transcript || null);
-      if (data.transcript && (await prepareCalendarMutation(data.transcript))) {
-        return;
-      }
       const assistant = (data.assistant_text || '').trim();
       const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
       setLastReplyText(toSpeak || null);
 
       const fe = data.frontend_action;
       const convTurn = Boolean(data.tool_result && typeof data.tool_result === 'object' && data.tool_result.conversation_turn);
+
+      if (convTurn && data.decision_suggestion?.should_show) {
+        onDecisionSuggestion?.(data.decision_suggestion);
+        setVoiceState('decision_prompt');
+        const decisionSpeak =
+          data.decision_suggestion.spoken_prompt?.trim() ||
+          toSpeak ||
+          assistant ||
+          data.decision_suggestion.display_text?.trim() ||
+          '';
+        runTtsWithPrefetch(decisionSpeak, {
+          force: true,
+          evidenceItems,
+          onComplete: () => setVoiceState('idle'),
+          onMayHaveBlocked: () =>
+            setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
+        });
+        return;
+      }
+
+      if (data.transcript && (await prepareCalendarMutation(data.transcript))) {
+        return;
+      }
 
       if (fe?.type === 'slime_profile_refresh') {
         void refetchSlimeProfileGlobal();
@@ -1201,19 +1214,6 @@ export function SlimeVoiceAgent({
 
       if (fe?.type === 'navigate') {
         applySlimeVoiceFrontendAction(navigate, fe);
-      }
-
-      if (convTurn && data.decision_suggestion?.should_show) {
-        onDecisionSuggestion?.(data.decision_suggestion);
-        setVoiceState('decision_prompt');
-        runTtsWithPrefetch(toSpeak || assistant, {
-          force: true,
-          evidenceItems,
-          onComplete: () => setVoiceState('idle'),
-          onMayHaveBlocked: () =>
-            setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
-        });
-        return;
       }
 
       onDecisionSuggestion?.(null);

@@ -68,6 +68,48 @@ def test_slime_voice_turn_decision_envelope(monkeypatch, tmp_path: Path) -> None
     assert out["spoken_sequence"] == [out["assistant_text"]]
 
 
+def test_slime_voice_activate_decision_mode_with_move_phrase(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    uid = "u_conv_decision_move"
+    _minimal_profile(tmp_path, uid)
+    settings = Settings(
+        foresight_user_id=uid,
+        foresight_data_dir=tmp_path,
+        chroma_persist_dir=tmp_path / "chroma",
+        openai_api_key="sk-test",
+    )
+
+    class _I:
+        intent = "decision_candidate"
+
+    fake_out = MagicMock()
+    fake_out.reply = "Moving apartments is a big fork — I can structure it in Decision Mode."
+    fake_out.used_memory_facts = []
+    fake_out.retrieved_memory_facts = []
+    fake_out.profile_record_texts = []
+    fake_out.profile_memory_events = []
+    fake_out.thread_only_items = []
+    fake_out.memory_confirmation_question = None
+
+    msg = "Activate decision mode. Shall I move to the new apartment or stay where I am?"
+    thread = ensure_slime_voice_thread(uid, None)
+    with patch("foresight_x.chat.conversation_service.detect_chat_intent", return_value=_I()):
+        with patch("foresight_x.chat.conversation_service.run_shadow_turn", return_value=fake_out):
+            with patch("foresight_x.chat.conversation_service.maybe_update_thread_summary"):
+                out = process_conversation_turn(
+                    settings=settings,
+                    user_id=uid,
+                    thread=thread,
+                    user_message=msg,
+                    source="slime_voice",
+                    modality="voice",
+                )
+
+    assert out["decision_suggestion"] is not None
+    assert out["decision_suggestion"]["should_show"] is True
+    assert msg in (out["decision_suggestion"].get("decision_prompt") or "")
+
+
 def test_slime_voice_turn_surfaces_used_memory_evidence(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     uid = "u_conv_memory_evidence"
