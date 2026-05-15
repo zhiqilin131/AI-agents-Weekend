@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from foresight_x.chat.decision_trigger import is_explicit_decision_mode_command
 from foresight_x.config import Settings
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.structured_predict import structured_predict
@@ -361,6 +362,61 @@ def _looks_like_tool_or_retrieval_request(transcript: str) -> bool:
     return any(marker in raw for marker in _FAST_CONVERSATION_BLOCKERS_ZH)
 
 
+def _looks_like_calendar_tool_request(transcript: str) -> bool:
+    """True when the user is likely asking for a calendar tool, not a conversational decision fork."""
+    raw = (transcript or "").strip()
+    low = raw.lower()
+    cal_markers = (
+        "calendar",
+        "planner",
+        "execution calendar",
+        "my schedule",
+        "on my schedule",
+        "日程",
+        "日历",
+        "计划表",
+    )
+    action_markers = (
+        "add ",
+        "put ",
+        "schedule ",
+        "book ",
+        "reschedule",
+        "move my",
+        "change my",
+        "delete ",
+        "remove ",
+        "cancel ",
+        "what do i have",
+        "am i free",
+        "加入",
+        "安排",
+        "改期",
+        "删除",
+        "取消",
+    )
+    has_cal = any(m in low or m in raw for m in cal_markers)
+    has_action = any(m in low or m in raw for m in action_markers)
+    return has_cal and has_action
+
+
+def _try_fast_decision_no_op(transcript: str) -> SlimeVoiceRouteResult | None:
+    """Skip router LLM for explicit Decision Mode activation (still uses conversation_turn)."""
+    raw = (transcript or "").strip()
+    if not raw or len(raw) > 500:
+        return None
+    if _looks_like_calendar_tool_request(raw):
+        return None
+    if not is_explicit_decision_mode_command(raw):
+        return None
+    return SlimeVoiceRouteResult(
+        intent="decision_candidate",
+        tool_name="no_op",
+        arguments={"reason": "fast_decision_mode"},
+        requires_confirmation=False,
+    )
+
+
 def _try_fast_conversational_no_op(transcript: str) -> SlimeVoiceRouteResult | None:
     """
     Skip the router LLM for obvious conversation/opinion turns.
@@ -394,16 +450,21 @@ def _try_fast_conversational_no_op(transcript: str) -> SlimeVoiceRouteResult | N
     ) or any(marker in raw for marker in ("你觉得", "你怎么看", "你喜欢", "你更喜欢", "你认为"))
 
     decision_like = bool(
-        re.search(
+        is_explicit_decision_mode_command(raw)
+        or re.search(
             r"\b("
             r"should i|shall i|would you choose|help me choose|choose for me|"
             r"pick one|pick for me|red or black|black or red|roulette|winning number"
             r")\b",
             low,
         )
-    ) or any(marker in raw for marker in ("我该不该", "要不要", "帮我选", "帮我决定", "选哪个"))
+        or any(marker in raw for marker in ("我该不该", "要不要", "帮我选", "帮我决定", "选哪个", "决策模式"))
+    )
 
     if not (opinion_like or decision_like):
+        return None
+
+    if decision_like and _looks_like_calendar_tool_request(raw):
         return None
 
     return SlimeVoiceRouteResult(
@@ -650,6 +711,19 @@ def route_slime_voice_command(
     fast_memory = _try_fast_memory_search(transcript.strip())
     if fast_memory is not None:
         return fast_memory
+
+    from foresight_x.voice.calendar_route_fast import try_fast_calendar_create
+
+    fast_cal = try_fast_calendar_create(
+        transcript.strip(),
+        current_route=user_context.current_route,
+    )
+    if fast_cal is not None:
+        return fast_cal
+
+    fast_decision = _try_fast_decision_no_op(transcript.strip())
+    if fast_decision is not None:
+        return fast_decision
 
     fast_convo = _try_fast_conversational_no_op(transcript.strip())
     if fast_convo is not None:

@@ -102,8 +102,15 @@ def _resolve_day(local_date: date, hint: str | None) -> date:
     for name, wd in sorted(_WD.items(), key=lambda kv: len(kv[0]), reverse=True):
         if name in h:
             delta = (wd - today.weekday()) % 7
-            if prefer_next and delta == 0:
-                delta = 7
+            if prefer_next:
+                if delta == 0:
+                    delta = 7
+                return today + timedelta(days=delta)
+            if delta == 0:
+                return today
+            # e.g. Friday + "Thursday" → yesterday, not six days ahead
+            if delta > 3:
+                return today + timedelta(days=delta - 7)
             return today + timedelta(days=delta)
     return today
 

@@ -37,6 +37,7 @@ import {
 import { parseIcsToCalendarEvents, exportEventsToIcs } from '../utils/ics';
 import { mapRecommendationActionsToTasks } from '../utils/executionTasks';
 import {
+  EXECUTION_CALENDAR_LOCAL_BUMP_EVENT,
   EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY,
   executionStorageKeys,
   SLIME_CALENDAR_BRIEF_CONTEXT_KEY,
@@ -52,10 +53,9 @@ import {
 } from '../utils/calendarRefineSchedule';
 import { saveSelectedBlocksContext, taskIdFromAiCalendarEventId } from '../utils/executionCalendarSelection';
 import { SLIME_VOICE_CALENDAR_DRAFT_KEY, SLIME_VOICE_CHAT_PREFILL_KEY } from '../utils/slimeVoiceActions';
-import { SlimeAdvisor, type SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { useSlimeProfile } from '../hooks/useSlimeProfile';
 import { useExecutionStorageUserKey } from '../hooks/useExecutionStorageUserKey';
-import { SlimeVoiceAgent, type SlimeSpeechOutput } from '../features/slime/SlimeVoiceAgent';
+import { CalendarSlimeVoicePanel } from '../features/slime/CalendarSlimeVoicePanel';
 
 type TraceShape = {
   decision_id: string;
@@ -224,8 +224,6 @@ export default function ExecutionPlannerPage() {
   const [quickEventDuration, setQuickEventDuration] = useState(30);
   const [bridgeNotice, setBridgeNotice] = useState<string | null>(null);
   const [calendarThreadId, setCalendarThreadId] = useState<string | null>(null);
-  const [calendarAdvisorState, setCalendarAdvisorState] = useState<SlimeAdvisorState>('idle');
-  const [calendarSpeechOutput, setCalendarSpeechOutput] = useState<SlimeSpeechOutput | null>(null);
   /** Accumulated scheduler prefs from prior coach runs (merged on each Re-plan). */
   const [coachBaseOptions, setCoachBaseOptions] = useState<PlannerCoachOptions>(() => normalizePlannerCoachOptions({}));
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
@@ -467,8 +465,24 @@ export default function ExecutionPlannerPage() {
     }
   }, [storageReady, storageKeys]);
 
+  /** Slime voice updates localStorage directly; same-tab writes don't fire `storage` events — rehydrate React state. */
   useEffect(() => {
-    if (!storageReady || !storageUserKey) return;
+    if (!storageReady || !storageKeys) return;
+    const reloadFromLocalEvents = () => {
+      try {
+        const rawEvents = localStorage.getItem(storageKeys.events);
+        if (!rawEvents) return;
+        const parsed = JSON.parse(rawEvents) as CalendarEvent[];
+        if (Array.isArray(parsed)) setEvents(dedupeAiEventsByTitle(parsed));
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener(EXECUTION_CALENDAR_LOCAL_BUMP_EVENT, reloadFromLocalEvents);
+    return () => window.removeEventListener(EXECUTION_CALENDAR_LOCAL_BUMP_EVENT, reloadFromLocalEvents);
+  }, [storageReady, storageKeys]);
+
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
@@ -1466,59 +1480,12 @@ export default function ExecutionPlannerPage() {
           </div>
 
           <aside className="min-w-0 space-y-4 xl:sticky xl:top-6 xl:self-start">
-            <section className={`${shellCard} relative min-h-[520px] overflow-hidden p-4`}>
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_16%,rgba(255,255,255,0.95),transparent_30%),radial-gradient(circle_at_50%_45%,rgba(139,92,246,0.16),transparent_55%)]" />
-              <div className="relative z-10">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-violet-500/90">Calendar Slime</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-950">{visibleEvents.length} events this week</p>
-                </div>
-              </div>
-
-              <div className="relative z-10 mt-6 h-72">
-                {calendarSpeechOutput?.text ? (
-                  <div className="absolute right-1 top-2 z-20 max-w-[14rem] rounded-[24px] border border-white/90 bg-white/92 px-4 py-3 text-sm font-medium leading-relaxed text-slate-900 shadow-[0_18px_50px_rgba(99,102,241,0.16)] backdrop-blur-md">
-                    {calendarSpeechOutput.text}
-                  </div>
-                ) : null}
-                <div className="absolute left-1/2 top-10 z-10 -translate-x-1/2">
-                  <SlimeAdvisor
-                    size="lg"
-                    profile={slimeProfile}
-                    state={calendarAdvisorState}
-                    companionMode
-                    className="scale-[0.96]"
-                  />
-                </div>
-                <div className="pointer-events-none absolute left-[57%] top-[10.55rem] z-20 w-20 rotate-[7deg] rounded-xl border border-violet-200/90 bg-white/92 p-1.5 shadow-[0_14px_30px_rgba(109,40,217,0.16)] backdrop-blur-sm">
-                  <span className="absolute -left-3 top-7 h-5 w-5 rounded-full border border-white/70 bg-white/75 shadow-sm" aria-hidden />
-                  <div className="mb-2 flex gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-fuchsia-300" />
-                  </div>
-                  <div className="grid grid-cols-4 gap-1">
-                    {Array.from({ length: 16 }, (_, i) => (
-                      <span
-                        key={i}
-                        className={`h-2 rounded ${i === 5 || i === 9 ? 'bg-violet-500/75' : 'bg-violet-100'}`}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <SlimeVoiceAgent
-                slimeProfile={slimeProfile}
-                currentRoute="/execution"
-                threadId={calendarThreadId ?? undefined}
-                onThreadId={persistCalendarThreadId}
-                onAdvisorStateChange={setCalendarAdvisorState}
-                onSpeechOutputChange={setCalendarSpeechOutput}
-                hideModelSelector
-                className="bottom-5 sm:bottom-5"
-              />
-            </section>
+            <CalendarSlimeVoicePanel
+              slimeProfile={slimeProfile}
+              eventCount={visibleEvents.length}
+              threadId={calendarThreadId ?? undefined}
+              onThreadId={persistCalendarThreadId}
+            />
 
             <section className={`${shellCard} p-4`}>
               <div className="flex items-center justify-between gap-3">

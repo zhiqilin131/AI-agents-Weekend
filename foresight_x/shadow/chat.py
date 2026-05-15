@@ -688,49 +688,77 @@ def run_shadow_turn(
 
     last_user_text = str(last.get("content", "") or "").strip()
     mem_active: list[ProfileMemoryFact] = []
-    atomic_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shadow-atomic-claims")
-    atomic_future = atomic_executor.submit(_extract_atomic_claims_for_turn, s, last_user_text)
-    try:
+    buddy_voice = synthesis_frame == "slime_buddy"
+    mem_limit = 16 if buddy_voice and retrieval_mode == "chat_deep" else (12 if buddy_voice else 32)
+    atomic_claims: list[Any] = []
+
+    if buddy_voice:
         prof = load_user_profile(settings=s)
         mem_active = rank_memory_facts_for_query(
             user_scope_memory_facts(active_memory_facts(list(prof.memory_facts))),
             last_user_text,
-            limit=32,
+            limit=mem_limit,
         )
-        mem_owner_note = ""
-        if synthesis_frame == "slime_buddy":
-            mem_owner_note = (
-                "[memory_owner=user — retrieved structured facts describe the USER, not the Slime. "
-                "Use them only to personalize help for the user; never speak as if these are the slime's own life.]\n\n"
-            )
+        mem_owner_note = (
+            "[memory_owner=user — retrieved structured facts describe the USER, not the Slime. "
+            "Use them only to personalize help for the user; never speak as if these are the slime's own life.]\n\n"
+        )
         if mem_active:
-            memory_block = mem_owner_note + "\n".join(format_stored_fact_bullet(x) for x in mem_active[-32:])
+            memory_block = mem_owner_note + "\n".join(format_stored_fact_bullet(x) for x in mem_active[-mem_limit:])
         else:
             memory_block = mem_owner_note + "(none yet.)"
         profile_block = _format_profile_block(prof)
-
-        prioritize_local = is_local_context_question(last_user_text)
         decision_context_block = build_shadow_decision_context_block(
             settings=s,
             profile=prof,
             last_user_message=last_user_text,
             thread_id=thread_id,
             retrieval_mode=retrieval_mode,
-            minimal_long_term_context=prioritize_local,
+            minimal_long_term_context=(retrieval_mode == "chat_fast"),
             recent_messages=classifier_msgs,
         )
-
         working_summary_block = (working_summary or "").strip() or "(none yet — start of thread.)"
         temporary_context_block = (temporary_context_prompt or "").strip() or "(none)"
+        atomic_claims_block = "(skipped on voice buddy turns — use structured profile memory above.)"
+    else:
+        atomic_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shadow-atomic-claims")
+        atomic_future = atomic_executor.submit(_extract_atomic_claims_for_turn, s, last_user_text)
+        try:
+            prof = load_user_profile(settings=s)
+            mem_active = rank_memory_facts_for_query(
+                user_scope_memory_facts(active_memory_facts(list(prof.memory_facts))),
+                last_user_text,
+                limit=mem_limit,
+            )
+            mem_owner_note = ""
+            if mem_active:
+                memory_block = mem_owner_note + "\n".join(format_stored_fact_bullet(x) for x in mem_active[-mem_limit:])
+            else:
+                memory_block = mem_owner_note + "(none yet.)"
+            profile_block = _format_profile_block(prof)
 
-        atomic_claims = _collect_atomic_claims_or_empty(
-            atomic_future,
-            settings=s,
-            last_user_text=last_user_text,
-        )
-    finally:
-        atomic_executor.shutdown(wait=False, cancel_futures=False)
-    atomic_claims_block = _format_atomic_claims_block(atomic_claims)
+            prioritize_local = is_local_context_question(last_user_text)
+            decision_context_block = build_shadow_decision_context_block(
+                settings=s,
+                profile=prof,
+                last_user_message=last_user_text,
+                thread_id=thread_id,
+                retrieval_mode=retrieval_mode,
+                minimal_long_term_context=prioritize_local,
+                recent_messages=classifier_msgs,
+            )
+
+            working_summary_block = (working_summary or "").strip() or "(none yet — start of thread.)"
+            temporary_context_block = (temporary_context_prompt or "").strip() or "(none)"
+
+            atomic_claims = _collect_atomic_claims_or_empty(
+                atomic_future,
+                settings=s,
+                last_user_text=last_user_text,
+            )
+        finally:
+            atomic_executor.shutdown(wait=False, cancel_futures=False)
+        atomic_claims_block = _format_atomic_claims_block(atomic_claims)
 
     tmpl = SLIME_BUDDY_INSTRUCTIONS if synthesis_frame == "slime_buddy" else SHADOW_INSTRUCTIONS
     prompt = tmpl.format(

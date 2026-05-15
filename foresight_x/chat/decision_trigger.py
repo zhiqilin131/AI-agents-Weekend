@@ -11,7 +11,7 @@ _DECISION_DISMISS_COOLDOWN_HOURS = 6
 
 _DECISION_MODE_COMMAND_RE = re.compile(
     r"\b("
-    r"start|enter|open|switch(?:\s+to)?|turn\s+on|begin|run|generate|make|create|launch"
+    r"start|enter|open|switch(?:\s+to)?|turn\s+on|begin|run|generate|make|create|launch|activate"
     r")\b.*\b("
     r"decision(?:\s+report|\s+mode)?|report(?:\s+mode)?"
     r")\b",
@@ -97,7 +97,13 @@ def is_explicit_decision_mode_command(message: str) -> bool:
     text = _clean_text(message)
     if not text:
         return False
-    if text in {"decision mode", "start decision mode", "decision report", "generate decision report"}:
+    if text in {
+        "decision mode",
+        "start decision mode",
+        "activate decision mode",
+        "decision report",
+        "generate decision report",
+    }:
         return True
     return bool(_DECISION_MODE_COMMAND_RE.search(text) or _DECISION_MODE_COMMAND_ZH_RE.search(text))
 

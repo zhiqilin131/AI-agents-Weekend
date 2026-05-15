@@ -14,6 +14,20 @@ from foresight_x.structured_predict import structured_predict
 
 _log = logging.getLogger(__name__)
 
+_GENERIC_EVENT_TITLES = frozenset(
+    {
+        "date",
+        "a date",
+        "an event",
+        "event",
+        "appointment",
+        "something",
+        "it",
+        "this",
+        "that",
+    }
+)
+
 
 class CalendarDraft(BaseModel):
     title: str = Field(default="Planning block", max_length=200)
@@ -84,16 +98,20 @@ def _regex_fallback(transcript: str) -> CalendarDraft:
                 break
 
     time_hint: str | None = None
-    if "morning" in low:
+    mt = re.search(
+        r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:\s*)?(a\.?m\.?|p\.?m\.?)\b",
+        low,
+    )
+    if mt:
+        ap = re.sub(r"\.", "", mt.group(3).lower())
+        mins = mt.group(2)
+        time_hint = f"{mt.group(1)}{f':{mins}' if mins else ''}{ap}"
+    elif "morning" in low:
         time_hint = "morning"
     elif "afternoon" in low:
         time_hint = "afternoon"
     elif "evening" in low:
         time_hint = "evening"
-    else:
-        mt = re.search(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", low)
-        if mt:
-            time_hint = mt.group(0).replace("at ", "").strip()
 
     title = "Planning block"
     if "gym" in low:
@@ -104,6 +122,10 @@ def _regex_fallback(transcript: str) -> CalendarDraft:
         title = "Planning block"
     elif mtitle := re.search(r"(?:add|put|schedule)\s+(?:a\s+)?(.+?)\s+(?:on|for|at)\b", low):
         chunk = mtitle.group(1).strip()
+        if chunk and len(chunk) < 80 and chunk not in _GENERIC_EVENT_TITLES:
+            title = chunk.title()
+    if title == "Planning block" and (m_and := re.search(r"\band\s+(.+?)(?:\s+on\s+|\s+at\s+|$)", low)):
+        chunk = m_and.group(1).strip().rstrip(".")
         if chunk and len(chunk) < 80:
             title = chunk.title()
 

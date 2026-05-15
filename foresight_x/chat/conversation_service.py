@@ -252,7 +252,12 @@ def process_conversation_turn(
     mode = str(thread.get("mode") or "normal")
     recent_for_intent = thread.get("messages", [])[-8:]
     intent_probe = effective_message.strip() if effective_message.strip() != raw_msg.strip() else raw_msg
-    intent = detect_chat_intent(intent_probe, recent_for_intent)
+    # Slime voice: heuristic intent is enough for most turns (saves one LLM hop); shadow text keeps LLM refine.
+    intent = detect_chat_intent(
+        intent_probe,
+        recent_for_intent,
+        llm_enabled=(source != "slime_voice"),
+    )
     slime_lane = classify_slime_intent(intent_probe)
     slime_lane = merge_with_decision_intent(slime_lane, intent.intent == "decision_candidate")
     retrieval_mode = "chat_deep" if intent.intent == "decision_candidate" else "chat_fast"

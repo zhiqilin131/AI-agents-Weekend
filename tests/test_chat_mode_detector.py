@@ -29,3 +29,13 @@ def test_explicit_start_decision_mode_triggers_decision_candidate() -> None:
     out = detect_chat_mode_intent("进入决策模式")
     assert out.intent == "decision_candidate"
     assert out.confidence >= 0.95
+
+
+def test_activate_decision_mode_english() -> None:
+    from foresight_x.chat.decision_trigger import is_explicit_decision_mode_command
+
+    assert is_explicit_decision_mode_command("Activate decision mode")
+    out = detect_chat_mode_intent(
+        "Activate decision mode. Shall I move to the new apartment or stay where I am?"
+    )
+    assert out.intent == "decision_candidate"

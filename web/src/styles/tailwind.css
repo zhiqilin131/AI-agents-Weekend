@@ -484,6 +484,33 @@
     linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(209, 250, 229, 0.82));
 }
 
+/* Compact comic bubble for Calendar Slime sidebar (narrow column, smaller type). */
+.slime-comic-bubble-calendar.slime-comic-bubble {
+  width: 100%;
+  min-width: 0;
+  max-width: 15.5rem;
+  padding: 0.55rem 0.75rem 0.58rem;
+  border-radius: 1.05rem;
+  transform-origin: -0.55rem 1.85rem;
+}
+
+.slime-comic-bubble-calendar.slime-comic-bubble::before {
+  left: -0.62rem;
+  top: 55%;
+  width: 0.52rem;
+  height: 0.52rem;
+}
+
+.slime-comic-bubble-calendar.slime-comic-bubble::after {
+  left: -1.12rem;
+  top: 68%;
+  width: 0.3rem;
+  height: 0.3rem;
+  box-shadow:
+    0 6px 12px rgba(79, 70, 229, 0.08),
+    -0.48rem 0.26rem 0 -0.09rem rgba(255, 255, 255, 0.62);
+}
+
 .slime-comic-bubble-error {
   background:
     radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.98), rgba(255, 247, 237, 0.92) 48%, rgba(254, 226, 226, 0.88)),

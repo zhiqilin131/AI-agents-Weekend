@@ -52,9 +52,16 @@ def resolve_datetime_hints(
         for name, wd in sorted(wd_map.items(), key=lambda kv: len(kv[0]), reverse=True):
             if name in low:
                 delta = (wd - local_date.weekday()) % 7
-                if prefer_next and delta == 0:
-                    delta = 7
-                target = local_date + timedelta(days=delta)
+                if prefer_next:
+                    if delta == 0:
+                        delta = 7
+                    target = local_date + timedelta(days=delta)
+                elif delta == 0:
+                    target = local_date
+                elif delta > 3:
+                    target = local_date + timedelta(days=delta - 7)
+                else:
+                    target = local_date + timedelta(days=delta)
                 break
 
     # Default windows

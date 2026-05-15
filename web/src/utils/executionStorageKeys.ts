@@ -18,6 +18,14 @@ export function executionStorageKeys(storageUserKey: string) {
     coachOptions: `fx.execution.scheduleCoachOptions.v1.${seg}`,
   } as const;
 }
+
+/** Fired after execution calendar `events` in localStorage change in this tab (e.g. Slime Add). Planner must rehydrate React state — storage events don't fire for same-document writes. */
+export const EXECUTION_CALENDAR_LOCAL_BUMP_EVENT = 'fx.execution.calendarLocalBump.v1';
+
+export function dispatchExecutionCalendarLocalBump(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(EXECUTION_CALENDAR_LOCAL_BUMP_EVENT));
+}
 /** Set from Shadow Chat when user wants to continue in the planner */
 export const EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY = 'fx.execution.pendingCalendarFeedback';
 /** Resolved start/end from Slime voice — place exact block when user taps Edit */

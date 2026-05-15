@@ -4196,8 +4196,20 @@ def _run_slime_voice_pipeline(
         recent_ui_context=ruc,
     )
     def _fallback_route_for_timeout(text: str) -> SlimeVoiceRouteResult:
+        from foresight_x.voice.calendar_route_fast import transcript_looks_like_calendar_create
+
         raw = str(text or "").strip()
         low = raw.lower()
+        if transcript_looks_like_calendar_create(raw):
+            return SlimeVoiceRouteResult(
+                intent="calendar_create",
+                tool_name="create_calendar_draft",
+                arguments={"_fast_parse": True},
+                requires_confirmation=False,
+                assistant_hint=(
+                    "I heard your calendar request. I'll draft it for confirmation so nothing gets added silently."
+                ),
+            )
         has_calendar_target = any(
             marker in low
             for marker in (
@@ -4207,17 +4219,6 @@ def _run_slime_voice_pipeline(
                 "schedule",
             )
         ) or any(marker in raw for marker in ("日历", "执行日历", "日程", "计划"))
-        asks_calendar_create = any(
-            marker in low
-            for marker in (
-                "add ",
-                "put ",
-                "schedule ",
-                "book ",
-                "set up ",
-                "remind ",
-            )
-        ) or any(marker in raw for marker in ("加", "加入", "安排", "提醒", "放到", "记到"))
         asks_calendar_search = any(
             marker in low
             for marker in (
@@ -4231,17 +4232,6 @@ def _run_slime_voice_pipeline(
                 "this week",
             )
         ) and has_calendar_target
-
-        if has_calendar_target and asks_calendar_create:
-            return SlimeVoiceRouteResult(
-                intent="calendar_create",
-                tool_name="create_calendar_draft",
-                arguments={"_fast_parse": True},
-                requires_confirmation=False,
-                assistant_hint=(
-                    "I heard your calendar request. I'll draft it for confirmation so nothing gets added silently."
-                ),
-            )
         if asks_calendar_search:
             return SlimeVoiceRouteResult(
                 intent="calendar_search",

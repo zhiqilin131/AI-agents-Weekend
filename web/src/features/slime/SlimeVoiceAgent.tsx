@@ -13,6 +13,7 @@ import { apiFetchErrorMessage } from '../../utils/apiOrigin';
 import { confirmCalendarDraft } from '../../utils/calendarAgentApi';
 import { parseSseBlocks } from '../../utils/parseSse';
 import {
+  dispatchExecutionCalendarLocalBump,
   executionStorageKeys,
   SLIME_CALENDAR_BRIEF_CONTEXT_KEY,
   SLIME_VOICE_CALENDAR_RESOLVED_KEY,
@@ -30,6 +31,11 @@ import { ModelSelector } from '../models/ModelSelector';
 import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
 import { BuddyTooltip } from './BuddyTooltip';
 import { calendarMutationKindFromTranscript } from './slimeVoiceIntentGuards';
+import {
+  firstSpeakableChunk,
+  normalizeSpeechText,
+  ttsPrefetchMatchesFinal,
+} from './slimeTtsChunks';
 import { normalizeTtsVoiceName } from '../../utils/ttsVoices';
 
 export type VoiceAgentState =
@@ -63,7 +69,11 @@ export type SlimeSpeechOutput = {
   evidenceItems?: MemoryEvidenceItem[];
 };
 
+export type SlimeVoiceVariant = 'buddy' | 'calendar';
+
 export type SlimeVoiceAgentProps = {
+  /** Buddy = full roaming UI; calendar = compact execution planner dock. */
+  variant?: SlimeVoiceVariant;
   slimeProfile: SlimeProfile;
   onUpdateSlimeProfile?: (patch: Partial<SlimeProfile>) => Promise<void> | void;
   onAdvisorStateChange?: (s: SlimeAdvisorState) => void;
@@ -82,6 +92,8 @@ export type SlimeVoiceAgentProps = {
   onMemoryEvidenceRetrieved?: (count: number) => void;
   /** Speech bubble rendered by the roaming stage so it stays attached to the slime. */
   onSpeechOutputChange?: (output: SlimeSpeechOutput | null) => void;
+  /** Calendar planner: one-line status (no overlay bubble on the slime card). */
+  onCalendarStatusLine?: (line: string | null) => void;
   /** Fired after a voice turn completes successfully (thread may have new messages). */
   onConversationUpdated?: () => void;
   currentRoute?: string;
@@ -277,6 +289,12 @@ function friendlySlimeVoiceError(msg: string): string {
   if (m.includes('no_speech_detected')) {
     return 'No speech detected in that take — hold the mic a little longer or speak closer, then try again.';
   }
+  if (m === 'voice_stream_incomplete' || m.includes('voice_stream_incomplete')) {
+    return 'That voice reply did not finish loading. Tap the mic and try again in a moment.';
+  }
+  if (m === 'voice_stream_failed' || m.includes('voice_stream_failed')) {
+    return 'Something went wrong while streaming that reply. Please try again.';
+  }
   return msg;
 }
 
@@ -309,19 +327,6 @@ function readEvidenceItems(data: VoiceResponse): MemoryEvidenceItem[] {
   ];
   const raw = candidates.find((x) => Array.isArray(x) && x.length) ?? [];
   return raw.filter((x) => x && typeof x.id === 'string') as MemoryEvidenceItem[];
-}
-
-function normalizeSpeechText(s: string): string {
-  return s.replace(/\s+/g, ' ').trim();
-}
-
-function firstSpeakableSentence(text: string): string {
-  const t = normalizeSpeechText(text);
-  if (t.length < 18) return '';
-  const m = t.match(/^(.{18,220}?[.!?。！？])(\s|$)/);
-  if (m?.[1]) return m[1].trim();
-  if (t.length >= 120) return `${t.slice(0, 120).replace(/\s+\S*$/, '').trim()}.`;
-  return '';
 }
 
 function isVoiceRequestCancellable(s: VoiceAgentState): boolean {
@@ -404,6 +409,7 @@ function calendarEventSummary(ev: Pick<SlimeCalendarEvent, 'title' | 'start' | '
 }
 
 export function SlimeVoiceAgent({
+  variant = 'buddy',
   slimeProfile,
   onUpdateSlimeProfile,
   onAdvisorStateChange,
@@ -414,11 +420,13 @@ export function SlimeVoiceAgent({
   onProfileMemorySaved,
   onMemoryEvidenceRetrieved,
   onSpeechOutputChange,
+  onCalendarStatusLine,
   onConversationUpdated,
   currentRoute,
   hideModelSelector = false,
   className,
 }: SlimeVoiceAgentProps) {
+  const isCalendarVariant = variant === 'calendar';
   const navigate = useNavigate();
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const slimeModels = useSlimeModelCatalog();
@@ -472,6 +480,8 @@ export function SlimeVoiceAgent({
     text: string;
     promise: Promise<Blob | null>;
   } | null>(null);
+  /** Prefix already spoken during SSE stream (avoid replaying from the start). */
+  const streamTtsPlayedRef = useRef('');
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     patch: Record<string, unknown>;
@@ -516,6 +526,10 @@ export function SlimeVoiceAgent({
     ) => {
       const trimmed = text.trim();
       setLastReplyText(trimmed || null);
+      if (isCalendarVariant) {
+        onCalendarStatusLine?.(trimmed || null);
+        return;
+      }
       onSpeechOutputChange?.(
         trimmed
           ? {
@@ -527,7 +541,7 @@ export function SlimeVoiceAgent({
           : null,
       );
     },
-    [onSpeechOutputChange],
+    [isCalendarVariant, onCalendarStatusLine, onSpeechOutputChange],
   );
 
   const cancelBuddyAudio = useCallback(() => {
@@ -780,13 +794,48 @@ export function SlimeVoiceAgent({
     [cancelBuddyAudio, fetchTtsBlob, playTtsBlob, showSpeechOutput, slimeProfile.voice],
   );
 
+  const tryPlayStreamTtsEarly = useCallback(
+    (streamedText: string) => {
+      if (streamTtsPlayedRef.current) return;
+      const prefetched = ttsPrefetchRef.current;
+      if (!prefetched) return;
+      const draft = normalizeSpeechText(streamedText);
+      const chunk = normalizeSpeechText(prefetched.text);
+      if (chunk.length < 10 || !ttsPrefetchMatchesFinal(chunk, draft)) return;
+
+      void (async () => {
+        try {
+          const blob = await prefetched.promise;
+          if (!blob || streamTtsPlayedRef.current) return;
+          streamTtsPlayedRef.current = chunk;
+          unlockSlimeAudioContext();
+          cancelBuddyAudio();
+          const gen = ++ttsGenRef.current;
+          setVoiceState('preparing_voice');
+          buddyTtsLoadPendingRef.current = true;
+          await playTtsBlob(
+            blob,
+            gen,
+            chunk,
+            { force: true, source: 'assistant' },
+            () => {},
+            draft,
+          );
+        } catch {
+          streamTtsPlayedRef.current = '';
+        }
+      })();
+    },
+    [cancelBuddyAudio, playTtsBlob],
+  );
+
   const runTtsWithPrefetch = useCallback(
     (text: string, opts?: RunTtsOptions) => {
       const trimmed = normalizeSpeechText(text);
       const prefetched = ttsPrefetchRef.current;
       if (
         prefetched &&
-        trimmed.startsWith(prefetched.text) &&
+        ttsPrefetchMatchesFinal(prefetched.text, trimmed) &&
         prefetched.key === ttsRequestKey(prefetched.text)
       ) {
         ttsPrefetchRef.current = null;
@@ -825,19 +874,56 @@ export function SlimeVoiceAgent({
     [cancelBuddyAudio, playTtsBlob, runTts, ttsRequestKey],
   );
 
+  const playFinalVoiceText = useCallback(
+    (text: string, opts?: RunTtsOptions) => {
+      const normalized = normalizeSpeechText(text);
+      if (!normalized) {
+        opts?.onComplete?.();
+        return;
+      }
+      const played = streamTtsPlayedRef.current;
+      streamTtsPlayedRef.current = '';
+      if (played) {
+        const rest = normalized.slice(played.length).trim();
+        if (rest.length > 6) {
+          runTts(rest, { ...opts, force: true, displayText: normalized });
+          return;
+        }
+        if (played.length >= normalized.length * 0.82) {
+          showSpeechOutput(normalized, {
+            speaking: false,
+            source: opts?.source ?? 'assistant',
+            evidenceItems: opts?.evidenceItems,
+          });
+          setVoiceState('idle');
+          opts?.onComplete?.();
+          return;
+        }
+      }
+      runTtsWithPrefetch(normalized, opts);
+    },
+    [runTts, runTtsWithPrefetch, showSpeechOutput],
+  );
+
   const maybePrefetchStreamTts = useCallback(
     (streamedText: string) => {
-      const first = firstSpeakableSentence(streamedText);
+      const first = firstSpeakableChunk(streamedText);
       if (!first) return;
       const key = ttsRequestKey(first);
       if (ttsPrefetchRef.current?.key === key) return;
+      const promise = fetchTtsBlob(first, 'tts-prefetch', false)
+        .then((blob) => {
+          if (blob) tryPlayStreamTtsEarly(streamedText);
+          return blob;
+        })
+        .catch(() => null);
       ttsPrefetchRef.current = {
         key,
         text: first,
-        promise: fetchTtsBlob(first, 'tts-prefetch', false).catch(() => null),
+        promise,
       };
     },
-    [fetchTtsBlob, ttsRequestKey],
+    [fetchTtsBlob, ttsRequestKey, tryPlayStreamTtsEarly],
   );
 
   const runSpokenSequence = useCallback(
@@ -873,10 +959,18 @@ export function SlimeVoiceAgent({
     try {
       const k = executionStorageKeys(storageUserKey).events;
       const raw = localStorage.getItem(k);
-      const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
-      if (!Array.isArray(arr)) return;
+      let arr: unknown[] = [];
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          if (Array.isArray(parsed)) arr = parsed;
+        } catch {
+          arr = [];
+        }
+      }
       arr.push(event);
       localStorage.setItem(k, JSON.stringify(arr));
+      dispatchExecutionCalendarLocalBump();
     } catch {
       /* ignore */
     }
@@ -895,6 +989,7 @@ export function SlimeVoiceAgent({
           ? arr.map((x) => (x && typeof x === 'object' && (x as { id?: unknown }).id === event.id ? event : x))
           : arr;
       localStorage.setItem(k, JSON.stringify(next));
+      dispatchExecutionCalendarLocalBump();
     } catch {
       /* ignore */
     }
@@ -1086,50 +1181,27 @@ export function SlimeVoiceAgent({
 
   const handleVoiceResponse = useCallback(
     async (data: VoiceResponse) => {
-      void refreshCredits();
       if (data.thread_id) onThreadId?.(data.thread_id);
-      const mus = data.memory_updates;
-      if (mus?.length) {
-        const toastMsg = formatProfileMemoryToast(mus, data.memory_update_details);
-        if (toastMsg) {
-          onProfileMemorySaved?.({
-            message: toastMsg,
-            items: mus,
-            details: (data.memory_update_details || []).map((d) => ({
-              action: d.action,
-              id: (d as { id?: string }).id,
-              text: d.text,
-              category: d.category,
-            })),
-          });
-        }
-      }
-
-      const evidenceItems = readEvidenceItems(data);
-      const phases = data.voice_ui?.memory_phases ?? [];
-      const hadServerMemorySearch =
-        phases.includes('searching_memory') ||
-        data.tool_call?.name === 'search_memory' ||
-        evidenceItems.length > 0;
-      if (hadServerMemorySearch && evidenceItems.length > 0) {
-        setVoiceState('synthesizing');
-      }
-
-      onMemoryEvidenceItemsChange?.(evidenceItems);
-
-      if (evidenceItems.length > 0) {
-        onMemoryEvidenceRetrieved?.(evidenceItems.length);
-      }
-
       setTranscriptPreview(data.transcript || null);
       const assistant = (data.assistant_text || '').trim();
       const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
       setLastReplyText(toSpeak || null);
 
+      const evidenceItems = readEvidenceItems(data);
       const fe = data.frontend_action;
       const convTurn = Boolean(data.tool_result && typeof data.tool_result === 'object' && data.tool_result.conversation_turn);
 
+      const ttsCommon: RunTtsOptions = {
+        force: true,
+        evidenceItems,
+        onComplete: () => setVoiceState('idle'),
+        onMayHaveBlocked: () =>
+          setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
+      };
+
       if (convTurn && data.decision_suggestion?.should_show) {
+        streamTtsPlayedRef.current = '';
+        cancelBuddyAudio();
         onDecisionSuggestion?.(data.decision_suggestion);
         setVoiceState('decision_prompt');
         const decisionSpeak =
@@ -1138,17 +1210,16 @@ export function SlimeVoiceAgent({
           assistant ||
           data.decision_suggestion.display_text?.trim() ||
           '';
-        runTtsWithPrefetch(decisionSpeak, {
-          force: true,
-          evidenceItems,
-          onComplete: () => setVoiceState('idle'),
-          onMayHaveBlocked: () =>
-            setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
-        });
+        playFinalVoiceText(decisionSpeak, ttsCommon);
+        void refreshCredits();
+        onMemoryEvidenceItemsChange?.(evidenceItems);
+        if (evidenceItems.length > 0) onMemoryEvidenceRetrieved?.(evidenceItems.length);
         return;
       }
 
       if (data.transcript && (await prepareCalendarMutation(data.transcript))) {
+        streamTtsPlayedRef.current = '';
+        void refreshCredits();
         return;
       }
 
@@ -1165,6 +1236,9 @@ export function SlimeVoiceAgent({
           setPendingAgentDraftId(null);
         }
         if (resolved?.start_iso && resolved?.end_iso) {
+          streamTtsPlayedRef.current = '';
+          cancelBuddyAudio();
+          onCalendarStatusLine?.(`Ready to add: ${resolved.display_summary}. Tap Add below.`);
           setPendingCalendar(resolved);
           setPendingCalendarMutation(null);
           setPendingConfirm(null);
@@ -1180,6 +1254,8 @@ export function SlimeVoiceAgent({
       }
 
       if (fe?.type === 'show_calendar_draft' && fe.route) {
+        streamTtsPlayedRef.current = '';
+        cancelBuddyAudio();
         applySlimeVoiceFrontendAction(navigate, fe as SlimeVoiceFrontendAction);
         setPendingConfirm(null);
         setPendingCalendar(null);
@@ -1217,21 +1293,43 @@ export function SlimeVoiceAgent({
       }
 
       onDecisionSuggestion?.(null);
-      if (convTurn && data.spoken_sequence && data.spoken_sequence.length > 0) {
-        runSpokenSequence(data.spoken_sequence, {
-          force: true,
-          evidenceItems,
-          onAllComplete: () => setVoiceState('idle'),
-        });
-        return;
+      const speakBody =
+        convTurn && data.spoken_sequence && data.spoken_sequence.length > 0
+          ? data.spoken_sequence.map((p) => p.trim()).filter(Boolean).join(' ')
+          : toSpeak;
+      if (speakBody) {
+        playFinalVoiceText(speakBody, ttsCommon);
       }
 
-      runTtsWithPrefetch(toSpeak, {
-        force: true,
-        evidenceItems,
-        onMayHaveBlocked: () =>
-          setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
-      });
+      void refreshCredits();
+      const mus = data.memory_updates;
+      if (mus?.length) {
+        const toastMsg = formatProfileMemoryToast(mus, data.memory_update_details);
+        if (toastMsg) {
+          onProfileMemorySaved?.({
+            message: toastMsg,
+            items: mus,
+            details: (data.memory_update_details || []).map((d) => ({
+              action: d.action,
+              id: (d as { id?: string }).id,
+              text: d.text,
+              category: d.category,
+            })),
+          });
+        }
+      }
+      const phases = data.voice_ui?.memory_phases ?? [];
+      const hadServerMemorySearch =
+        phases.includes('searching_memory') ||
+        data.tool_call?.name === 'search_memory' ||
+        evidenceItems.length > 0;
+      if (hadServerMemorySearch && evidenceItems.length > 0) {
+        setVoiceState('synthesizing');
+      }
+      onMemoryEvidenceItemsChange?.(evidenceItems);
+      if (evidenceItems.length > 0) {
+        onMemoryEvidenceRetrieved?.(evidenceItems.length);
+      }
     },
     [
       refreshCredits,
@@ -1241,10 +1339,10 @@ export function SlimeVoiceAgent({
       onMemoryEvidenceItemsChange,
       prepareCalendarMutation,
       onDecisionSuggestion,
+      cancelBuddyAudio,
+      playFinalVoiceText,
       runTts,
-      runTtsWithPrefetch,
       navigate,
-      runSpokenSequence,
     ],
   );
 
@@ -1292,6 +1390,8 @@ export function SlimeVoiceAgent({
       if (typeof recordingMs === 'number' && Number.isFinite(recordingMs)) {
         fd.append('recording_ms', String(recordingMs));
       }
+      streamTtsPlayedRef.current = '';
+      ttsPrefetchRef.current = null;
       setVoiceState('thinking');
       if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
       if (verySlowHintTimerRef.current != null) window.clearTimeout(verySlowHintTimerRef.current);
@@ -1363,14 +1463,19 @@ export function SlimeVoiceAgent({
           } else if (type === 'transcript_ready') {
             const transcript = String(ev.transcript || '').trim();
             if (transcript) setTranscriptPreview(transcript);
+            unlockSlimeAudioContext();
           } else if (type === 'text_delta') {
             const delta = String(ev.delta || '');
             if (!delta.trim()) return;
             streamedText = streamedText ? `${streamedText}${delta}` : delta;
             const draft = normalizeSpeechText(streamedText);
             if (draft) {
-              setStreamDraftReply(draft);
-              showSpeechOutput(draft, { speaking: false, source: 'assistant' });
+              if (isCalendarVariant) {
+                onCalendarStatusLine?.(draft);
+              } else {
+                setStreamDraftReply(draft);
+                showSpeechOutput(draft, { speaking: false, source: 'assistant' });
+              }
             }
             setVoiceState('preparing_voice');
             maybePrefetchStreamTts(streamedText);
@@ -1436,6 +1541,7 @@ export function SlimeVoiceAgent({
       handleVoiceResponse,
       maybePrefetchStreamTts,
       onConversationUpdated,
+      unlockSlimeAudioContext,
     ],
   );
 
@@ -1504,13 +1610,20 @@ export function SlimeVoiceAgent({
   const petName = slimeProfile.name?.trim() || 'your Slime';
 
   /** Bottom-anchored lane; split z-index so SlimeCompanionStage can paint between panels and mic (see Buddy page). */
-  const voiceLane = 'absolute left-1/2 w-[min(100%,380px)] -translate-x-1/2';
-  const voiceDockLane = 'absolute left-1/2 w-[min(92vw,500px)] -translate-x-1/2';
-  const showVoiceDockMeta = Boolean(
-    transcriptPreview || streamDraftReply || (lastReplyText && !recording),
-  );
+  const voiceLane = isCalendarVariant
+    ? 'relative w-full'
+    : 'absolute left-1/2 w-[min(100%,380px)] -translate-x-1/2';
+  const voiceDockLane = isCalendarVariant
+    ? 'relative w-full'
+    : 'absolute left-1/2 w-[min(92vw,500px)] -translate-x-1/2';
+  const showVoiceDockMeta =
+    !isCalendarVariant &&
+    Boolean(transcriptPreview || streamDraftReply || (lastReplyText && !recording));
   const showVoiceDockStatus =
-    !recording && voiceState !== 'idle' && Boolean(statusLabel(voiceState));
+    !isCalendarVariant &&
+    !recording &&
+    voiceState !== 'idle' &&
+    Boolean(statusLabel(voiceState));
   const showVoiceCancel = !recording && isVoiceRequestCancellable(voiceState);
 
   return (
@@ -1519,8 +1632,9 @@ export function SlimeVoiceAgent({
         data-slime-avoid
         className={cn(
           voiceLane,
-          /* Keep transcript/reply controls clearly above the mic stack to avoid overlap in Buddy/Calendar layouts. */
-          'bottom-[132px] z-[32] flex flex-col items-center gap-2 pointer-events-auto sm:bottom-[136px]',
+          isCalendarVariant
+            ? 'z-[10] flex flex-col items-center gap-2 pointer-events-auto'
+            : 'bottom-[132px] z-[32] flex flex-col items-center gap-2 pointer-events-auto sm:bottom-[136px]',
           className,
         )}
       >
@@ -1563,7 +1677,12 @@ export function SlimeVoiceAgent({
       {pendingCalendar || pendingCalendarMutation ? (
         <div
           data-slime-avoid
-          className="pointer-events-auto fixed bottom-[max(5.7rem,calc(env(safe-area-inset-bottom,0px)+5rem))] right-4 z-[58] w-[min(92vw,22rem)] rounded-3xl border border-white/80 bg-white/90 p-3 text-left shadow-[0_18px_60px_rgba(79,70,229,0.18)] backdrop-blur-xl sm:right-6"
+          className={cn(
+            'pointer-events-auto z-[58] rounded-3xl border border-white/80 bg-white/90 p-3 text-left shadow-[0_18px_60px_rgba(79,70,229,0.18)] backdrop-blur-xl',
+            isCalendarVariant
+              ? 'relative mt-2 w-full'
+              : 'fixed bottom-[max(5.7rem,calc(env(safe-area-inset-bottom,0px)+5rem))] right-4 w-[min(92vw,22rem)] sm:right-6',
+          )}
         >
           {pendingCalendar ? (
             <>
@@ -1659,7 +1778,10 @@ export function SlimeVoiceAgent({
 
       <div
         data-slime-avoid
-        className={cn(voiceDockLane, 'bottom-2 z-[52] pointer-events-auto sm:bottom-3')}
+        className={cn(
+          voiceDockLane,
+          isCalendarVariant ? 'mt-2 z-[52] pointer-events-auto' : 'bottom-2 z-[52] pointer-events-auto sm:bottom-3',
+        )}
       >
         <div
           className={cn(
