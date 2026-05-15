@@ -19,6 +19,7 @@ from pathlib import Path
 from foresight_x.config import Settings, load_settings
 from foresight_x.db.supabase_client import get_client
 from foresight_x.profile.merge import normalize_profile_ids
+from foresight_x.profile.onboarding_sync import hydrate_profile_from_onboarding
 from foresight_x.schemas import UserProfile
 
 _log = logging.getLogger(__name__)
@@ -75,8 +76,10 @@ def _local_load_user_profile(settings: Settings | None = None) -> UserProfile:
         return UserProfile()
     raw = UserProfile.model_validate_json(path.read_text(encoding="utf-8"))
     fixed, changed = normalize_profile_ids(raw)
-    if changed:
-        _local_save_user_profile(fixed, settings=settings)
+    hydrated = hydrate_profile_from_onboarding(fixed)
+    if changed or hydrated.model_dump(mode="json") != fixed.model_dump(mode="json"):
+        _local_save_user_profile(hydrated, settings=settings)
+        return hydrated
     return fixed
 
 
@@ -84,6 +87,7 @@ def _local_save_user_profile(profile: UserProfile, settings: Settings | None = N
     s = settings or load_settings()
     s.profile_dir.mkdir(parents=True, exist_ok=True)
     profile = UserProfile.model_validate(profile.model_dump(mode="json"))
+    profile = hydrate_profile_from_onboarding(profile)
     stated = profile.stated_priority_lines()
     profile = profile.model_copy(update={"user_priorities": stated, "priorities": stated})
     path = profile_path(s)
@@ -127,8 +131,10 @@ def load_user_profile(settings: Settings | None = None) -> UserProfile:
 
         parsed = UserProfile.model_validate(raw_profile)
         fixed, changed = normalize_profile_ids(parsed)
-        if changed:
-            save_user_profile(fixed, settings=s)
+        hydrated = hydrate_profile_from_onboarding(fixed)
+        if changed or hydrated.model_dump(mode="json") != fixed.model_dump(mode="json"):
+            save_user_profile(hydrated, settings=s)
+            return hydrated
         return fixed
     except Exception as exc:
         _handle_supabase_failure("load_user_profile", uid, exc)
@@ -140,6 +146,7 @@ def save_user_profile(profile: UserProfile, settings: Settings | None = None) ->
     uid = (s.foresight_user_id or "").strip() or "demo_user"
 
     profile = UserProfile.model_validate(profile.model_dump(mode="json"))
+    profile = hydrate_profile_from_onboarding(profile)
     stated = profile.stated_priority_lines()
     profile = profile.model_copy(update={"user_priorities": stated, "priorities": stated})
     payload_profile = profile.model_dump(mode="json")

@@ -7,7 +7,6 @@ with `stream_shadow_chat_message` without duplicating the full SSE clarification
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
@@ -34,7 +33,7 @@ from foresight_x.voice.slime_persona_prompt import (
 from foresight_x.voice.slime_self_model import get_effective_slime_self_model
 from foresight_x.voice.slime_profile_nl import try_apply_slime_profile_from_chat_message
 from foresight_x.voice.slime_self_reply import answer_slime_self_question
-from foresight_x.voice.slime_memory_synthesis import MemoryEvidenceItem
+from foresight_x.voice.memory_evidence import build_turn_memory_evidence
 
 _log = logging.getLogger(__name__)
 
@@ -115,34 +114,6 @@ def _enrich_decision_suggestion_for_voice(
         "confidence": 0.86,
         "shadow_suggestion": base,
     }
-
-
-def _evidence_items_from_shadow_memory(used_memory_facts: Any) -> list[dict[str, Any]]:
-    """Compact evidence chips for general Slime replies that used Shadow/profile memory."""
-    if not isinstance(used_memory_facts, list):
-        return []
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for text in used_memory_facts[:6]:
-        t = " ".join(str(text or "").split())
-        if not t:
-            continue
-        key = t.lower()[:120]
-        if key in seen:
-            continue
-        seen.add(key)
-        short = t[:64] + "…" if len(t) > 67 else t
-        out.append(
-            MemoryEvidenceItem(
-                id=f"used-{uuid.uuid4().hex[:8]}",
-                type="memory",
-                label="Used memory",
-                shortText=short,
-                fullText=t[:900],
-                confidence=0.64,
-            ).model_dump(mode="json")
-        )
-    return out
 
 
 def maybe_slime_voice_preflight_reply(raw_msg: str, *, settings: Settings) -> tuple[str, str] | None:
@@ -414,7 +385,10 @@ def process_conversation_turn(
             }
     # The UI now shows Decision Mode as a bubble action chip; keep voice focused on the answer.
     spoken_sequence: list[str] = [text]
-    evidence_items = _evidence_items_from_shadow_memory(out.used_memory_facts or [])
+    evidence_items = build_turn_memory_evidence(
+        retrieved_facts=getattr(out, "retrieved_memory_facts", None) or [],
+        used_text_facts=out.used_memory_facts or [],
+    )
 
     return {
         "thread_id": str(thread.get("thread_id") or ""),

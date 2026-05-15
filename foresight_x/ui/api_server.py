@@ -1295,8 +1295,15 @@ def put_profile(body: UserProfile) -> dict:
     settings = _settings_for_active_user()
     existing = load_user_profile(settings)
     existing = UserProfile.model_validate(existing.model_dump(mode="json"))
-    stated_raw = body.user_priorities or body.priorities
-    stated = list(stated_raw) if stated_raw else existing.profile_channel_priority_texts()
+    from foresight_x.profile.onboarding_sync import (
+        resolve_personal_profile_for_put,
+        stated_priorities_for_put,
+        values_for_put,
+    )
+
+    merged_personal_profile = resolve_personal_profile_for_put(body, existing)
+    stated = stated_priorities_for_put(body, existing, merged_personal_profile)
+    merged_values = values_for_put(body, existing, merged_personal_profile)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     system_lines = [x for x in existing.priority_lines if x.origin == "system"]
     clar_lines = [x for x in existing.priority_lines if x.origin == "user" and x.channel == "clarification"]
@@ -1320,9 +1327,6 @@ def put_profile(body: UserProfile) -> dict:
     i = [x.text for x in system_lines]
     merged_tz = (body.timezone or "").strip() or (existing.timezone or "UTC").strip() or "UTC"
     dmid = (body.default_model_option_id or "").strip()[:64] or (existing.default_model_option_id or "").strip()[:64]
-    merged_personal_profile = (
-        body.personal_profile if "personal_profile" in body.model_fields_set else existing.personal_profile
-    )
     merged = existing.model_copy(
         update={
             "priority_lines": merged_lines,
@@ -1331,12 +1335,15 @@ def put_profile(body: UserProfile) -> dict:
             "inferred_priorities": i,
             "about_me": body.about_me,
             "constraints": list(body.constraints),
-            "values": list(body.values),
+            "values": merged_values,
             "timezone": merged_tz[:80],
             "default_model_option_id": dmid,
             "personal_profile": merged_personal_profile,
         }
     )
+    from foresight_x.profile.onboarding_sync import hydrate_profile_from_onboarding
+
+    merged = hydrate_profile_from_onboarding(merged)
     path = save_user_profile(merged, settings=settings)
     return {"ok": True, "path": str(path)}
 
@@ -4351,11 +4358,16 @@ def _run_slime_voice_pipeline(
         ds = turn.get("decision_suggestion")
         fe_out = turn.get("frontend_action") or {"type": "none", "route": "", "payload": {}}
 
+        evidence_items = turn.get("evidence_items") if isinstance(turn.get("evidence_items"), list) else []
         voice_ui = {
             "intent": str(turn.get("intent") or route.intent),
-            "memory_phases": [],
-            "evidence_items": [],
-            "should_show_evidence_drawer": False,
+            "memory_phases": ["searching_memory", "synthesizing"] if evidence_items else [],
+            "evidence_items": evidence_items,
+            "should_show_evidence_drawer": bool(evidence_items),
+        }
+        merged_tool_result = {
+            **tool_result_payload,
+            "evidence_items": evidence_items,
         }
         return {
             "transcript": transcript,
@@ -4370,13 +4382,14 @@ def _run_slime_voice_pipeline(
             "memory_updates": turn.get("memory_updates") or [],
             "memory_update_details": turn.get("memory_update_details") or [],
             "tool_call": {"name": route.tool_name, "arguments": route.arguments},
-            "tool_result": tool_result_payload,
+            "tool_result": merged_tool_result,
             "frontend_action": fe_out,
             "requires_confirmation": bool(ds and ds.get("should_show")),
             "route_timeout_fallback": route_timed_out,
             "tool_timeout_fallback": tool_timeout_fallback,
             "timing": timing,
             "voice_ui": voice_ui,
+            "evidence_items": evidence_items,
         }
 
     tool_executables = {

@@ -7,6 +7,7 @@ import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionReportStreamingPanel';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
+import { BuddyRecentChatPanel } from '../features/slime/BuddyRecentChatPanel';
 import { SlimeCompanionStage } from '../features/slime/SlimeCompanionStage';
 import { SlimePersonalizationForm } from '../features/slime/SlimePersonalizationForm';
 import type { SlimeDecisionSuggestion, SlimeSpeechOutput } from '../features/slime/SlimeVoiceAgent';
@@ -52,6 +53,7 @@ export default function SlimeCompanionPage() {
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false);
   const [flaggedEvidenceIds, setFlaggedEvidenceIds] = useState<Set<string>>(() => new Set());
   const [buddyThreadId, setBuddyThreadId] = useState<string | null>(null);
+  const [buddyRecapRefresh, setBuddyRecapRefresh] = useState(0);
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const reportStream = useDecisionReportStream();
@@ -59,6 +61,7 @@ export default function SlimeCompanionPage() {
   const persistThreadId = useCallback(
     (id: string) => {
       setBuddyThreadId(id);
+      setBuddyRecapRefresh((n) => n + 1);
       const k = buddyThreadStorageKey(authUserId);
       if (!k) return;
       try {
@@ -70,6 +73,19 @@ export default function SlimeCompanionPage() {
     },
     [authUserId],
   );
+
+  const openBuddyChat = useCallback(() => {
+    const tid = buddyThreadId?.trim();
+    if (tid) {
+      navigate(`/chat?thread=${encodeURIComponent(tid)}`);
+      return;
+    }
+    navigate('/chat');
+  }, [buddyThreadId, navigate]);
+
+  const onBuddyConversationUpdated = useCallback(() => {
+    setBuddyRecapRefresh((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const k = buddyThreadStorageKey(authUserId);
@@ -284,6 +300,14 @@ export default function SlimeCompanionPage() {
         </button>
       </BuddyTooltip>
 
+      <BuddyRecentChatPanel
+        threadId={buddyThreadId}
+        refreshToken={buddyRecapRefresh}
+        slimeName={slimeDraft.name}
+        storageUserId={authUserId}
+        onOpenFullChat={openBuddyChat}
+      />
+
       {/* Bottom-left: link to full Chat UI; logo below — stays clear of center mic column */}
       <div
         data-slime-avoid
@@ -293,8 +317,12 @@ export default function SlimeCompanionPage() {
           <button
             type="button"
             data-testid="slime-buddy-open-chat"
-            onClick={() => navigate('/chat')}
-            aria-label="Open Chat — traditional full-feature dialog"
+            onClick={openBuddyChat}
+            aria-label={
+              buddyThreadId
+                ? 'Open Chat — continue this buddy conversation in the full workspace'
+                : 'Open Chat — traditional full-feature dialog'
+            }
             className="inline-flex items-center gap-2 rounded-full border border-violet-200/80 bg-white/85 px-3.5 py-2 text-xs font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400/80 hover:bg-white sm:text-sm"
           >
             <MessageSquare className="h-3.5 w-3.5 shrink-0 text-violet-600" aria-hidden />
@@ -348,6 +376,7 @@ export default function SlimeCompanionPage() {
               const next = await updateSlimeProfile(patch);
               setSlimeDraft(next);
             }}
+            onConversationUpdated={onBuddyConversationUpdated}
           />
           <SlimeCompanionStage
             className="relative z-[44]"

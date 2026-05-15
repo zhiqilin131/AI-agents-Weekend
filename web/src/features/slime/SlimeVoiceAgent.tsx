@@ -81,6 +81,8 @@ export type SlimeVoiceAgentProps = {
   onMemoryEvidenceRetrieved?: (count: number) => void;
   /** Speech bubble rendered by the roaming stage so it stays attached to the slime. */
   onSpeechOutputChange?: (output: SlimeSpeechOutput | null) => void;
+  /** Fired after a voice turn completes successfully (thread may have new messages). */
+  onConversationUpdated?: () => void;
   currentRoute?: string;
   hideModelSelector?: boolean;
   className?: string;
@@ -245,6 +247,8 @@ type VoiceResponse = {
   tool_call?: { name?: string };
   frontend_action?: SlimeVoiceFrontendAction;
   tool_result?: { evidence_items?: MemoryEvidenceItem[]; conversation_turn?: boolean };
+  /** Top-level evidence chips (conversation turn path). */
+  evidence_items?: MemoryEvidenceItem[];
   voice_ui?: {
     intent?: string;
     memory_phases?: string[];
@@ -297,9 +301,12 @@ function formatProfileMemoryToast(
 }
 
 function readEvidenceItems(data: VoiceResponse): MemoryEvidenceItem[] {
-  const a = data.voice_ui?.evidence_items;
-  const b = data.tool_result?.evidence_items;
-  const raw = (Array.isArray(a) && a.length ? a : b) ?? [];
+  const candidates = [
+    data.evidence_items,
+    data.voice_ui?.evidence_items,
+    data.tool_result?.evidence_items,
+  ];
+  const raw = candidates.find((x) => Array.isArray(x) && x.length) ?? [];
   return raw.filter((x) => x && typeof x.id === 'string') as MemoryEvidenceItem[];
 }
 
@@ -314,6 +321,18 @@ function firstSpeakableSentence(text: string): string {
   if (m?.[1]) return m[1].trim();
   if (t.length >= 120) return `${t.slice(0, 120).replace(/\s+\S*$/, '').trim()}.`;
   return '';
+}
+
+function isVoiceRequestCancellable(s: VoiceAgentState): boolean {
+  return (
+    s === 'transcribing' ||
+    s === 'searching_memory' ||
+    s === 'synthesizing' ||
+    s === 'thinking' ||
+    s === 'preparing_voice' ||
+    s === 'executing_tool' ||
+    s === 'auto_stopping'
+  );
 }
 
 function speechPhaseLabel(phase: VoiceRecorderSpeechPhase, recording: boolean): string | null {
@@ -402,6 +421,7 @@ export function SlimeVoiceAgent({
   onProfileMemorySaved,
   onMemoryEvidenceRetrieved,
   onSpeechOutputChange,
+  onConversationUpdated,
   currentRoute,
   hideModelSelector = false,
   className,
@@ -441,6 +461,8 @@ export function SlimeVoiceAgent({
   const [ttsHint, setTtsHint] = useState<string | null>(null);
   const [latencyHint, setLatencyHint] = useState<string | null>(null);
   const inFlightRequestRef = useRef(0);
+  const voiceRequestAbortRef = useRef<AbortController | null>(null);
+  const [streamDraftReply, setStreamDraftReply] = useState<string | null>(null);
   const slowHintTimerRef = useRef<number | null>(null);
   const verySlowHintTimerRef = useRef<number | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
@@ -472,6 +494,23 @@ export function SlimeVoiceAgent({
   const clearSpeechOutput = useCallback(() => {
     onSpeechOutputChange?.(null);
   }, [onSpeechOutputChange]);
+
+  const cancelVoiceRequest = useCallback(() => {
+    voiceRequestAbortRef.current?.abort();
+    voiceRequestAbortRef.current = null;
+    inFlightRequestRef.current += 1;
+    if (slowHintTimerRef.current != null) {
+      window.clearTimeout(slowHintTimerRef.current);
+      slowHintTimerRef.current = null;
+    }
+    if (verySlowHintTimerRef.current != null) {
+      window.clearTimeout(verySlowHintTimerRef.current);
+      verySlowHintTimerRef.current = null;
+    }
+    setLatencyHint(null);
+    setStreamDraftReply(null);
+    setVoiceState('idle');
+  }, []);
 
   const showSpeechOutput = useCallback(
     (
@@ -524,6 +563,13 @@ export function SlimeVoiceAgent({
   }, []);
 
   useEffect(() => () => cancelBuddyAudio(), [cancelBuddyAudio]);
+
+  useEffect(
+    () => () => {
+      voiceRequestAbortRef.current?.abort();
+    },
+    [],
+  );
 
   useEffect(
     () => () => {
@@ -802,7 +848,14 @@ export function SlimeVoiceAgent({
   );
 
   const runSpokenSequence = useCallback(
-    (parts: string[], baseOpts?: { force?: boolean; onAllComplete?: () => void }) => {
+    (
+      parts: string[],
+      baseOpts?: {
+        force?: boolean;
+        onAllComplete?: () => void;
+        evidenceItems?: MemoryEvidenceItem[];
+      },
+    ) => {
       const lines = parts.map((p) => p.trim()).filter(Boolean);
       if (!lines.length) {
         baseOpts?.onAllComplete?.();
@@ -813,6 +866,7 @@ export function SlimeVoiceAgent({
         const isLast = index + 1 >= lines.length;
         runTts(lines[index], {
           force: baseOpts?.force ?? true,
+          evidenceItems: isLast ? baseOpts?.evidenceItems : undefined,
           onComplete: isLast ? baseOpts?.onAllComplete : () => playAt(index + 1),
         });
       };
@@ -1058,16 +1112,19 @@ export function SlimeVoiceAgent({
         }
       }
 
+      const evidenceItems = readEvidenceItems(data);
       const phases = data.voice_ui?.memory_phases ?? [];
-      const hadServerMemorySearch = phases.includes('searching_memory') || data.tool_call?.name === 'search_memory';
-      if (hadServerMemorySearch) {
+      const hadServerMemorySearch =
+        phases.includes('searching_memory') ||
+        data.tool_call?.name === 'search_memory' ||
+        evidenceItems.length > 0;
+      if (hadServerMemorySearch && evidenceItems.length > 0) {
         setVoiceState('synthesizing');
       }
 
-      const evidenceItems = readEvidenceItems(data);
       onMemoryEvidenceItemsChange?.(evidenceItems);
 
-      if (hadServerMemorySearch && evidenceItems.length > 0) {
+      if (evidenceItems.length > 0) {
         onMemoryEvidenceRetrieved?.(evidenceItems.length);
       }
 
@@ -1163,6 +1220,7 @@ export function SlimeVoiceAgent({
       if (convTurn && data.spoken_sequence && data.spoken_sequence.length > 0) {
         runSpokenSequence(data.spoken_sequence, {
           force: true,
+          evidenceItems,
           onAllComplete: () => setVoiceState('idle'),
         });
         return;
@@ -1193,6 +1251,10 @@ export function SlimeVoiceAgent({
   const sendVoiceBlob = useCallback(
     async (blob: Blob | null) => {
       unlockSlimeAudioContext();
+      voiceRequestAbortRef.current?.abort();
+      const abortController = new AbortController();
+      voiceRequestAbortRef.current = abortController;
+      setStreamDraftReply(null);
       setVoiceState('transcribing');
       setLatencyHint(null);
       const requestGen = ++inFlightRequestRef.current;
@@ -1251,6 +1313,7 @@ export function SlimeVoiceAgent({
           method: 'POST',
           headers: { 'X-Credit-Request-Id': vcCredit },
           body: fd,
+          signal: abortController.signal,
         });
         const uploadMs = Math.max(0, Math.round(performance.now() - reqStart));
         if (inFlightRequestRef.current === requestGen) {
@@ -1301,9 +1364,14 @@ export function SlimeVoiceAgent({
             const transcript = String(ev.transcript || '').trim();
             if (transcript) setTranscriptPreview(transcript);
           } else if (type === 'text_delta') {
-            const delta = String(ev.delta || '').trim();
-            if (!delta) return;
-            streamedText = streamedText ? `${streamedText} ${delta}` : delta;
+            const delta = String(ev.delta || '');
+            if (!delta.trim()) return;
+            streamedText = streamedText ? `${streamedText}${delta}` : delta;
+            const draft = normalizeSpeechText(streamedText);
+            if (draft) {
+              setStreamDraftReply(draft);
+              showSpeechOutput(draft, { speaking: false, source: 'assistant' });
+            }
             setVoiceState('preparing_voice');
             maybePrefetchStreamTts(streamedText);
           } else if (type === 'error') {
@@ -1337,11 +1405,23 @@ export function SlimeVoiceAgent({
         if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
         if (verySlowHintTimerRef.current != null) window.clearTimeout(verySlowHintTimerRef.current);
         setLatencyHint(null);
+        setStreamDraftReply(null);
         await handleVoiceResponse(finalData);
+        onConversationUpdated?.();
       } catch (e) {
         if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
         if (verySlowHintTimerRef.current != null) window.clearTimeout(verySlowHintTimerRef.current);
         setLatencyHint(null);
+        setStreamDraftReply(null);
+        voiceRequestAbortRef.current = null;
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          setVoiceState('idle');
+          return;
+        }
+        if (e instanceof Error && e.name === 'AbortError') {
+          setVoiceState('idle');
+          return;
+        }
         setVoiceState('error');
         showSpeechOutput(friendlySlimeVoiceError(apiFetchErrorMessage(e)), { source: 'error' });
       }
@@ -1355,6 +1435,7 @@ export function SlimeVoiceAgent({
       showSpeechOutput,
       handleVoiceResponse,
       maybePrefetchStreamTts,
+      onConversationUpdated,
     ],
   );
 
@@ -1373,6 +1454,7 @@ export function SlimeVoiceAgent({
       return;
     }
 
+    cancelVoiceRequest();
     cancelBuddyAudio();
     ttsGenRef.current += 1;
     setTranscriptPreview(null);
@@ -1398,6 +1480,7 @@ export function SlimeVoiceAgent({
     clearSpeechOutput,
     onDecisionSuggestion,
     onMemoryEvidenceItemsChange,
+    cancelVoiceRequest,
   ]);
 
   const onConfirmPatch = useCallback(async () => {
@@ -1423,8 +1506,12 @@ export function SlimeVoiceAgent({
   /** Bottom-anchored lane; split z-index so SlimeCompanionStage can paint between panels and mic (see Buddy page). */
   const voiceLane = 'absolute left-1/2 w-[min(100%,380px)] -translate-x-1/2';
   const voiceDockLane = 'absolute left-1/2 w-[min(92vw,500px)] -translate-x-1/2';
-  const showVoiceDockMeta = Boolean(transcriptPreview || (lastReplyText && !recording));
-  const showVoiceDockStatus = !recording && voiceState !== 'idle' && Boolean(statusLabel(voiceState));
+  const showVoiceDockMeta = Boolean(
+    transcriptPreview || streamDraftReply || (lastReplyText && !recording),
+  );
+  const showVoiceDockStatus =
+    !recording && voiceState !== 'idle' && Boolean(statusLabel(voiceState));
+  const showVoiceCancel = !recording && isVoiceRequestCancellable(voiceState);
 
   return (
     <>
@@ -1590,7 +1677,19 @@ export function SlimeVoiceAgent({
                 </div>
               ) : null}
 
-              {lastReplyText && !recording ? (
+              {streamDraftReply && !recording ? (
+                <motion.div
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="min-w-0 max-w-[min(66vw,360px)] rounded-full border border-fuchsia-200/80 bg-fuchsia-50/90 px-3 py-1.5 text-center text-[11px] leading-snug text-fuchsia-950 shadow-sm backdrop-blur-md"
+                >
+                  <span className="font-semibold text-fuchsia-800">Replying</span>
+                  <span className="mx-1 text-fuchsia-300">•</span>
+                  <span className="line-clamp-2 align-bottom">{streamDraftReply}</span>
+                </motion.div>
+              ) : null}
+
+              {lastReplyText && !recording && !streamDraftReply ? (
                 <BuddyTooltip content="Play the assistant's last reply with the saved TTS voice.">
                   <button
                     type="button"
@@ -1648,8 +1747,19 @@ export function SlimeVoiceAgent({
           {recording && speechPhaseLabel(speechPhase, recording) ? (
             <p className="relative z-10 text-center text-xs font-medium text-cyan-900/90">{speechPhaseLabel(speechPhase, recording)}</p>
           ) : null}
+          {showVoiceCancel ? (
+            <BuddyTooltip content="Stop this request and return to idle.">
+              <button
+                type="button"
+                onClick={() => cancelVoiceRequest()}
+                className="relative z-10 rounded-full border border-red-200/90 bg-red-50/95 px-3 py-1 text-[11px] font-semibold text-red-800 shadow-sm transition hover:bg-red-100"
+              >
+                Stop
+              </button>
+            </BuddyTooltip>
+          ) : null}
           {showVoiceDockStatus ? (
-            <div
+            <motion.div
               className="relative z-10 w-full overflow-hidden rounded-full border border-white/55 bg-white/32 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]"
               aria-label={statusLabel(voiceState)}
             >
@@ -1695,7 +1805,7 @@ export function SlimeVoiceAgent({
                   </div>
                 ))}
               </div>
-            </div>
+            </motion.div>
           ) : null}
         </div>
       </div>

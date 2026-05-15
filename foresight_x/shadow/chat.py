@@ -189,6 +189,8 @@ class ShadowTurnOutput:
     profile_memory_events: list[dict[str, Any]] = field(default_factory=list)
     thread_only_items: list[dict[str, Any]] = field(default_factory=list)
     memory_confirmation_question: str | None = None
+    #: Profile facts ranked for this turn (for UI evidence chips).
+    retrieved_memory_facts: list[ProfileMemoryFact] = field(default_factory=list)
 
 
 class ShadowChatTurn(BaseModel):
@@ -306,8 +308,109 @@ def _coerce_category(raw: str) -> MemoryFactCategory:
     return m.get(str(raw).strip().lower(), MemoryFactCategory.OTHER)
 
 
+def collect_user_stated_priority_texts(prof: Any, *, limit: int = 12) -> list[str]:
+    """Authoritative user priorities: onboarding personal_profile + profile channel lines."""
+    from foresight_x.profile.onboarding_sync import merge_unique_texts, priority_texts_from_personal_profile
+
+    pp = getattr(prof, "personal_profile", None)
+    merged = merge_unique_texts(
+        priority_texts_from_personal_profile(pp),
+        prof.profile_channel_priority_texts(),
+        prof.stated_priority_lines(),
+    )
+    return merged[:limit]
+
+
+def collect_user_stated_value_texts(prof: Any, *, limit: int = 12) -> list[str]:
+    """Authoritative values: onboarding PVQ keywords + narrative + profile.values."""
+    from foresight_x.profile.onboarding_sync import merge_unique_texts, value_keywords_from_personal_profile
+
+    pp = getattr(prof, "personal_profile", None)
+    merged = merge_unique_texts(
+        value_keywords_from_personal_profile(pp),
+        list(prof.values or []),
+    )
+    return merged[:limit]
+
+
+def profile_has_priorities_or_values(prof: Any) -> bool:
+    return bool(collect_user_stated_priority_texts(prof, limit=1)) or bool(
+        collect_user_stated_value_texts(prof, limit=1)
+    )
+
+
+def is_priority_or_values_recall_question(text: str) -> bool:
+    """User asks what priorities/values are on file (not thread-local chit-chat)."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    t = raw.lower()
+    if any(
+        p in t
+        for p in (
+            "my priorit",
+            "what are my priorit",
+            "what're my priorit",
+            "top priorit",
+            "life priorit",
+            "what matters to me",
+            "what do i care about",
+            "my values",
+            "what are my values",
+            "what did i say about priorit",
+            "onboarding",
+        )
+    ):
+        return True
+    if re.search(r"(?:优先|价值观|人生目标|看重什么)", raw):
+        return True
+    return False
+
+
+def _format_personal_profile_block(prof: Any) -> str:
+    """Onboarding-captured priorities and values portrait (PersonalProfile)."""
+    pp = getattr(prof, "personal_profile", None)
+    bits: list[str] = []
+    prio_texts = collect_user_stated_priority_texts(prof)
+    value_texts = collect_user_stated_value_texts(prof)
+    if prio_texts:
+        bits.append(
+            "[AUTHORITATIVE — user-stated PRIORITIES from onboarding/profile; cite when they ask "
+            "what their priorities are or when weighing trade-offs, even if this chat thread is new]\n"
+            + "; ".join(prio_texts)
+        )
+    if value_texts:
+        bits.append(
+            "[AUTHORITATIVE — user-stated VALUES from onboarding/profile; cite when they ask "
+            "what their values are or when giving advice; weave at least one value lens into recommendations]\n"
+            + "; ".join(value_texts)
+        )
+    if pp is not None:
+        vp = getattr(pp, "valuesProfile", None)
+        narrative = ""
+        if vp is not None:
+            narrative = str(getattr(vp, "narrative", None) or "").strip()
+        elif isinstance(pp, dict):
+            raw_vp = pp.get("valuesProfile") or pp.get("values_profile") or {}
+            if isinstance(raw_vp, dict):
+                narrative = str(raw_vp.get("narrative") or "").strip()
+        if narrative and not any(narrative[:80] in v for v in value_texts):
+            bits.append("Values narrative (onboarding): " + narrative[:600])
+    completed = bool(
+        getattr(getattr(pp, "onboardingStatus", None), "completed", False) if pp is not None else False
+    )
+    if completed and (prio_texts or value_texts):
+        bits.append(
+            "(Onboarding completed — priorities and values above are user-confirmed in setup, not inferred from memory.)"
+        )
+    return "\n".join(bits)
+
+
 def _format_profile_block(prof: Any) -> str:
     bits: list[str] = []
+    personal = _format_personal_profile_block(prof)
+    if personal:
+        bits.append(personal)
     p = prof.profile_channel_priority_texts()
     if p:
         bits.append("Profile priorities (user-authored): " + "; ".join(p[:20]))
@@ -316,8 +419,9 @@ def _format_profile_block(prof: Any) -> str:
         bits.append("Saved clarification choices: " + "; ".join(c[:20]))
     if prof.constraints:
         bits.append("Profile constraints: " + "; ".join(prof.constraints[:20]))
-    if prof.values:
-        bits.append("Profile values: " + "; ".join(prof.values[:20]))
+    legacy_values = [v for v in (prof.values or []) if v.strip()]
+    if legacy_values and not collect_user_stated_value_texts(prof, limit=1):
+        bits.append("Profile values: " + "; ".join(legacy_values[:20]))
     if (prof.about_me or "").strip():
         bits.append("About me: " + prof.about_me.strip()[:900])
     return "\n".join(bits) if bits else "(none yet.)"
@@ -465,10 +569,16 @@ THREE CONTEXTS (do not mix them):
 3) CURRENT THREAD — recent messages + thread summary answer \"what did I just say\" style questions first.
 
 CONTEXT PRIORITY:
+- If the user asks about THEIR PRIORITIES, VALUES, or \"what matters to me\" (including right after onboarding),
+  answer from [Profile form fields] FIRST — especially onboarding priorities and values. List them concretely.
+  Do NOT say they \"haven't shared priorities or values in this chat\" when profile/onboarding fields exist on file.
+  Thread chat and long-term memory are supplementary, not a substitute for saved priorities/values.
+- For advice, options, and trade-offs on ANY topic, explicitly weigh their saved priorities and values when present
+  in [Profile form fields] (e.g. \"Given you care about X and value Y, I'd lean toward…\"). Do not ignore onboarding.
 - If the user asks about THIS chat (\"what did I just say\", \"what joke\", \"earlier here\", \"刚才\", \"前面说的\"),
   answer from [Recent conversation in this thread] and [Thread working summary] FIRST.
 - [Stable long-term user memory] is only for durable preferences/goals/patterns across chats — do NOT let it override
-  explicit recent-thread content, jokes, or temporary names from this conversation.
+  explicit recent-thread content, jokes, temporary names, or saved profile/onboarding priorities.
 - If the user asks a direct memory-recall question (\"who is my girlfriend?\", \"what do you know about my life?\",
   \"what have I told you about me?\"), answer with concrete details from USER MEMORY / profile / indexed recall.
   Use \"You mentioned…\" / \"You've told me…\" and do not turn it into generic relationship or lifestyle advice.
@@ -515,11 +625,11 @@ MEMORY FACTS (structured JSON output — LONG-TERM PROFILE ONLY):
   **goals** / **constraints** as usual; **other** only if none fit.
 - Examples: "I like FC Barcelona" → **views**; roommate / co-founder facts → **identity**; food prefs → **behavior**.
 
+--- Profile form fields (onboarding priorities + values; authoritative for "my priorities" questions) ---
+{profile_block}
+
 --- Stable long-term user memory (structured facts on file; may be empty) ---
 {memory_block}
-
---- Profile form fields (may be empty) ---
-{profile_block}
 
 --- Thread working summary (LOCAL — includes playful/temporary context; not durable profile) ---
 {working_summary_block}
@@ -577,6 +687,7 @@ def run_shadow_turn(
     ]
 
     last_user_text = str(last.get("content", "") or "").strip()
+    mem_active: list[ProfileMemoryFact] = []
     atomic_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shadow-atomic-claims")
     atomic_future = atomic_executor.submit(_extract_atomic_claims_for_turn, s, last_user_text)
     try:
@@ -633,6 +744,33 @@ def run_shadow_turn(
         atomic_claims_block=atomic_claims_block,
     )
     hint = (slime_intent_hint or "").strip()
+    if synthesis_frame == "slime_buddy" and is_priority_or_values_recall_question(last_user_text):
+        stated_p = collect_user_stated_priority_texts(prof)
+        stated_v = collect_user_stated_value_texts(prof)
+        if stated_p or stated_v:
+            prompt += (
+                "\n\n--- Routing hint (priority/values recall) ---\n"
+                "The user is asking about their saved priorities and/or values. Quote [Profile form fields] "
+                "explicitly (short bullet list for priorities AND values when both exist). "
+                "Do not claim they have not shared these in this chat. "
+                "Memory may add nuance in one sentence only.\n"
+            )
+        else:
+            prompt += (
+                "\n\n--- Routing hint (priority/values recall) ---\n"
+                "The user is asking about priorities/values but [Profile form fields] may be empty — "
+                "say that clearly, then mention anything relevant from memory or this thread.\n"
+            )
+    elif synthesis_frame == "slime_buddy" and profile_has_priorities_or_values(prof):
+        prio_snip = "; ".join(collect_user_stated_priority_texts(prof, limit=6))
+        val_snip = "; ".join(collect_user_stated_value_texts(prof, limit=6))
+        prompt += (
+            "\n\n--- Standing user lens (every reply) ---\n"
+            "Weave the user's saved priorities and values into your answer when giving guidance, "
+            "even if they did not ask verbatim. Name at least one priority or value when recommending a direction.\n"
+            f"Priorities on file: {prio_snip or '(none)'}\n"
+            f"Values on file: {val_snip or '(none)'}\n"
+        )
     if synthesis_frame == "slime_buddy" and hint == "practical_help_request":
         prompt += (
             "\n\n--- Routing hint ---\n"
@@ -892,4 +1030,5 @@ def run_shadow_turn(
         profile_memory_events=memory_events,
         thread_only_items=thread_only_items,
         memory_confirmation_question=memory_confirmation_question,
+        retrieved_memory_facts=list(mem_active),
     )
