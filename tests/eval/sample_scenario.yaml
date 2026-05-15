@@ -1,0 +1,19 @@
+id: dec-career-001
+persona_id: b
+category: decision
+input: "I have two offers and need to decide by Friday."
+expected:
+  must_retrieve_memory_ids:
+    - past-decision-007
+  must_include_in_options:
+    - accept
+    - decline
+    - negotiate
+  must_not_violate:
+    - not_therapy
+  recommendation_present: true
+  latency_p95_ms: 8000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 20
