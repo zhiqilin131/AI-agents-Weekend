@@ -32,3 +32,14 @@ clean-web:
 
 chaos-demo:
 	$(PYTHON) scripts/chaos_demo.py
+
+.PHONY: eval eval-single eval-baseline
+
+eval:
+	python3 -m tests.eval.runner.run --scenarios all --model gpt-4o-mini
+
+eval-single:
+	python3 -m tests.eval.runner.run --scenarios $(SCENARIO) --model gpt-4o-mini
+
+eval-baseline:
+	@python3 -c "import json; r=json.load(open('tests/eval/reports/baseline.json')); print(f'Baseline: commit={r[\"commit_sha\"]}, pass_rate={r[\"aggregate\"][\"pass_rate\"]:.2f}, excl_known={r[\"aggregate\"][\"pass_rate_excluding_known_issues\"]:.2f}, model={r[\"model_id\"]}')"

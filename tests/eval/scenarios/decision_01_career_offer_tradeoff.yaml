@@ -1,0 +1,20 @@
+id: decision-01-career-offer-tradeoff
+persona_id: a
+category: decision
+input: Got offers from Company A and Company B. Pay is close, but one has faster growth
+  and the other is more stable. How should I choose?
+expected:
+  must_retrieve_memory_ids: []
+  must_include_in_options:
+  - company a
+  - company b
+  - negotiate
+  must_not_violate: []
+  recommendation_present: true
+  latency_p95_ms: 120000
+  latency_target_ms: 9000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 34
+  llm_call_count_target: 24

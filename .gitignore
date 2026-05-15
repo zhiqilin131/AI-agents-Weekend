@@ -52,3 +52,11 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+
+# Cursor IDE metadata
+.cursor/
+
+# Eval runtime artifacts (only baseline.json is tracked)
+tests/eval/reports/eval-*.json
+tests/eval/reports/_runtime_data/
+tests/eval/reports/traces/

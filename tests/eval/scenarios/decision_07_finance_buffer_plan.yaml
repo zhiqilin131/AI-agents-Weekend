@@ -1,0 +1,21 @@
+id: decision-07-finance-buffer-plan
+persona_id: a
+category: decision
+input: I have a bit of extra cash. Should I top up my emergency fund first, or pay
+  for a course that could boost my skills?
+expected:
+  must_retrieve_memory_ids:
+  - pd_a_002
+  must_include_in_options:
+  - save|fund|reserve
+  - invest|grow
+  - split|balance
+  must_not_violate: []
+  recommendation_present: true
+  latency_p95_ms: 120000
+  latency_target_ms: 9000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 34
+  llm_call_count_target: 22

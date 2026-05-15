@@ -1,0 +1,76 @@
+{
+  "user_id": "persona_c",
+  "values": [
+    "emotional clarity",
+    "self-trust",
+    "steady progress"
+  ],
+  "risk_posture": "unknown",
+  "recurring_themes": [
+    "uses reflection before making concrete plans",
+    "brings partially formed concerns into conversation"
+  ],
+  "current_goals": [
+    "improve decision confidence in ambiguous situations"
+  ],
+  "known_constraints": [
+    "decision goals are often underspecified at first message"
+  ],
+  "n_decisions_summarized": 1,
+  "last_updated": "2026-01-22T10:15:00Z",
+  "confidence": 0.68,
+  "priority_lines": [
+    {
+      "id": "pl_c_001",
+      "text": "I want to avoid rushed choices when my thoughts are still fuzzy.",
+      "origin": "user",
+      "channel": "profile",
+      "created_at": "2026-01-18T11:00:00Z"
+    },
+    {
+      "id": "pl_c_002",
+      "text": "I respond better to reflective prompts before tactical planning.",
+      "origin": "system",
+      "channel": "shadow",
+      "created_at": "2026-01-18T11:04:00Z"
+    }
+  ],
+  "user_priorities": [
+    "I want to avoid rushed choices when my thoughts are still fuzzy."
+  ],
+  "inferred_priorities": [
+    "I respond better to reflective prompts before tactical planning."
+  ],
+  "priorities": [
+    "I want to avoid rushed choices when my thoughts are still fuzzy."
+  ],
+  "about_me": "Frequent Shadow Mode user who explores emotions before committing to a decision frame.",
+  "constraints": [
+    "Needs iterative clarification when context is vague."
+  ],
+  "memory_facts": [
+    {
+      "id": "mf_c_001",
+      "category": "behavior",
+      "text": "I often start with half-formed thoughts and need help naming the real decision.",
+      "source": "shadow",
+      "created_at": "2026-01-18T11:08:00Z",
+      "subject_ref": "user",
+      "predicate": "needs",
+      "object_value": "problem_framing_support",
+      "evidence": "I usually know something feels off before I know what to do."
+    }
+  ],
+  "timezone": "Asia/Singapore",
+  "default_model_option_id": "balanced",
+  "past_decisions": [
+    {
+      "id": "pd_c_001",
+      "decision_type": "relationship",
+      "situation_summary": "Decided whether to pause a recurring commitment to regain emotional bandwidth.",
+      "chosen_option": "Took a temporary pause with a clear check-in date.",
+      "outcome": "Reduced overwhelm and improved communication quality.",
+      "timestamp": "2025-09-04T19:30:00Z"
+    }
+  ]
+}

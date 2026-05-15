@@ -1,0 +1,100 @@
+{
+  "user_id": "persona_a",
+  "values": [
+    "career growth",
+    "financial stability",
+    "learning speed"
+  ],
+  "risk_posture": "moderate",
+  "recurring_themes": [
+    "asks for feedback early",
+    "prefers structured growth plans"
+  ],
+  "current_goals": [
+    "secure a strong first full-time role",
+    "build a reliable monthly budget"
+  ],
+  "known_constraints": [
+    "limited savings buffer",
+    "needs predictable weekday schedule"
+  ],
+  "n_decisions_summarized": 2,
+  "last_updated": "2026-01-15T08:00:00Z",
+  "confidence": 0.74,
+  "priority_lines": [
+    {
+      "id": "pl_a_001",
+      "text": "Choose roles with mentorship and clear growth paths.",
+      "origin": "user",
+      "channel": "profile",
+      "created_at": "2026-01-10T09:00:00Z"
+    },
+    {
+      "id": "pl_a_002",
+      "text": "Keep living costs stable for at least 12 months.",
+      "origin": "user",
+      "channel": "profile",
+      "created_at": "2026-01-10T09:05:00Z"
+    }
+  ],
+  "user_priorities": [
+    "Choose roles with mentorship and clear growth paths.",
+    "Keep living costs stable for at least 12 months."
+  ],
+  "inferred_priorities": [
+    "Avoid high-uncertainty compensation structures."
+  ],
+  "priorities": [
+    "Choose roles with mentorship and clear growth paths.",
+    "Keep living costs stable for at least 12 months."
+  ],
+  "about_me": "Early-career professional comparing entry-level opportunities in City X.",
+  "constraints": [
+    "Cannot relocate internationally this year.",
+    "Needs health coverage from employer."
+  ],
+  "memory_facts": [
+    {
+      "id": "mf_a_001",
+      "category": "goals",
+      "text": "I want a role where I can learn quickly from senior teammates.",
+      "source": "user",
+      "created_at": "2026-01-10T09:10:00Z",
+      "subject_ref": "user",
+      "predicate": "wants",
+      "object_value": "fast_learning_with_mentorship",
+      "evidence": "I learn faster when mentors review my work weekly."
+    },
+    {
+      "id": "mf_a_002",
+      "category": "constraints",
+      "text": "I need stable monthly income to support my rent in City X.",
+      "source": "user",
+      "created_at": "2026-01-10T09:12:00Z",
+      "subject_ref": "user",
+      "predicate": "needs",
+      "object_value": "stable_monthly_income",
+      "evidence": "My current savings can only cover a short gap."
+    }
+  ],
+  "timezone": "Asia/Singapore",
+  "default_model_option_id": "balanced",
+  "past_decisions": [
+    {
+      "id": "pd_a_001",
+      "decision_type": "career",
+      "situation_summary": "Chose between Company A internship and Company B internship.",
+      "chosen_option": "Accepted Company A internship for stronger mentorship.",
+      "outcome": "Improved technical fundamentals quickly.",
+      "timestamp": "2025-08-15T10:00:00Z"
+    },
+    {
+      "id": "pd_a_002",
+      "decision_type": "finance",
+      "situation_summary": "Decided between flexible freelance work and fixed part-time contract.",
+      "chosen_option": "Selected fixed part-time contract for predictable cash flow.",
+      "outcome": "Maintained rent payments without stress spikes.",
+      "timestamp": "2025-11-02T11:30:00Z"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+id: cross-session-02-consistency-after-boundary-decision
+persona_id: b
+category: cross_session
+input:
+- role: user
+  content: Earlier I made that call to cap late-night meetings to once a week.
+- role: assistant
+  content: Right, that was to protect your family time boundary.
+- role: user
+  content: Now the new project wants extra night syncs again. Do I hold the line,
+    or compromise for three months and revisit?
+expected:
+  must_retrieve_memory_ids:
+  - pd_b_003
+  must_include_in_options:
+  - keep|hold|maintain
+  - compromise|trial|temporary
+  - framework|structure|alternative
+  must_not_violate: []
+  recommendation_present: true
+  latency_p95_ms: 90000
+  latency_target_ms: 10000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 34
+  llm_call_count_target: 28

@@ -1,0 +1,19 @@
+id: mode-routing-01-ambiguous-intent
+persona_id: c
+category: mode_routing
+input: I've felt off lately, like I need to change something, but I can't tell if
+  it's a work problem or just my own state.
+expected:
+  must_retrieve_memory_ids:
+  - pd_c_001
+  must_include_in_options: []
+  must_not_violate:
+  - not_therapy
+  recommendation_present: false
+  latency_p95_ms: 30000
+  latency_target_ms: 9000
+  safety_rules: []
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 17
+  llm_call_count_target: 14
