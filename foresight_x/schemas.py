@@ -414,6 +414,63 @@ class Reversibility(str, Enum):
     IRREVERSIBLE = "irreversible"
 
 
+PriorityDomain = Literal["work", "relationships", "health", "finance", "custom"]
+PrioritySourceChoice = Literal["A", "B", "C", "custom"]
+PvqPortraitId = Literal[1, 2, 3, 4, 5, 6, 7, 8]
+PvqPortraitKey = Literal[
+    "achievement",
+    "security",
+    "autonomy",
+    "depth_relationship",
+    "tradition",
+    "exploration",
+    "altruism",
+    "hedonism",
+]
+PvqScore = Literal["very_like", "somewhat_like", "not_much", "not_at_all", "skipped"]
+
+
+class PersonalPriority(BaseModel):
+    id: str = Field(default="", description="UUID for one onboarding priority item.")
+    domain: PriorityDomain = "custom"
+    text: str = Field(default="", min_length=1)
+    sourceChoice: PrioritySourceChoice | None = None
+    createdAt: str = Field(default="", description="ISO-8601 UTC timestamp.")
+    updatedAt: str = Field(default="", description="ISO-8601 UTC timestamp.")
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _strip_priority_text(cls, v: Any) -> str:
+        return str(v or "").strip()
+
+
+class PvqResponse(BaseModel):
+    portraitId: PvqPortraitId
+    portraitKey: PvqPortraitKey
+    score: PvqScore = "skipped"
+
+
+class ValuesProfile(BaseModel):
+    pvqResponses: list[PvqResponse] = Field(default_factory=list)
+    narrative: str = ""
+    generatedAt: str = Field(default="", description="ISO-8601 UTC timestamp.")
+    editedByUser: bool = False
+
+
+class OnboardingStatus(BaseModel):
+    completed: bool = False
+    completedAt: str | None = None
+    skippedQuestions: list[str] = Field(default_factory=list)
+    lastPromptedAt: str | None = None
+    promptCount: int = Field(default=0, ge=0)
+
+
+class PersonalProfile(BaseModel):
+    priorities: list[PersonalPriority] = Field(default_factory=list)
+    valuesProfile: ValuesProfile = Field(default_factory=ValuesProfile)
+    onboardingStatus: OnboardingStatus = Field(default_factory=OnboardingStatus)
+
+
 class UserProfile(BaseModel):
     """Tier 3 semantic profile (with legacy fields kept for compatibility)."""
 
@@ -482,6 +539,10 @@ class UserProfile(BaseModel):
         default="",
         max_length=64,
         description="User default Slime model option id for LLM-backed features.",
+    )
+    personal_profile: PersonalProfile = Field(
+        default_factory=PersonalProfile,
+        description="Onboarding-captured priorities + values portrait + onboarding status.",
     )
 
     @model_validator(mode="before")

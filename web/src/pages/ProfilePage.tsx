@@ -421,6 +421,13 @@ export default function ProfilePage() {
             <h1 className="text-2xl text-gray-900 md:text-3xl" style={{ fontWeight: 700 }}>
               Profile
             </h1>
+            <button
+              type="button"
+              onClick={() => navigate('/onboarding?mode=resume')}
+              className="mt-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-900 hover:bg-indigo-100"
+            >
+              Continue onboarding
+            </button>
           </div>
           {isSupabaseEnvConfigured() && session ? (
             <div className="mt-3 flex shrink-0 flex-col items-stretch gap-2 sm:items-end md:mt-0">

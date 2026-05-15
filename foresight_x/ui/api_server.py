@@ -586,7 +586,12 @@ async def _app_lifespan(_: FastAPI):
 
 app = FastAPI(title="Foresight-X API", version="0.1.0", lifespan=_app_lifespan)
 _cors_settings = load_settings()
-_exact_origins = _cors_settings.cors_origins_list or ["http://localhost:5173", "http://127.0.0.1:5173"]
+_default_local_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+_configured_origins = _cors_settings.cors_origins_list
+if any(x.strip() == "*" for x in _configured_origins):
+    _exact_origins = ["*"]
+else:
+    _exact_origins = list(dict.fromkeys([*_configured_origins, *_default_local_origins]))
 _preview_regex = _cors_settings.cors_preview_regex or None
 app.add_middleware(
     CORSMiddleware,
@@ -601,6 +606,28 @@ app.add_middleware(
 @app.middleware("http")
 async def supabase_jwt_context_middleware(request: Request, call_next):
     """Attach validated Supabase user to context; optionally enforce REQUIRE_AUTH on /api routes."""
+    def _cors_json_response(status_code: int, content: dict[str, Any]) -> JSONResponse:
+        resp = JSONResponse(status_code=status_code, content=content)
+        origin = (request.headers.get("origin") or "").strip()
+        if not origin:
+            return resp
+        allowed = False
+        if "*" in _exact_origins:
+            allowed = True
+        elif origin in _exact_origins:
+            allowed = True
+        elif _preview_regex:
+            try:
+                allowed = re.match(_preview_regex, origin) is not None
+            except re.error:
+                allowed = False
+        if allowed:
+            # Credentials are enabled, so echo explicit origin instead of wildcard.
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
+            resp.headers["Vary"] = "Origin"
+        return resp
+
     if request.method == "OPTIONS":
         return await call_next(request)
 
@@ -613,15 +640,23 @@ async def supabase_jwt_context_middleware(request: Request, call_next):
 
     user: dict[str, str | None] | None = None
     if token:
-        try:
-            user = decode_supabase_access_token(token)
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-            return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+        if not (settings.supabase_url or "").strip():
+            if settings.require_auth:
+                return _cors_json_response(
+                    status_code=503,
+                    content={"detail": "SUPABASE_URL is not configured on backend while REQUIRE_AUTH is enabled"},
+                )
+            # In local persona mode, ignore bearer token if backend auth is not configured.
+        else:
+            try:
+                user = decode_supabase_access_token(token)
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                return _cors_json_response(status_code=exc.status_code, content={"detail": detail})
 
     if settings.require_auth and path.startswith("/api") and not _auth_exempt_path(path):
         if user is None:
-            return JSONResponse(status_code=401, content={"detail": "Missing bearer token"})
+            return _cors_json_response(status_code=401, content={"detail": "Missing bearer token"})
 
     ctx_tok = supabase_user_ctx_set(user)
     try:
@@ -1285,6 +1320,9 @@ def put_profile(body: UserProfile) -> dict:
     i = [x.text for x in system_lines]
     merged_tz = (body.timezone or "").strip() or (existing.timezone or "UTC").strip() or "UTC"
     dmid = (body.default_model_option_id or "").strip()[:64] or (existing.default_model_option_id or "").strip()[:64]
+    merged_personal_profile = (
+        body.personal_profile if "personal_profile" in body.model_fields_set else existing.personal_profile
+    )
     merged = existing.model_copy(
         update={
             "priority_lines": merged_lines,
@@ -1296,6 +1334,7 @@ def put_profile(body: UserProfile) -> dict:
             "values": list(body.values),
             "timezone": merged_tz[:80],
             "default_model_option_id": dmid,
+            "personal_profile": merged_personal_profile,
         }
     )
     path = save_user_profile(merged, settings=settings)

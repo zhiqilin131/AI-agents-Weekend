@@ -18,6 +18,10 @@ import { ModelSelector } from '../features/models/ModelSelector';
 import { buildCheaperModelHint } from '../features/models/slimeModelsApi';
 import { useSlimeModelCatalog } from '../features/models/useSlimeModelCatalog';
 import { useSlimeProfile } from '../hooks/useSlimeProfile';
+import { nowIso, shouldShowOnboarding } from '../features/onboarding/onboarding';
+import type { UserProfile } from '../features/onboarding/types';
+import { useAuth } from '../auth/AuthContext';
+import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
 
 const PIPELINE_STAGES = ['enhance', 'perceive', 'retrieve', 'infer', 'simulate', 'evaluate', 'finalize'] as const;
 
@@ -71,6 +75,7 @@ type Tier3ProfileView = {
 
 export default function HomePage() {
   const navigate = useNavigate();
+  const { session, loading: authLoading } = useAuth();
   const routeTraceId = useParams().decisionId;
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const slimeModels = useSlimeModelCatalog();
@@ -102,6 +107,8 @@ export default function HomePage() {
   const [clarifyGateHint, setClarifyGateHint] = useState<string | null>(null);
   const [degradeNotices, setDegradeNotices] = useState<DegradeNotice[]>([]);
   const [lastFailedStage, setLastFailedStage] = useState<string | null>(null);
+  const [onboardingReminder, setOnboardingReminder] = useState<{ missingCount: number; profile: UserProfile } | null>(null);
+  const onboardingNavigationDoneRef = useRef(false);
   const loadingStageRef = useRef<string | null>(null);
   useEffect(() => {
     loadingStageRef.current = loadingStage;
@@ -186,6 +193,93 @@ export default function HomePage() {
   useEffect(() => {
     void loadTier3Profile();
   }, [loadTier3Profile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (onboardingNavigationDoneRef.current) return;
+    if (authLoading) return;
+    if (isSupabaseEnvConfigured() && !session) return;
+    void (async () => {
+      for (let attempt = 0; attempt < 3 && !cancelled; attempt += 1) {
+        try {
+          const res = await apiFetch('/api/profile');
+          if (!res.ok) {
+            if (res.status === 401 && attempt < 2) {
+              await new Promise((resolve) => window.setTimeout(resolve, 450));
+              continue;
+            }
+            return;
+          }
+          const profile = (await res.json()) as UserProfile;
+          if (cancelled) return;
+          const trigger = shouldShowOnboarding(profile);
+          if (trigger === 'force_initial') {
+            onboardingNavigationDoneRef.current = true;
+            navigate('/onboarding?mode=force_initial', { replace: true });
+            return;
+          }
+          if (trigger === 'gentle_reminder') {
+            const missingCount = profile.personal_profile?.onboardingStatus?.skippedQuestions?.length ?? 0;
+            setOnboardingReminder({ missingCount, profile });
+            return;
+          }
+          setOnboardingReminder(null);
+          return;
+        } catch {
+          if (attempt < 2) {
+            await new Promise((resolve) => window.setTimeout(resolve, 450));
+            continue;
+          }
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate, authLoading, session]);
+
+  const postponeOnboardingReminder = useCallback(async () => {
+    if (!onboardingReminder) return;
+    const previousStatus = onboardingReminder.profile.personal_profile?.onboardingStatus;
+    const nextStatus = {
+      completed: Boolean(previousStatus?.completed),
+      completedAt: previousStatus?.completedAt,
+      skippedQuestions: previousStatus?.skippedQuestions ?? [],
+      lastPromptedAt: nowIso(),
+      promptCount: (previousStatus?.promptCount ?? 0) + 1,
+    };
+    const body: UserProfile = {
+      ...onboardingReminder.profile,
+      personal_profile: {
+        priorities: onboardingReminder.profile.personal_profile?.priorities ?? [],
+        valuesProfile: onboardingReminder.profile.personal_profile?.valuesProfile ?? {
+          pvqResponses: [],
+          narrative: '',
+          generatedAt: '',
+          editedByUser: false,
+        },
+        onboardingStatus: nextStatus,
+      },
+      user_priorities: onboardingReminder.profile.user_priorities ?? onboardingReminder.profile.priorities ?? [],
+      priorities: onboardingReminder.profile.user_priorities ?? onboardingReminder.profile.priorities ?? [],
+      values: onboardingReminder.profile.values ?? [],
+      constraints: onboardingReminder.profile.constraints ?? [],
+      about_me: String(onboardingReminder.profile.about_me ?? ''),
+      timezone: String(onboardingReminder.profile.timezone ?? 'UTC'),
+      default_model_option_id: String(onboardingReminder.profile.default_model_option_id ?? ''),
+    };
+    try {
+      await apiFetch('/api/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      // best effort
+    } finally {
+      setOnboardingReminder(null);
+    }
+  }, [onboardingReminder]);
 
   const runPipelineStream = useCallback(
     async (opts?: StreamOpts) => {
@@ -540,6 +634,25 @@ export default function HomePage() {
 
   const nav = <MainNavButtons />;
   const navLanding = <MainNavButtons className="!mb-4 sm:!mb-5" />;
+  const onboardingReminderBanner = onboardingReminder ? (
+    <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50/90 px-4 py-2.5 text-sm text-indigo-950">
+      You still have {onboardingReminder.missingCount} basic setup item(s) incomplete. If you finish them, I can give more tailored suggestions.{' '}
+      <button
+        type="button"
+        className="font-semibold underline underline-offset-4"
+        onClick={() => navigate('/onboarding?mode=gentle_reminder')}
+      >
+        Continue setup
+      </button>{' '}
+      <button
+        type="button"
+        className="ml-2 text-indigo-700 underline underline-offset-4"
+        onClick={() => void postponeOnboardingReminder()}
+      >
+        Maybe later
+      </button>
+    </div>
+  ) : null;
 
   const workspace = (
     <div className="max-w-[1600px] mx-auto px-6 lg:px-10 pt-4 pb-16 lg:pt-5">
@@ -555,6 +668,7 @@ export default function HomePage() {
       </header>
 
       <DecisionQuestionStrip decisionInput={decisionInput} report={displayReport} />
+      {onboardingReminderBanner}
 
       {degradeNotices.length > 0 && (
         <div className="mb-4 rounded-xl border border-amber-200/90 bg-amber-50/95 px-4 py-2.5 text-xs text-amber-950">
@@ -696,6 +810,7 @@ export default function HomePage() {
                 ) : null}
 
                 <div className="mx-auto max-w-xl text-center">
+                  {onboardingReminderBanner}
                   <SlimeLandingCta profile={slimeProfile} onClick={() => navigate('/buddy')} />
                 </div>
               </div>
