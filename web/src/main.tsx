@@ -12,6 +12,7 @@ import DiaryPage from './pages/DiaryPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import AppErrorPage from './pages/AppErrorPage';
+import OnboardingPage from './pages/OnboardingPage';
 import { AuthProvider } from './auth/AuthContext';
 import { RequireAuthLayout } from './auth/RequireAuthLayout';
 import { unlockSlimeAudioContext } from './utils/slimeAudioContext';
@@ -41,6 +42,7 @@ const router = createHashRouter([
       { path: '/history', element: <HistoryPage />, errorElement: <AppErrorPage /> },
       { path: '/reflect', element: <ShadowChatPage />, errorElement: <AppErrorPage /> },
       { path: '/profile', element: <ProfilePage />, errorElement: <AppErrorPage /> },
+      { path: '/onboarding', element: <OnboardingPage />, errorElement: <AppErrorPage /> },
       { path: '/buddy', element: <SlimeCompanionPage />, errorElement: <AppErrorPage /> },
       { path: '/diary', element: <DiaryPage />, errorElement: <AppErrorPage /> },
       { path: '/execution', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },
