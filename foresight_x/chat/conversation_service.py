@@ -85,7 +85,7 @@ def _build_shadow_suggestion(intent: str, *, dismissed: dict) -> dict[str, Any] 
             "type": "decision_report",
             "title": "Turn this into a decision report?",
             "message": "I can structure this into options, trade-offs, risks, consequences, and an action plan.",
-            "actions": ["generate_decision_report", "continue_normally"],
+            "actions": ["generate_decision_report", "continue_normally", "dismiss_suggestion"],
         }
     return None
 

@@ -57,3 +57,9 @@ def test_roulette_pick_request_triggers_decision() -> None:
     assert out.intent == "decision_candidate"
     assert out.confidence >= 0.86
     assert out.suggested_action == "show_decision_report_prompt"
+
+
+def test_explicit_start_decision_mode_triggers_high_confidence() -> None:
+    out = detect_chat_intent("Start decision mode for this.", [], llm_enabled=False)
+    assert out.intent == "decision_candidate"
+    assert out.confidence >= 0.95

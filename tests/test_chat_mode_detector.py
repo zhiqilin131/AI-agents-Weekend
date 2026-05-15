@@ -23,3 +23,9 @@ def test_roulette_choice_triggers_decision_candidate() -> None:
     out = detect_chat_mode_intent("red or black I need a winning number for roulette")
     assert out.intent == "decision_candidate"
     assert out.suggested_action == "show_decision_report_prompt"
+
+
+def test_explicit_start_decision_mode_triggers_decision_candidate() -> None:
+    out = detect_chat_mode_intent("进入决策模式")
+    assert out.intent == "decision_candidate"
+    assert out.confidence >= 0.95

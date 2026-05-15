@@ -114,6 +114,7 @@ from foresight_x.chat import (
     load_thread,
     save_thread,
 )
+from foresight_x.chat.decision_trigger import evaluate_decision_trigger, preview_will_auto_start_decision
 from foresight_x.chat.thread_store import append_clarification_event
 from foresight_x.auth import (
     decode_supabase_access_token,
@@ -2086,6 +2087,8 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
     mode = str(body.mode or thread.get("mode") or "normal")
     action = (body.user_action or "send_message").strip()
     message = (body.message or "").strip()
+    if action == "send_message" and message and preview_will_auto_start_decision(thread, message):
+        action = "generate_decision_report"
 
     if action == "enter_role_mode":
         mode = "roleplay"
@@ -2100,6 +2103,30 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
     suggestion: dict | None = None
     profile_updates: list[str] = []
     shadow_updates: list[str] = []
+
+    if message:
+        detection = detect_chat_mode_intent(
+            user_message=message,
+            recent_messages=body.recent_messages or thread.get("messages", [])[-8:],
+        )
+        trigger_eval = evaluate_decision_trigger(
+            thread=thread,
+            user_action=action,
+            user_message=message,
+            intent_label=detection.intent,
+            intent_confidence=float(detection.confidence),
+        )
+        action = trigger_eval.effective_action
+    else:
+        detection = detect_chat_mode_intent(user_message="", recent_messages=[])
+        trigger_eval = evaluate_decision_trigger(
+            thread=thread,
+            user_action=action,
+            user_message="",
+            intent_label=detection.intent,
+            intent_confidence=float(detection.confidence),
+        )
+        action = trigger_eval.effective_action
 
     credit_feat: CreditFeature | None = None
     if action == "generate_decision_report":
@@ -2131,24 +2158,19 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
 
     if message:
         append_message(thread, role="user", content=message, mode=mode)
-        detection = detect_chat_mode_intent(
-            user_message=message,
-            recent_messages=body.recent_messages or thread.get("messages", [])[-8:],
-        )
-    else:
-        detection = detect_chat_mode_intent(user_message="", recent_messages=[])
 
     if action == "dismiss_suggestion":
         ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
         ds["role_mode"] = True
-        ds["decision_report"] = True
+        ds["decision_report"] = False
         save_thread(thread)
 
     try:
         assistant_text = ""
         if action == "generate_decision_report":
             ctx, _ = _build_context(settings, llm_model=decision_pm)
-            trace = run_pipeline(ctx, message or "Help me decide.", persist_trace=True)
+            report_prompt = trigger_eval.decision_prompt or message or "Help me decide."
+            trace = run_pipeline(ctx, report_prompt, persist_trace=True)
             decision_trace = trace.model_dump(mode="json")
             mode = "decision_report"
             thread["mode"] = mode
@@ -2228,12 +2250,12 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
                 "message": "It looks like you may be starting a roleplay or simulation. Role Mode keeps the story state consistent while preserving this chat history.",
                 "actions": ["enter_role_mode", "continue_normally", "dismiss_suggestion"],
             }
-        elif action == "send_message" and message and not ds.get("decision_report", False) and detection.intent == "decision_candidate":
+        elif action == "send_message" and message and trigger_eval.should_offer_suggestion:
             suggestion = {
                 "type": "decision_report",
                 "title": "Turn this into a decision report?",
                 "message": "I can structure this into options, trade-offs, risks, consequences, and an action plan.",
-                "actions": ["generate_decision_report", "continue_normally"],
+                "actions": ["generate_decision_report", "continue_normally", "dismiss_suggestion"],
             }
 
         if action == "close_decision_report":
@@ -2332,7 +2354,7 @@ def _should_store_profile_fact(item: str) -> bool:
     return True
 
 
-def _build_shadow_suggestion(intent: str, *, dismissed: dict) -> dict | None:
+def _build_shadow_suggestion(intent: str, *, dismissed: dict, allow_decision: bool = True) -> dict | None:
     if intent == "roleplay_candidate" and not dismissed.get("role_mode", False):
         return {
             "type": "role_mode",
@@ -2340,12 +2362,12 @@ def _build_shadow_suggestion(intent: str, *, dismissed: dict) -> dict | None:
             "message": "It looks like you may be starting a roleplay or simulation. Role Mode keeps the story state consistent while preserving this chat history.",
             "actions": ["enter_role_mode", "continue_normally", "dismiss_suggestion"],
         }
-    if intent == "decision_candidate" and not dismissed.get("decision_report", False):
+    if allow_decision and intent == "decision_candidate" and not dismissed.get("decision_report", False):
         return {
             "type": "decision_report",
             "title": "Turn this into a decision report?",
             "message": "I can structure this into options, trade-offs, risks, consequences, and an action plan.",
-            "actions": ["generate_decision_report", "continue_normally"],
+            "actions": ["generate_decision_report", "continue_normally", "dismiss_suggestion"],
         }
     return None
 
@@ -2410,7 +2432,10 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         d_gate = str(ar_ctx0.get("decision_id") or "").strip()
         if d_gate:
             rev_id_gate = d_gate
-    if str(body.user_action or "") == "generate_decision_report":
+    request_action = str(body.user_action or "send_message").strip() or "send_message"
+    if request_action == "send_message" and preview_will_auto_start_decision(thread, body.message):
+        request_action = "generate_decision_report"
+    if request_action == "generate_decision_report":
         credit_feature: CreditFeature = "decision_report"
     elif rev_id_gate:
         credit_feature = "report_revision"
@@ -2447,7 +2472,15 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
             _log.exception("persist_clarification_followup failed (non-stream) thread_id=%s", thread_id)
     intent_probe = effective_msg.strip() if effective_msg.strip() != msg.strip() else msg
     intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
-    if str(thread.get("source") or "") == "slime_voice" and body.user_action != "generate_decision_report":
+    trigger_eval = evaluate_decision_trigger(
+        thread=thread,
+        user_action=request_action,
+        user_message=msg,
+        intent_label=intent.intent,
+        intent_confidence=float(intent.confidence),
+    )
+    effective_action = trigger_eval.effective_action
+    if str(thread.get("source") or "") == "slime_voice" and effective_action != "generate_decision_report":
         applied_nl, nl_reply = try_apply_slime_profile_from_chat_message(msg, settings=settings)
         if applied_nl and nl_reply:
             meta_extra = {"interaction_source": "slime_voice", "modality": "text"}
@@ -2485,12 +2518,13 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
     decision_trace: dict | None = None
     profile_updates: list[str] = []
     thread_context_kept = False
-    if body.user_action == "generate_decision_report":
+    if effective_action == "generate_decision_report":
         try:
             ctx, _ = _build_context(settings, llm_model=chat_pm)
+            report_prompt = trigger_eval.decision_prompt or effective_msg
             trace = run_pipeline(
                 ctx,
-                effective_msg,
+                report_prompt,
                 persist_trace=True,
                 clarification_answers=body.clarification_answers,
                 save_clarification_to_profile=body.save_clarification_to_profile,
@@ -2568,6 +2602,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         suggestion = _build_shadow_suggestion(
             intent.intent,
             dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
+            allow_decision=trigger_eval.should_offer_suggestion,
         )
     refreshed = _load_thread_or_404(thread_id, uid=uid)
     return {
@@ -2592,7 +2627,11 @@ def stream_shadow_chat_message(
         d_pre = str(ar_ctx_pre.get("decision_id") or "").strip()
         if d_pre:
             rev_id_pre = d_pre
-    if str(body.user_action or "") == "generate_decision_report":
+    request_action = str(body.user_action or "send_message").strip() or "send_message"
+    pre_auto_decision = request_action == "send_message" and preview_will_auto_start_decision(thread_pre, body.message)
+    if pre_auto_decision:
+        request_action = "generate_decision_report"
+    if request_action == "generate_decision_report":
         stream_credit_feature: CreditFeature = "decision_report"
     elif rev_id_pre:
         stream_credit_feature = "report_revision"
@@ -2612,7 +2651,7 @@ def stream_shadow_chat_message(
         request_id=rid,
         model_option_id=body.model_option_id,
         profile=prof,
-        metadata={"endpoint": "shadow_stream", "thread_id": thread_id},
+        metadata={"endpoint": "shadow_stream", "thread_id": thread_id, "user_action": request_action},
     )
     if gate_err is not None:
         return gate_err
@@ -2650,7 +2689,16 @@ def stream_shadow_chat_message(
             intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
             retrieval_mode = "chat_deep" if intent.intent == "decision_candidate" else "chat_fast"
 
-            if str(thread.get("source") or "") == "slime_voice" and body.user_action != "generate_decision_report":
+            trigger_eval = evaluate_decision_trigger(
+                thread=thread,
+                user_action=request_action,
+                user_message=message,
+                intent_label=intent.intent,
+                intent_confidence=float(intent.confidence),
+            )
+            turn_action = trigger_eval.effective_action
+
+            if str(thread.get("source") or "") == "slime_voice" and turn_action != "generate_decision_report":
                 applied_nl, nl_reply = try_apply_slime_profile_from_chat_message(message, settings=settings)
                 if applied_nl and nl_reply:
                     meta_extra = {"interaction_source": "slime_voice", "modality": "text"}
@@ -2796,13 +2844,14 @@ def stream_shadow_chat_message(
 
             suggestion = None
             profile_updates: list[str] = []
-            if body.user_action == "generate_decision_report":
+            if turn_action == "generate_decision_report":
                 if ex is not None:
                     ex.shutdown(wait=False, cancel_futures=True)
                 ctx, _ = _build_context(settings, llm_model=chat_pm_outer)
+                report_prompt = trigger_eval.decision_prompt or effective_message
                 trace = run_pipeline(
                     ctx,
-                    message,
+                    report_prompt,
                     persist_trace=True,
                     clarification_answers=body.clarification_answers,
                     save_clarification_to_profile=body.save_clarification_to_profile,
@@ -3023,6 +3072,7 @@ def stream_shadow_chat_message(
             suggestion = _build_shadow_suggestion(
                 intent.intent,
                 dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
+                allow_decision=trigger_eval.should_offer_suggestion,
             )
             if suggestion and suggestion.get("type") == "decision_report":
                 yield _sse_chunk({"type": "status", "status": "decision_detected", "label": "Decision detected"})

@@ -45,6 +45,26 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+_EVAL_ENV_KEYS = (
+    "FORESIGHT_DATA_DIR",
+    "CHROMA_PERSIST_DIR",
+    "FORESIGHT_USER_ID",
+    "OPENAI_MODEL",
+)
+
+
+def _capture_env(keys: tuple[str, ...]) -> dict[str, str | None]:
+    return {k: os.environ.get(k) for k in keys}
+
+
+def _restore_env(snapshot: dict[str, str | None]) -> None:
+    for k, v in snapshot.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
 def _git_sha() -> str:
     try:
         out = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
@@ -389,81 +409,85 @@ def run_eval(*, selected_scenarios: list[Scenario], out_dir: Path, model_id: str
     verify_model_available(model_id, Settings(openai_model=model_id))
 
     scenario_rows: list[dict[str, Any]] = []
-    for persona_id, scenarios in grouped.items():
-        _seed_persona_context(persona_id=persona_id, model_id=model_id, runtime_data_root=runtime_data_root)
-        for scenario in scenarios:
-            errors: list[str] = []
-            try:
-                with count_llm_calls() as calls:
-                    results = replay_scenario(scenario, model_id=model_id)
-            except Exception:
-                results = []
-                errors = [traceback.format_exc()]
-                calls = {}
+    env_snapshot = _capture_env(_EVAL_ENV_KEYS)
+    try:
+        for persona_id, scenarios in grouped.items():
+            _seed_persona_context(persona_id=persona_id, model_id=model_id, runtime_data_root=runtime_data_root)
+            for scenario in scenarios:
+                errors: list[str] = []
+                try:
+                    with count_llm_calls() as calls:
+                        results = replay_scenario(scenario, model_id=model_id)
+                except Exception:
+                    results = []
+                    errors = [traceback.format_exc()]
+                    calls = {}
 
-            errors.extend([r.error for r in results if r.error])
-            total_calls, first_try_calls, retry_calls, by_stage_calls = _counter_to_stage_calls(dict(calls))
-            retrieval = score_retrieval(scenario, results)
-            coverage = score_coverage(scenario, results)
-            recommendation = score_recommendation(scenario, results)
-            latency = score_latency(scenario, results)
-            safety = _evaluate_safety(scenario, results)
-            llm_calls = {
-                "total": total_calls,
-                "first_try": first_try_calls,
-                "retries": retry_calls,
-                "by_stage": by_stage_calls,
-                "budget": int(scenario.metadata.llm_call_count_budget),
-                "within_budget": total_calls <= int(scenario.metadata.llm_call_count_budget),
-            }
-
-            trace_obj = next((r.decision_trace for r in reversed(results) if r.decision_trace is not None), None)
-            degraded_stages = detect_silent_degradation(trace_obj, model_id)
-            if degraded_stages:
-                errors.append(f"silent_degradation: stages={degraded_stages}")
-
-            metrics = {
-                "retrieval": retrieval,
-                "coverage": coverage,
-                "recommendation": recommendation,
-                "latency": latency,
-                "safety": safety,
-                "llm_calls": llm_calls,
-                "degraded_stages": degraded_stages,
-            }
-            status = _scenario_status(
-                metrics,
-                errors,
-                known_backend_issue=scenario.expected.known_backend_issue,
-            )
-            known_issue_reference = None
-            if status != "pass" and scenario.expected.known_backend_issue:
-                known_issue_reference = scenario.expected.known_backend_issue
-
-            trace_path: str | None = None
-            trace_id: str | None = None
-            if trace_obj is not None:
-                trace_id = trace_obj.decision_id
-                trace_file = traces_dir / f"{scenario.id}.json"
-                trace_file.write_text(trace_obj.model_dump_json(indent=2), encoding="utf-8")
-                trace_path = str(trace_file)
-
-            scenario_rows.append(
-                {
-                    "scenario_id": scenario.id,
-                    "category": scenario.category,
-                    "persona_id": scenario.persona_id,
-                    "status": status,
-                    "errors": errors,
-                    "known_issue_reference": known_issue_reference,
-                    "metrics": metrics,
-                    "raw": {
-                        "decision_trace_id": trace_id,
-                        "decision_trace_path": trace_path,
-                        "system_outputs_per_turn": [r.system_output for r in results],
-                    },
+                errors.extend([r.error for r in results if r.error])
+                total_calls, first_try_calls, retry_calls, by_stage_calls = _counter_to_stage_calls(dict(calls))
+                retrieval = score_retrieval(scenario, results)
+                coverage = score_coverage(scenario, results)
+                recommendation = score_recommendation(scenario, results)
+                latency = score_latency(scenario, results)
+                safety = _evaluate_safety(scenario, results)
+                llm_calls = {
+                    "total": total_calls,
+                    "first_try": first_try_calls,
+                    "retries": retry_calls,
+                    "by_stage": by_stage_calls,
+                    "budget": int(scenario.metadata.llm_call_count_budget),
+                    "within_budget": total_calls <= int(scenario.metadata.llm_call_count_budget),
                 }
-            )
+
+                trace_obj = next((r.decision_trace for r in reversed(results) if r.decision_trace is not None), None)
+                degraded_stages = detect_silent_degradation(trace_obj, model_id)
+                if degraded_stages:
+                    errors.append(f"silent_degradation: stages={degraded_stages}")
+
+                metrics = {
+                    "retrieval": retrieval,
+                    "coverage": coverage,
+                    "recommendation": recommendation,
+                    "latency": latency,
+                    "safety": safety,
+                    "llm_calls": llm_calls,
+                    "degraded_stages": degraded_stages,
+                }
+                status = _scenario_status(
+                    metrics,
+                    errors,
+                    known_backend_issue=scenario.expected.known_backend_issue,
+                )
+                known_issue_reference = None
+                if status != "pass" and scenario.expected.known_backend_issue:
+                    known_issue_reference = scenario.expected.known_backend_issue
+
+                trace_path: str | None = None
+                trace_id: str | None = None
+                if trace_obj is not None:
+                    trace_id = trace_obj.decision_id
+                    trace_file = traces_dir / f"{scenario.id}.json"
+                    trace_file.write_text(trace_obj.model_dump_json(indent=2), encoding="utf-8")
+                    trace_path = str(trace_file)
+
+                scenario_rows.append(
+                    {
+                        "scenario_id": scenario.id,
+                        "category": scenario.category,
+                        "persona_id": scenario.persona_id,
+                        "status": status,
+                        "errors": errors,
+                        "known_issue_reference": known_issue_reference,
+                        "metrics": metrics,
+                        "raw": {
+                            "decision_trace_id": trace_id,
+                            "decision_trace_path": trace_path,
+                            "system_outputs_per_turn": [r.system_output for r in results],
+                        },
+                    }
+                )
+    finally:
+        _restore_env(env_snapshot)
 
     duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 3)
     report = {

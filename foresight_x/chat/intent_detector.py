@@ -4,6 +4,7 @@ import re
 
 from pydantic import BaseModel, Field
 
+from foresight_x.chat.decision_trigger import is_explicit_decision_mode_command
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.structured_predict import structured_predict
 
@@ -88,6 +89,14 @@ def _heuristic(message: str) -> ChatIntentResult:
     text = (message or "").strip().lower()
     if not text:
         return ChatIntentResult()
+    if is_explicit_decision_mode_command(text):
+        return ChatIntentResult(
+            intent="decision_candidate",
+            confidence=0.98,
+            decision_type="general",
+            reasons=["explicit decision mode command"],
+            suggested_action="show_decision_report_prompt",
+        )
     role_hits = [k for k in _ROLEPLAY_HINTS if k in text]
     dec_hits = [k for k in _DECISION_HINTS if k in text]
     conf_role = min(1.0, 0.36 + 0.2 * len(role_hits)) if role_hits else 0.0
