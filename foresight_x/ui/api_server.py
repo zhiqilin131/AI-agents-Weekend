@@ -48,6 +48,7 @@ from foresight_x.perception.clarification_gate import (
     fast_gate_timing_ms,
     should_show_clarification_fast,
 )
+from foresight_x.perception.query_enhance import prepare_decision_text
 from foresight_x.perception.personalized_clarify import (
     memory_and_message_sufficient_for_reply,
     persist_clarification_followup,
@@ -113,11 +114,14 @@ from foresight_x.chat import (
     save_thread,
 )
 from foresight_x.chat.decision_trigger import evaluate_decision_trigger, preview_will_auto_start_decision
+from foresight_x.chat.manual_decision_mode import build_manual_decision_confirmation
 from foresight_x.chat.option_coach import build_option_chat_prompt
 from foresight_x.chat.pending_action import (
     clear_pending_action,
     enrich_thread_with_pending_action,
+    return_thread_to_normal_chat_after_report,
     set_clarification_pending,
+    set_manual_decision_pending,
     set_suggestion_pending,
     sync_decision_pending_from_trigger,
 )
@@ -807,6 +811,71 @@ def health() -> dict[str, str]:
     }
 
 
+class ChaosProfileBody(BaseModel):
+    error_rate: float = 0.0
+    latency_ms: int = 0
+    latency_jitter_ms: int = 0
+    status: int | None = None
+    partial_json: bool = False
+    outage: bool = False
+
+
+@app.get("/api/_chaos")
+def chaos_list() -> dict[str, Any]:
+    """List active chaos profiles (only when ``FX_CHAOS=1``)."""
+    from foresight_x.orchestration.chaos import chaos_armed, list_active_profiles
+
+    if not chaos_armed():
+        raise HTTPException(status_code=404, detail="chaos harness not armed (set FX_CHAOS=1)")
+    return {"armed": True, "profiles": list_active_profiles()}
+
+
+@app.post("/api/_chaos/{target}")
+def chaos_set(target: str, body: ChaosProfileBody) -> dict[str, Any]:
+    """Arm runtime chaos on a dependency target (demo / judging only)."""
+    from foresight_x.orchestration.chaos import (
+        normalize_target,
+        profile_to_dict,
+        set_runtime_profile,
+    )
+    from foresight_x.orchestration.chaos import ChaosProfile, chaos_armed
+
+    if not chaos_armed():
+        raise HTTPException(status_code=404, detail="chaos harness not armed (set FX_CHAOS=1)")
+    prof = ChaosProfile(
+        error_rate=body.error_rate,
+        latency_ms=body.latency_ms,
+        latency_jitter_ms=body.latency_jitter_ms,
+        status=body.status,
+        partial_json=body.partial_json,
+        outage=body.outage,
+    ).normalized()
+    key = normalize_target(target)
+    set_runtime_profile(key, prof)
+    return {"ok": True, "target": key, "profile": profile_to_dict(prof)}
+
+
+@app.delete("/api/_chaos/{target}")
+def chaos_clear(target: str) -> dict[str, Any]:
+    from foresight_x.orchestration.chaos import chaos_armed, normalize_target, set_runtime_profile
+
+    if not chaos_armed():
+        raise HTTPException(status_code=404, detail="chaos harness not armed (set FX_CHAOS=1)")
+    key = normalize_target(target)
+    set_runtime_profile(key, None)
+    return {"ok": True, "target": key, "cleared": True}
+
+
+@app.delete("/api/_chaos")
+def chaos_clear_all() -> dict[str, Any]:
+    from foresight_x.orchestration.chaos import chaos_armed, clear_runtime_profiles
+
+    if not chaos_armed():
+        raise HTTPException(status_code=404, detail="chaos harness not armed (set FX_CHAOS=1)")
+    clear_runtime_profiles()
+    return {"ok": True, "cleared": "all"}
+
+
 @app.get("/api/health/resilience")
 def resilience_health() -> dict[str, Any]:
     """Operational resilience report card for chaos/demo checks."""
@@ -844,6 +913,8 @@ def root() -> dict[str, object]:
         "routes": [
             "/api/health",
             "/api/health/resilience",
+            "/api/_chaos",
+            "/api/_chaos/{target}",
             "/api/me",
             "/api/usage/credits",
             "/api/usage/transactions",
@@ -2111,6 +2182,8 @@ class ShadowThreadMessageRequest(BaseModel):
     #: Idempotency / dedupe for Slime Credits charging when the client retries the same turn.
     credit_request_id: str | None = Field(default=None, max_length=200)
     model_option_id: str | None = Field(default=None, max_length=64)
+    #: User toggled manual Decision Mode in Shadow Chat — enhance input and ask for Yes before report.
+    manual_decision_mode: bool = Field(default=False)
 
     @model_validator(mode="after")
     def _message_required_for_send(self) -> "ShadowThreadMessageRequest":
@@ -2845,6 +2918,74 @@ def stream_shadow_chat_message(
             mode = str(body.mode or thread.get("mode") or "normal")
             message = body.message.strip()
             effective_message = merge_clarification_answers(message, body.clarification_answers)
+
+            if (
+                bool(body.manual_decision_mode)
+                and request_action == "send_message"
+                and message
+                and not body.clarification_answers
+            ):
+                t0_manual = datetime.now(timezone.utc)
+                yield _sse_chunk({"type": "status", "status": "thinking", "label": "Structuring decision…"})
+                profile = load_user_profile(settings)
+                ctx_m, _ = _build_context(settings, llm_model=chat_pm_outer)
+                _original, enhanced = prepare_decision_text(
+                    effective_message,
+                    ctx_m.llm,
+                    profile=profile,
+                )
+                assistant_text = build_manual_decision_confirmation(
+                    original=_original,
+                    enhanced=enhanced,
+                )
+                append_message(thread, role="user", content=effective_message, mode=mode)
+                yield _sse_chunk({"type": "status", "status": "responding", "label": "Confirm decision question…"})
+                for chunk in _chunk_text(assistant_text):
+                    yield _sse_chunk({"type": "delta", "content": chunk})
+                append_message(
+                    thread,
+                    role="assistant",
+                    content=assistant_text,
+                    mode=mode,
+                    intent="decision_candidate",
+                    memory_used=False,
+                )
+                _finalize_shadow_thread_turn(thread, settings=settings)
+                pa_manual = set_manual_decision_pending(
+                    thread,
+                    original_prompt=_original,
+                    enhanced_prompt=enhanced,
+                )
+                save_thread(thread)
+                suggestion_manual = {
+                    "type": "decision_report",
+                    "title": pa_manual["title"],
+                    "message": pa_manual["message"],
+                    "actions": ["generate_decision_report", "continue_normally", "dismiss_suggestion"],
+                    "manual_mode": True,
+                    "decision_prompt": enhanced,
+                }
+                yield _sse_chunk({"type": "status", "status": "decision_detected", "label": "Decision Mode"})
+                yield _sse_chunk({"type": "decision_suggestion", "suggestion": suggestion_manual})
+                yield _sse_chunk({"type": "pending_action_updated", "pending_action": pa_manual})
+                t_done_m = datetime.now(timezone.utc)
+                enrich_thread_with_pending_action(thread, last_user_message=message)
+                yield _sse_chunk(
+                    {
+                        "type": "done",
+                        "thread_id": thread["thread_id"],
+                        "message": thread.get("messages", [])[-1],
+                        "suggestion": suggestion_manual,
+                        "pending_action": thread.get("pending_action"),
+                        "metrics": {
+                            "response_total_ms": int((t_done_m - t0_manual).total_seconds() * 1000),
+                            "manual_decision_mode": True,
+                            "client_turn_seq": body.client_turn_seq,
+                        },
+                    }
+                )
+                return
+
             if body.clarification_answers:
                 try:
                     ctx0, _ = _build_context(settings, llm_model=chat_pm_outer)
@@ -3027,6 +3168,8 @@ def stream_shadow_chat_message(
                     },
                 )
                 _try_create_decision_followup(settings, trace, str(thread.get("thread_id") or tid or ""))
+                return_thread_to_normal_chat_after_report(thread)
+                save_thread(thread)
                 yield _sse_chunk({"type": "status", "status": "report_open", "label": "Decision report ready"})
                 yield _sse_chunk(
                     {
@@ -3356,6 +3499,7 @@ def stream_shadow_decision_report(
                         )
                         if isinstance(trace, dict):
                             _try_create_decision_followup(settings, trace, tid)
+                    return_thread_to_normal_chat_after_report(thread)
                     save_thread(thread)
                     t1 = datetime.now(timezone.utc)
                     yield _sse_chunk(
@@ -4080,11 +4224,13 @@ def _run_slime_voice_pipeline(
     client_timing: dict[str, float] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
     on_stream_event: Callable[[dict[str, Any]], None] | None = None,
+    manual_decision_mode: bool = False,
 ) -> dict[str, Any]:
     from foresight_x.chat.conversation_service import (
         ensure_slime_voice_thread,
         maybe_slime_voice_preflight_reply,
         process_conversation_turn,
+        process_manual_decision_voice_turn,
     )
     from foresight_x.chat.thread_store import append_message
     from foresight_x.profile.proactive_memory import capture_turn_memory
@@ -4156,6 +4302,72 @@ def _run_slime_voice_pipeline(
                 "language": tr.language,
             }
         )
+
+    if manual_decision_mode:
+        profile = load_user_profile(settings)
+        ctx_m, _ = _build_context(settings, llm_model=llm_model)
+        t_manual0 = time.perf_counter()
+        turn_manual = process_manual_decision_voice_turn(
+            settings=settings,
+            thread=thread,
+            transcript=transcript,
+            llm=ctx_m.llm,
+            profile=profile,
+            on_reply_delta=on_text_delta,
+        )
+        tr_timing_m = tr.timing or {}
+        timing_manual: dict[str, Any] = {
+            "recording_ms": client_timing.get("recording_ms"),
+            "upload_ms": client_timing.get("upload_ms"),
+            "vad_endpoint_ms": client_timing.get("vad_endpoint_ms"),
+            "audio_duration_seconds": tr.duration_seconds,
+            "asr_provider": tr.provider,
+            "asr_model": tr_timing_m.get("model"),
+            "asr_model_load_ms": tr_timing_m.get("asr_model_load_ms"),
+            "asr_ms": tr_timing_m.get("transcription_ms"),
+            "transcription_ms": tr_timing_m.get("transcription_ms"),
+            "realtime_factor": tr_timing_m.get("realtime_factor"),
+            "context_prep_ms": context_prep_ms,
+            "memory_retrieval_ms": 0.0,
+            "intent_route_ms": 0.0,
+            "tool_execute_ms": (time.perf_counter() - t_manual0) * 1000,
+            "llm_first_token_ms": 0.0,
+            "llm_total_ms": (time.perf_counter() - t_manual0) * 1000,
+            "tts_ms": 0.0,
+            "model_option_id": requested_model_option_id,
+            "total_ms": (time.perf_counter() - t_total0) * 1000,
+            "manual_decision_mode": True,
+        }
+        assistant_text_m = str(turn_manual.get("assistant_text") or "")
+        spoken_seq_m = [x for x in (turn_manual.get("spoken_sequence") or []) if str(x).strip()]
+        spoken_text_m = " ".join(spoken_seq_m).strip() or assistant_text_m
+        ds_m = turn_manual.get("decision_suggestion")
+        return {
+            "transcript": transcript,
+            "asr_provider": tr.provider,
+            "language": tr.language,
+            "assistant_text": assistant_text_m,
+            "spoken_text": spoken_text_m,
+            "spoken_sequence": spoken_seq_m,
+            "thread_id": str(turn_manual.get("thread_id") or resolved_tid),
+            "intent": str(turn_manual.get("intent") or "decision_candidate"),
+            "decision_suggestion": ds_m,
+            "memory_updates": [],
+            "memory_update_details": [],
+            "tool_call": {"name": "manual_decision_mode", "arguments": {}},
+            "tool_result": {"ok": True, "conversation_turn": True, "manual_decision_mode": True},
+            "frontend_action": turn_manual.get("frontend_action")
+            or {"type": "show_decision_mode_confirmation", "route": "", "payload": {}},
+            "requires_confirmation": bool(ds_m and ds_m.get("should_show")),
+            "timing": timing_manual,
+            "voice_ui": {
+                "intent": "decision_candidate",
+                "memory_phases": [],
+                "evidence_items": [],
+                "should_show_evidence_drawer": False,
+            },
+            "evidence_items": [],
+        }
 
     early_intent = ""
     early_tool = ""
@@ -4710,6 +4922,7 @@ async def slime_voice_command(
     model_option_id: str | None = Form(default=None),
     recording_ms: float | None = Form(default=None),
     vad_endpoint_ms: float | None = Form(default=None),
+    manual_decision_mode: bool = Form(default=False),
 ) -> JSONResponse:
     """Push-to-talk: local ASR (default faster-whisper) + GPT-4o-mini tool routing."""
     settings = _settings_for_active_user()
@@ -4746,6 +4959,9 @@ async def slime_voice_command(
                 "upload_ms": upload_ms,
                 "vad_endpoint_ms": vad_endpoint_ms,
             },
+            None,
+            None,
+            bool(manual_decision_mode),
         )
     except ValueError as e:
         if tx is not None:
@@ -4785,6 +5001,7 @@ async def slime_voice_command_stream(
     model_option_id: str | None = Form(default=None),
     recording_ms: float | None = Form(default=None),
     vad_endpoint_ms: float | None = Form(default=None),
+    manual_decision_mode: bool = Form(default=False),
 ) -> StreamingResponse | JSONResponse:
     settings = _settings_for_active_user()
     t_read0 = time.perf_counter()
@@ -4842,6 +5059,7 @@ async def slime_voice_command_stream(
                 },
                 _emit_text_delta,
                 _emit_stream_event,
+                bool(manual_decision_mode),
             )
         )
         try:

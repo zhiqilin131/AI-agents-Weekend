@@ -53,6 +53,18 @@ from foresight_x.schemas import (
     UserState,
 )
 from foresight_x.decision.report_surface import build_report_surface
+from foresight_x.orchestration.degradation_policy import (
+    raise_if_strict_llm_missing,
+    mark_evidence_live_flag,
+    reset_llm_probe_cache,
+    safe_build_user_state,
+    safe_evaluate_options,
+    safe_prepare_decision_text,
+    safe_recommend,
+    safe_reflect,
+    safe_simulate_futures,
+    safe_step_infer,
+)
 from foresight_x.simulation.evaluator import evaluate_options
 from foresight_x.simulation.future_simulator import simulate_futures
 
@@ -153,6 +165,26 @@ def _provider_label_from_llm(llm: Any | None) -> str:
     return provider or model
 
 
+def _llm_runtime_fields(llm: Any | None) -> dict[str, str]:
+    call = getattr(llm, "last_call", None)
+    if call is None:
+        return {}
+    provider = str(getattr(call, "provider_used", "") or "").strip()
+    model = str(getattr(call, "model_used", "") or "").strip()
+    label = f"{provider}:{model}" if provider and model else (provider or model)
+    return {
+        "llm_provider_used": label,
+        "llm_fallback_reason": str(getattr(call, "fallback_reason", "") or "").strip(),
+    }
+
+
+def _enrich_runtime_context(runtime: RuntimeContext, llm: Any | None) -> RuntimeContext:
+    extra = _llm_runtime_fields(llm)
+    if not extra:
+        return runtime
+    return runtime.model_copy(update=extra)
+
+
 def _graph_theme_tokens(user_state: UserState) -> set[str]:
     text = " ".join(
         [
@@ -234,6 +266,8 @@ def _ensure_runtime_degradations(
                 "reason": f"chaos injection enabled ({m})",
                 "retryable": True,
                 "error_kind": m,
+                "provider": component,
+                "fallback_path": f"chaos_{m}",
             }
         )
     return synthetic
@@ -452,7 +486,7 @@ def finalize_trace(
     degradations: list[Degradation] | None = None,
 ) -> DecisionTrace:
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
-    recommendation = recommend(
+    recommendation, _rec_provider, _rec_deg = safe_recommend(
         evaluations,
         options,
         evidence_bundle,
@@ -492,7 +526,7 @@ def finalize_trace(
             "events": list(resilience_events or []),
         },
     )
-    reflection = reflect(trace, llm)
+    reflection, _ref_provider, _ref_deg = safe_reflect(trace, llm)
     trace = trace.model_copy(update={"reflection": reflection})
     trace = trace.model_copy(update={"report_surface": build_report_surface(trace)})
     if persist_trace:
@@ -524,7 +558,9 @@ def iter_pipeline_events(
 ) -> Iterator[dict[str, Any]]:
     """Yield meta, partial trace fragments per stage, then ``complete`` (SSE)."""
     settings = ctx.settings or load_settings()
+    raise_if_strict_llm_missing(ctx.llm)
     run_token = start_resilience_run()
+    reset_llm_probe_cache()
     probe_linear_mcp()
     for provider in ("openai", "tavily"):
         mode = chaos_mode(provider)
@@ -571,17 +607,17 @@ def iter_pipeline_events(
             yield {"event": "stage", "stage": "enhance"}
             t_stage = time.perf_counter()
             effective = merge_clarification_answers(user_raw, clarification_answers)
-            if preserve_raw_input:
-                original, enhanced = user_raw, user_raw
-            else:
-                original, enhanced = prepare_decision_text(
-                    effective,
-                    ctx.llm,
-                    profile=profile,
-                    original_override=user_raw,
-                )
+            original, enhanced, enhance_provider, deg_enhance = safe_prepare_decision_text(
+                effective,
+                ctx.llm,
+                profile=profile,
+                original_override=user_raw,
+                preserve_raw_input=preserve_raw_input,
+            )
             per_stage_latency_ms["enhance"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["enhance"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["enhance"] = enhance_provider
+            if deg_enhance:
+                yield {"event": "degraded", "degraded": deg_enhance}
             yield {
                 "event": "partial",
                 "stage": "enhance",
@@ -592,11 +628,15 @@ def iter_pipeline_events(
         if resume_idx <= 1 or user_state is None:
             yield {"event": "stage", "stage": "perceive"}
             t_stage = time.perf_counter()
-            user_state = build_user_state(enhanced, ctx.llm, profile=profile)
+            user_state, perceive_provider, deg_perceive = safe_build_user_state(
+                enhanced, ctx.llm, profile=profile
+            )
             user_state = merge_profile_into_user_state(user_state, profile)
             user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
             per_stage_latency_ms["perceive"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["perceive"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["perceive"] = perceive_provider
+            if deg_perceive:
+                yield {"event": "degraded", "degraded": deg_perceive}
             yield {
                 "event": "partial",
                 "stage": "perceive",
@@ -611,6 +651,7 @@ def iter_pipeline_events(
             memory_bundle, evidence_bundle = retrieve_bundles_parallel(
                 user_state, ctx, exclude_decision_id=did
             )
+            evidence_bundle = mark_evidence_live_flag(evidence_bundle)
             per_stage_latency_ms["retrieve"] = int(round((time.perf_counter() - t_stage) * 1000.0))
             provider_per_stage["retrieve"] = _retrieve_provider_label(evidence_bundle, current_run_events())
             yield {
@@ -627,9 +668,13 @@ def iter_pipeline_events(
         if resume_idx <= 3 or rationality is None or options is None:
             yield {"event": "stage", "stage": "infer"}
             t_stage = time.perf_counter()
-            rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
+            rationality, options, infer_provider, deg_infer = safe_step_infer(
+                user_state, memory_bundle, evidence_bundle, ctx.llm
+            )
             per_stage_latency_ms["infer"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["infer"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["infer"] = infer_provider
+            if deg_infer:
+                yield {"event": "degraded", "degraded": deg_infer}
             yield {
                 "event": "partial",
                 "stage": "infer",
@@ -643,9 +688,13 @@ def iter_pipeline_events(
         if resume_idx <= 4 or futures is None:
             yield {"event": "stage", "stage": "simulate"}
             t_stage = time.perf_counter()
-            futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
+            futures, simulate_provider, deg_sim = safe_simulate_futures(
+                options, user_state, evidence_bundle, ctx.llm, memory_bundle
+            )
             per_stage_latency_ms["simulate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["simulate"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["simulate"] = simulate_provider
+            if deg_sim:
+                yield {"event": "degraded", "degraded": deg_sim}
             yield {
                 "event": "partial",
                 "stage": "simulate",
@@ -656,9 +705,11 @@ def iter_pipeline_events(
         if resume_idx <= 5 or evaluations is None:
             yield {"event": "stage", "stage": "evaluate"}
             t_stage = time.perf_counter()
-            evaluations = evaluate_options(futures, user_state, ctx.llm)
+            evaluations, eval_provider, deg_eval = safe_evaluate_options(futures, user_state, ctx.llm)
             per_stage_latency_ms["evaluate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["evaluate"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["evaluate"] = eval_provider
+            if deg_eval:
+                yield {"event": "degraded", "degraded": deg_eval}
             yield {
                 "event": "partial",
                 "stage": "evaluate",
@@ -722,6 +773,7 @@ def iter_pipeline_events(
                 ),
             }
         )
+        runtime_context = _enrich_runtime_context(runtime_context, ctx.llm)
         trace = trace.model_copy(update={"runtime": runtime_context})
         trace = trace.model_copy(update={"report_surface": build_report_surface(trace)})
         if (
@@ -752,7 +804,9 @@ def run_pipeline(
 ) -> DecisionTrace:
     """Execute the full RIS stack and return a ``DecisionTrace``; optionally save JSON under ``data/traces/``."""
     settings = ctx.settings or load_settings()
+    raise_if_strict_llm_missing(ctx.llm)
     run_token = start_resilience_run()
+    reset_llm_probe_cache()
     probe_linear_mcp()
     for provider in ("openai", "tavily"):
         mode = chaos_mode(provider)
@@ -784,26 +838,24 @@ def run_pipeline(
         if resume_idx <= 0 or not original or not enhanced:
             t_stage = time.perf_counter()
             effective = merge_clarification_answers(user_raw, clarification_answers)
-            if preserve_raw_input:
-                original, enhanced = user_raw, user_raw
-            else:
-                original, enhanced = prepare_decision_text(
-                    effective,
-                    ctx.llm,
-                    profile=profile,
-                    original_override=user_raw,
-                )
+            original, enhanced, enhance_provider, _ = safe_prepare_decision_text(
+                effective,
+                ctx.llm,
+                profile=profile,
+                original_override=user_raw,
+                preserve_raw_input=preserve_raw_input,
+            )
             per_stage_latency_ms["enhance"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["enhance"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["enhance"] = enhance_provider
 
         user_state = _resume_model(UserState, resume_partial, "user_state")
         if resume_idx <= 1 or user_state is None:
             t_stage = time.perf_counter()
-            user_state = build_user_state(enhanced, ctx.llm, profile=profile)
+            user_state, perceive_provider, _ = safe_build_user_state(enhanced, ctx.llm, profile=profile)
             user_state = merge_profile_into_user_state(user_state, profile)
             user_state = user_state.model_copy(update={"active_user_id": settings.foresight_user_id})
             per_stage_latency_ms["perceive"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["perceive"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["perceive"] = perceive_provider
 
         memory_bundle = _resume_model(MemoryBundle, resume_partial, "memory")
         evidence_bundle = _resume_model(EvidenceBundle, resume_partial, "evidence")
@@ -812,6 +864,7 @@ def run_pipeline(
             memory_bundle, evidence_bundle = retrieve_bundles_parallel(
                 user_state, ctx, exclude_decision_id=did
             )
+            evidence_bundle = mark_evidence_live_flag(evidence_bundle)
             per_stage_latency_ms["retrieve"] = int(round((time.perf_counter() - t_stage) * 1000.0))
             provider_per_stage["retrieve"] = _retrieve_provider_label(evidence_bundle, current_run_events())
 
@@ -819,23 +872,27 @@ def run_pipeline(
         options = _resume_model_list(Option, resume_partial, "options")
         if resume_idx <= 3 or rationality is None or options is None:
             t_stage = time.perf_counter()
-            rationality, options = step_infer(user_state, memory_bundle, evidence_bundle, ctx.llm)
+            rationality, options, infer_provider, _ = safe_step_infer(
+                user_state, memory_bundle, evidence_bundle, ctx.llm
+            )
             per_stage_latency_ms["infer"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["infer"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["infer"] = infer_provider
 
         futures = _resume_model_list(SimulatedFuture, resume_partial, "futures")
         if resume_idx <= 4 or futures is None:
             t_stage = time.perf_counter()
-            futures = simulate_futures(options, user_state, evidence_bundle, ctx.llm, memory_bundle)
+            futures, simulate_provider, _ = safe_simulate_futures(
+                options, user_state, evidence_bundle, ctx.llm, memory_bundle
+            )
             per_stage_latency_ms["simulate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["simulate"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["simulate"] = simulate_provider
 
         evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
         if resume_idx <= 5 or evaluations is None:
             t_stage = time.perf_counter()
-            evaluations = evaluate_options(futures, user_state, ctx.llm)
+            evaluations, eval_provider, _ = safe_evaluate_options(futures, user_state, ctx.llm)
             per_stage_latency_ms["evaluate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
-            provider_per_stage["evaluate"] = _provider_label_from_llm(ctx.llm) or "none"
+            provider_per_stage["evaluate"] = eval_provider
 
         runtime_context = RuntimeContext(
             pipeline_started_at=pipeline_started_at,
@@ -893,6 +950,7 @@ def run_pipeline(
                 ),
             }
         )
+        runtime_context = _enrich_runtime_context(runtime_context, ctx.llm)
         trace = trace.model_copy(update={"runtime": runtime_context})
         trace = trace.model_copy(update={"report_surface": build_report_surface(trace)})
         if (

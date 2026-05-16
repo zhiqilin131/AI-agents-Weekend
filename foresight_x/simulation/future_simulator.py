@@ -28,9 +28,33 @@ def _normalize_probabilities(scenarios: list[Scenario]) -> list[Scenario]:
     return [s.model_copy(update={"probability": s.probability / total}) for s in scenarios]
 
 
+def _archetype_probabilities(option: Option) -> tuple[float, float, float]:
+    """Differentiate best/base/worst weights per option so heuristic scoring does not tie."""
+    blob = f"{option.option_id} {option.name} {option.description}".lower()
+    if any(k in blob for k in ("commit", "accept now", "choose:", "pick ", "go to the")):
+        return (0.38, 0.47, 0.15)
+    if any(k in blob for k in ("extension", "more time", "delay", "wait", "pause")):
+        return (0.18, 0.57, 0.25)
+    if any(
+        k in blob
+        for k in ("sprint", "information", "research", "compare", "scorecard", "negotiate")
+    ):
+        return (0.28, 0.52, 0.20)
+    h = sum(ord(c) for c in option.option_id) % 5
+    spreads = (
+        (0.30, 0.50, 0.20),
+        (0.33, 0.47, 0.20),
+        (0.26, 0.54, 0.20),
+        (0.35, 0.45, 0.20),
+        (0.22, 0.56, 0.22),
+    )
+    return spreads[h]
+
+
 def _fallback_future(option: Option, user_state: UserState, evidence: EvidenceBundle) -> SimulatedFuture:
     fact_hint = evidence.facts[0].text[:120] if evidence.facts else "limited external evidence"
     oid = option.option_id
+    p_best, p_base, p_worst = _archetype_probabilities(option)
     return SimulatedFuture(
         option_id=oid,
         time_horizon="3 months",
@@ -42,7 +66,7 @@ def _fallback_future(option: Option, user_state: UserState, evidence: EvidenceBu
                         f"{option.name} works out: goals advance with manageable disruption. "
                         f"(Grounding hint: {fact_hint})"
                     ),
-                    probability=0.25,
+                    probability=p_best,
                     key_drivers=["execution", "alignment with goals"],
                 ),
                 Scenario(
@@ -50,7 +74,7 @@ def _fallback_future(option: Option, user_state: UserState, evidence: EvidenceBu
                     trajectory=(
                         f"Mixed outcomes for {option.name}: partial progress, some tradeoffs remain."
                     ),
-                    probability=0.5,
+                    probability=p_base,
                     key_drivers=["uncertainty", "resource constraints"],
                 ),
                 Scenario(
@@ -59,7 +83,7 @@ def _fallback_future(option: Option, user_state: UserState, evidence: EvidenceBu
                         f"{option.name} underperforms: key assumptions fail, recovery is costly "
                         f"given {user_state.reversibility.value} reversibility."
                     ),
-                    probability=0.25,
+                    probability=p_worst,
                     key_drivers=["downside tail", "stress and workload"],
                 ),
             ]

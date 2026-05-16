@@ -64,6 +64,9 @@ export function ThreadActionDock({
         <DecisionSuggestionCard
           suggestion={suggestion}
           disabled={disabled}
+          confirmLabel={
+            pendingAction?.payload?.manual_mode === true ? 'Yes' : 'Generate Decision Report'
+          }
           onGenerate={onGenerateDecisionReport}
           onKeep={onDismissSuggestion}
         />

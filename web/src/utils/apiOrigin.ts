@@ -29,8 +29,9 @@ export function apiFetchErrorMessage(error: unknown): string {
         return `Cannot reach the API at ${backend}. If DevTools shows a CORS error, set Railway env ALLOWED_ORIGINS to your frontend origin (e.g. https://foresight-x.vercel.app), comma-separated if several, then redeploy the backend.`;
       }
       return (
-        'Cannot reach the API on port 8765. From the web folder run `npm run dev:all`, or from the repo root: ' +
-        'python -m uvicorn foresight_x.ui.api_server:app --host 127.0.0.1 --port 8765 --reload'
+        'Cannot reach the API on port 8765. In a terminal, run `cd web && npm run dev:all` and leave it open ' +
+        '(you should see Vite on http://127.0.0.1:5173 and Uvicorn on :8765). ' +
+        'Then open http://127.0.0.1:5173 — not :8765. Check with `npm run dev:check`.'
       );
     }
   }

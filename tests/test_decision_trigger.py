@@ -45,7 +45,7 @@ def test_explicit_decision_mode_offers_confirmation() -> None:
     assert thread["decision_trigger_state"]["pending_confirmation"] is True
 
 
-def test_dismiss_enters_cooldown_and_suppresses_soft_suggestion() -> None:
+def test_dismiss_does_not_block_next_decision_detection() -> None:
     thread: dict = {}
     evaluate_decision_trigger(
         thread=thread,
@@ -61,4 +61,22 @@ def test_dismiss_enters_cooldown_and_suppresses_soft_suggestion() -> None:
         intent_label="decision_candidate",
         intent_confidence=0.8,
     )
-    assert out.should_offer_suggestion is False
+    assert out.should_offer_suggestion is True
+
+
+def test_pending_confirmation_refreshes_on_new_decision_message() -> None:
+    thread = {
+        "decision_trigger_state": {
+            "pending_confirmation": True,
+            "pending_prompt": "Old prompt",
+        }
+    }
+    out = evaluate_decision_trigger(
+        thread=thread,
+        user_action="send_message",
+        user_message="Should I get the jersey or save for hotels?",
+        intent_label="decision_candidate",
+        intent_confidence=0.85,
+    )
+    assert out.should_offer_suggestion is True
+    assert "jersey" in thread["decision_trigger_state"]["pending_prompt"]

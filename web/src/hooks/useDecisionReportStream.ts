@@ -1,9 +1,25 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
 import { buildCheaperModelHint, fetchSlimeModelCatalog } from '../features/models/slimeModelsApi';
 import { apiFetch } from '../utils/apiFetch';
+import {
+  formatDegradedPayload,
+  mergeDegradedNotices,
+  noticeMessages,
+  noticesFromTrace,
+  type DegradedNotice,
+} from '../utils/degradedModeNotices';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
 import { parseSseBlocks } from '../utils/parseSse';
+
+function pushDegraded(
+  setNotices: Dispatch<SetStateAction<DegradedNotice[]>>,
+  raw: Record<string, unknown> | undefined,
+) {
+  if (!raw || typeof raw !== 'object') return;
+  const notice = formatDegradedPayload(raw);
+  setNotices((prev) => mergeDegradedNotices(prev, [notice]));
+}
 
 type StreamStatus = 'idle' | 'streaming' | 'done' | 'error';
 
@@ -20,7 +36,7 @@ export function useDecisionReportStream() {
   const [finalTrace, setFinalTrace] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [degradedWarnings, setDegradedWarnings] = useState<string[]>([]);
+  const [degradedNotices, setDegradedNotices] = useState<DegradedNotice[]>([]);
   const controllerRef = useRef<AbortController | null>(null);
   const lastStartParamsRef = useRef<{
     threadId: string;
@@ -47,7 +63,7 @@ export function useDecisionReportStream() {
     setFinalTrace(null);
     setError(null);
     setIsStreaming(true);
-    setDegradedWarnings([]);
+    setDegradedNotices([]);
     lastStartParamsRef.current = params;
 
     let capturedTrace: Record<string, unknown> | null = null;
@@ -79,13 +95,21 @@ export function useDecisionReportStream() {
         if (inner?.event === 'stage' && typeof inner.stage === 'string') {
           lastStage = inner.stage;
         }
+        if (inner?.event === 'degraded' && inner.degraded && typeof inner.degraded === 'object') {
+          pushDegraded(setDegradedNotices, inner.degraded as Record<string, unknown>);
+        }
       } else if (type === 'error') {
         streamError = String(ev.message || 'Report failed');
         setError(streamError);
       } else if (type === 'warning') {
-        const msg = String(ev.message || 'Running in degraded mode');
-        setDegradedWarnings((prev) => (prev.includes(msg) ? prev : [...prev.slice(-2), msg]));
-        } else if (type === 'pending_action_updated') {
+        const kind = String(ev.kind || '');
+        if (kind === 'degraded_mode' || ev.degraded) {
+          pushDegraded(
+            setDegradedNotices,
+            (ev.degraded as Record<string, unknown> | undefined) ?? { reason: ev.message },
+          );
+        }
+      } else if (type === 'pending_action_updated') {
           /* Parent clears decision dock when report stream starts. */
         } else if (type === 'done') {
           setIsStreaming(false);
@@ -99,6 +123,7 @@ export function useDecisionReportStream() {
         }
         if (ev.decision_trace && typeof ev.decision_trace === 'object') {
           capturedTrace = ev.decision_trace as Record<string, unknown>;
+          setDegradedNotices((prev) => mergeDegradedNotices(prev, noticesFromTrace(capturedTrace)));
           setFinalTrace(capturedTrace);
           setStatus('done');
         } else {
@@ -246,6 +271,7 @@ export function useDecisionReportStream() {
         throw new Error(t || res.statusText);
       }
       const data = (await res.json()) as Record<string, unknown>;
+      setDegradedNotices(noticesFromTrace(data));
       setFinalTrace(data);
       setStatus('done');
     } catch (e) {
@@ -263,7 +289,8 @@ export function useDecisionReportStream() {
     finalTrace,
     trace,
     error,
-    degradedWarnings,
+    degradedWarnings: noticeMessages(degradedNotices),
+    degradedNotices,
     start,
     cancel,
     retryFromCurrentStage,

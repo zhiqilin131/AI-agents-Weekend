@@ -218,12 +218,7 @@ export default function ShadowChatPage() {
               className="w-full px-4 py-3 pr-28 bg-white/80 border border-gray-200/80 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-purple-400/40 text-sm text-gray-900"
             />
             <div className="absolute bottom-3 right-3">
-              <VoiceRecorderTranscribeButton
-                onTranscript={appendVoice}
-                disabled={sending}
-                compact
-                showUploadFallback
-              />
+              <VoiceRecorderTranscribeButton onTranscript={appendVoice} disabled={sending} compact />
             </div>
           </div>
           <button

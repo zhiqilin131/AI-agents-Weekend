@@ -64,6 +64,7 @@ export default function SlimeCompanionPage() {
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
   const [buddyPendingAction, setBuddyPendingAction] = useState<PendingAction | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
+  const [decisionModeManual, setDecisionModeManual] = useState(false);
   const reportStream = useDecisionReportStream();
 
   const persistThreadId = useCallback(
@@ -418,7 +419,7 @@ export default function SlimeCompanionPage() {
             Talk with {slimeDraft.name?.trim() || 'your Slime'}
           </h1>
         </div>
-        <div className="relative z-40 h-[min(72vh,680px)] w-full max-w-5xl shrink-0">
+        <div className="relative z-40 h-[min(72vh,680px)] w-full max-w-5xl shrink-0 rounded-[32px]">
           {/*
             Voice UI is split z-index inside SlimeVoiceAgent (panels z-32, mic z-52).
             Stage z-44 paints above bubbles/transcript so the buddy stays visible; mic stays on top for taps.
@@ -450,6 +451,9 @@ export default function SlimeCompanionPage() {
               setSlimeDraft(next);
             }}
             onConversationUpdated={onBuddyConversationUpdated}
+            decisionModeActive={decisionModeManual}
+            onToggleDecisionMode={() => setDecisionModeManual((v) => !v)}
+            decisionModeToggleDisabled={reportStream.isStreaming}
           />
           <SlimeCompanionStage
             className="relative z-[44]"

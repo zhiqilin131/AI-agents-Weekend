@@ -742,6 +742,10 @@ class EvidenceBundle(BaseModel):
     facts: list[Fact]
     base_rates: list[Fact]
     recent_events: list[Fact]
+    live: bool = Field(
+        default=True,
+        description="False when live world search (e.g. Tavily) was skipped and only cache/memory evidence was used.",
+    )
 
 
 class RationalityReport(BaseModel):
@@ -901,6 +905,8 @@ class Degradation(BaseModel):
     reason: str = ""
     retryable: bool = True
     error_kind: str = ""
+    provider: str = ""
+    fallback_path: str = ""
 
 
 class RuntimeContext(BaseModel):
@@ -914,6 +920,14 @@ class RuntimeContext(BaseModel):
     breaker_states_at_end: dict[str, Any] = Field(default_factory=dict)
     chaos_armed: bool = False
     chaos_profile: dict[str, str] = Field(default_factory=dict)
+    llm_provider_used: str = Field(
+        default="",
+        description="Primary LLM provider:model that produced the final recommendation path.",
+    )
+    llm_fallback_reason: str = Field(
+        default="",
+        description="Failover reason when a backup LLM provider was used (e.g. primary_429).",
+    )
 
 
 class ResilienceTraceInfo(BaseModel):

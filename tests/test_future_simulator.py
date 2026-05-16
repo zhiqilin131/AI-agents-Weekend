@@ -63,6 +63,33 @@ def _options() -> list[Option]:
     ]
 
 
+def test_simulate_futures_fallback_probabilities_differ_by_option() -> None:
+    from foresight_x.schemas import Option
+
+    opts = [
+        Option(
+            option_id="opt_ask_extension",
+            name="Ask for more time",
+            description="Delay",
+            key_assumptions=[],
+            cost_of_reversal="low",
+        ),
+        Option(
+            option_id="opt_commit_now",
+            name="Commit now",
+            description="Act",
+            key_assumptions=[],
+            cost_of_reversal="medium",
+        ),
+    ]
+    futures = simulate_futures(opts, _state(), _evidence(), llm=None)
+    probs = {
+        f.option_id: tuple(s.probability for s in sorted(f.scenarios, key=lambda x: x.label))
+        for f in futures
+    }
+    assert probs["opt_ask_extension"] != probs["opt_commit_now"]
+
+
 def test_simulate_futures_fallback_three_scenarios_sum_to_one() -> None:
     futures = simulate_futures(_options(), _state(), _evidence(), llm=None)
     assert len(futures) == 2

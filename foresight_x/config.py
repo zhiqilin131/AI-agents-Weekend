@@ -531,6 +531,12 @@ class Settings(BaseSettings):
     def _strip_outer_quotes_env_strings(cls, v: object) -> str:
         return _strip_outer_quotes_str(v)
 
+    @field_validator("openai_api_key", "tavily_api_key", mode="after")
+    @classmethod
+    def _strip_api_key_whitespace(cls, v: str) -> str:
+        """Railway / hand-edited .env sometimes leaves ``OPENAI_API_KEY= sk-...`` (leading space)."""
+        return (v or "").strip()
+
     @field_validator("slime_test_code", "slime_voucher_code", mode="before")
     @classmethod
     def _strip_outer_quotes_codes(cls, v: object) -> str:

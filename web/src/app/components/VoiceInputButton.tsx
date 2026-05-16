@@ -1,6 +1,5 @@
-import { Mic, Square, Upload } from 'lucide-react';
+import { Mic, Square } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { apiFetch } from '../../utils/apiFetch';
 
 type SpeechRecCtor = new () => {
   lang: string;
@@ -23,7 +22,6 @@ function getSpeechRecognition(): SpeechRecCtor | null {
 interface VoiceInputButtonProps {
   onTranscript: (text: string) => void;
   disabled?: boolean;
-  /** Prefer browser STT; still show upload as fallback */
   compact?: boolean;
 }
 
@@ -46,7 +44,7 @@ export function VoiceInputButton({ onTranscript, disabled, compact }: VoiceInput
     setError(null);
     const SR = getSpeechRecognition();
     if (!SR) {
-      setError('This browser does not support live speech-to-text. Try Chrome or Edge, or upload an audio file.');
+      setError('This browser does not support live speech-to-text. Try Chrome or Edge.');
       return;
     }
     const r = new SR();
@@ -60,7 +58,7 @@ export function VoiceInputButton({ onTranscript, disabled, compact }: VoiceInput
       setListening(false);
     };
     r.onerror = () => {
-      setError('Speech recognition failed. Try uploading audio instead.');
+      setError('Speech recognition failed. Try again or use the mic record button.');
       setListening(false);
     };
     r.onend = () => setListening(false);
@@ -84,61 +82,22 @@ export function VoiceInputButton({ onTranscript, disabled, compact }: VoiceInput
     };
   }, []);
 
-  const uploadAudio = async (file: File) => {
-    if (disabled) return;
-    setError(null);
-    const fd = new FormData();
-    fd.append('file', file, file.name);
-    try {
-      const res = await apiFetch('/api/transcribe', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || res.statusText);
-      }
-      const j = (await res.json()) as { text?: string };
-      if (j.text) onTranscript(j.text);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Transcription failed');
-    }
-  };
-
   return (
     <div className={`flex ${compact ? 'flex-row items-center gap-2' : 'flex-col items-end gap-1'}`}>
-      <div className="flex items-center gap-2">
-        <label
-          className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-xs border border-gray-200 bg-white/80 hover:bg-white cursor-pointer ${
-            disabled ? 'opacity-50 pointer-events-none' : ''
-          }`}
-        >
-          <Upload className="w-3.5 h-3.5 text-purple-600" aria-hidden />
-          <span>Upload audio</span>
-          <input
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            disabled={disabled}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void uploadAudio(f);
-              e.target.value = '';
-            }}
-          />
-        </label>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => (listening ? stop() : start())}
-          className={`inline-flex items-center justify-center w-10 h-10 rounded-full border transition-all ${
-            listening
-              ? 'border-red-300 bg-red-50 text-red-700'
-              : 'border-purple-200 bg-white/90 text-purple-800 hover:bg-purple-50'
-          } disabled:opacity-50 disabled:cursor-not-allowed`}
-          title={listening ? 'Stop' : 'Voice input'}
-          aria-pressed={listening}
-        >
-          {listening ? <Square className="w-4 h-4 fill-current" /> : <Mic className="w-4 h-4" />}
-        </button>
-      </div>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => (listening ? stop() : start())}
+        className={`inline-flex items-center justify-center w-10 h-10 rounded-full border transition-all ${
+          listening
+            ? 'border-red-300 bg-red-50 text-red-700'
+            : 'border-purple-200 bg-white/90 text-purple-800 hover:bg-purple-50'
+        } disabled:opacity-50 disabled:cursor-not-allowed`}
+        title={listening ? 'Stop' : 'Voice input'}
+        aria-pressed={listening}
+      >
+        {listening ? <Square className="w-4 h-4 fill-current" /> : <Mic className="w-4 h-4" />}
+      </button>
       {error && <span className="text-xs text-amber-800 max-w-[220px] text-right leading-snug">{error}</span>}
     </div>
   );

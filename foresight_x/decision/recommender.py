@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -39,6 +40,7 @@ DEFAULT_EVALUATION_WEIGHTS: dict[str, float] = {
 }
 
 MAX_EXECUTION_READY_ACTIONS = 4
+_COMPOSITE_TIE_EPSILON = 1e-3
 
 
 def composite_score(evaluation: OptionEvaluation, weights: dict[str, float]) -> float:
@@ -46,6 +48,84 @@ def composite_score(evaluation: OptionEvaluation, weights: dict[str, float]) -> 
     for key, w in weights.items():
         total += w * float(getattr(evaluation, key))
     return total
+
+
+def _keyword_overlap_score(option: Option, user_state: UserState) -> float:
+    """Lexical overlap between the user's question and an option (for tie-breaking)."""
+    stop = {
+        "with",
+        "that",
+        "this",
+        "from",
+        "your",
+        "have",
+        "what",
+        "when",
+        "where",
+        "should",
+        "would",
+        "could",
+        "about",
+        "into",
+        "the",
+        "and",
+        "for",
+    }
+    ctx = {
+        w
+        for w in re.findall(r"[a-zA-Z]{3,}", (user_state.raw_input or "").lower())
+        if w not in stop
+    }
+    if not ctx:
+        return 0.0
+    opt_words = {
+        w
+        for w in re.findall(
+            r"[a-zA-Z]{3,}",
+            f"{option.name} {option.description} {' '.join(option.key_assumptions)}".lower(),
+        )
+        if w not in stop
+    }
+    return len(ctx & opt_words) / len(ctx)
+
+
+def _deferral_penalty(option: Option) -> int:
+    """Prefer substantive paths over generic delay when composite scores tie."""
+    blob = f"{option.option_id} {option.name}".lower()
+    if "ask_extension" in blob or "more time" in blob:
+        return 2
+    if "information_sprint" in blob and "48-hour" in blob:
+        return 1
+    return 0
+
+
+def _pick_chosen_option(
+    composite_by_option_id: dict[str, float],
+    options: list[Option],
+    user_state: UserState,
+) -> Option:
+    if not composite_by_option_id:
+        return options[0]
+    best_score = max(composite_by_option_id.values())
+    tied_ids = [
+        oid
+        for oid, score in composite_by_option_id.items()
+        if abs(score - best_score) <= _COMPOSITE_TIE_EPSILON
+    ]
+    if len(tied_ids) == 1:
+        return next(o for o in options if o.option_id == tied_ids[0])
+    by_id = {o.option_id: o for o in options}
+    candidates = [by_id[oid] for oid in tied_ids if oid in by_id]
+    if not candidates:
+        return options[0]
+    return max(
+        candidates,
+        key=lambda o: (
+            _keyword_overlap_score(o, user_state),
+            -_deferral_penalty(o),
+            -len(o.name),
+        ),
+    )
 
 
 def _fallback_recommendation(
@@ -139,11 +219,7 @@ def recommend(
         if ev is not None:
             composite_by_option_id[opt.option_id] = composite_score(ev, w)
 
-    if composite_by_option_id:
-        best_id = max(composite_by_option_id, key=lambda k: composite_by_option_id[k])
-        chosen = next(o for o in options if o.option_id == best_id)
-    else:
-        chosen = options[0]
+    chosen = _pick_chosen_option(composite_by_option_id, options, user_state)
 
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or _utc_now_iso()
     s = load_settings()

@@ -97,6 +97,36 @@ def set_clarification_pending(
     return pa
 
 
+def set_manual_decision_pending(
+    thread: dict[str, Any],
+    *,
+    original_prompt: str,
+    enhanced_prompt: str,
+) -> dict[str, Any]:
+    """Pending card after manual Decision Mode enhance — user confirms with Yes."""
+    prompt = (enhanced_prompt or original_prompt or "").strip()[:1200]
+    original = (original_prompt or "").strip()[:1200]
+    pa = _pack(
+        action_type="decision_report",
+        title="Confirm this decision question?",
+        message="Tap Yes to generate a structured decision report from the enhanced question above.",
+        payload={
+            "decision_prompt": prompt,
+            "original_prompt": original,
+            "enhanced_prompt": prompt,
+            "manual_mode": True,
+        },
+        blocks=["generate_decision_report"],
+    )
+    dts = _ensure_state(thread)
+    dts["pending_confirmation"] = True
+    dts["pending_prompt"] = prompt
+    thread["pending_action"] = pa
+    ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
+    ds["decision_report"] = False
+    return pa
+
+
 def set_suggestion_pending(
     thread: dict[str, Any],
     suggestion: dict[str, Any],
@@ -192,22 +222,36 @@ def derive_pending_clarification_from_state(thread: dict[str, Any]) -> dict[str,
     )
 
 
+def return_thread_to_normal_chat_after_report(thread: dict[str, Any]) -> None:
+    """After a report artifact, keep chatting in normal mode so new decisions can be offered."""
+    if str(thread.get("mode") or "") == "decision_report":
+        thread["mode"] = "normal"
+
+
 def derive_pending_action(thread: dict[str, Any], *, last_user_message: str = "") -> dict[str, Any] | None:
-    if thread_has_decision_report_artifact(thread) or str(thread.get("mode") or "") == "decision_report":
-        clar = derive_pending_clarification_from_state(thread)
-        if clar:
-            return clar
-        pa = thread.get("pending_action")
-        if isinstance(pa, dict) and pa.get("type") == "clarification":
-            return pa
-        return None
-    pa = thread.get("pending_action")
-    if isinstance(pa, dict) and pa.get("type"):
-        return pa
     clar = derive_pending_clarification_from_state(thread)
     if clar:
         return clar
-    return sync_decision_pending_from_trigger(thread, last_user_message=last_user_message)
+
+    existing = thread.get("pending_action")
+    if isinstance(existing, dict) and existing.get("type") == "clarification":
+        return existing
+
+    dts = _ensure_state(thread)
+    if bool(dts.get("pending_confirmation")):
+        synced = sync_decision_pending_from_trigger(thread, last_user_message=last_user_message)
+        if synced:
+            return synced
+        if isinstance(existing, dict) and existing.get("type") == "decision_report":
+            return existing
+
+    if isinstance(existing, dict) and existing.get("type") == "role_mode":
+        return existing
+
+    if isinstance(existing, dict) and existing.get("type") == "decision_report":
+        clear_pending_action(thread)
+
+    return None
 
 
 def enrich_thread_with_pending_action(thread: dict[str, Any], *, last_user_message: str = "") -> dict[str, Any]:

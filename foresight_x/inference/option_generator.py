@@ -89,7 +89,61 @@ def _looks_generic(opt: Option, user_state: UserState) -> bool:
     return len(overlap) == 0
 
 
+def _clean_choice_label(fragment: str) -> str:
+    s = re.sub(r"\s+", " ", (fragment or "").strip()).strip("?.! ")
+    s = re.sub(r"^(to|go to|get|buy|spend on|spend that money on)\s+", "", s, flags=re.I)
+    return s[:140] if s else "this path"
+
+
+def _fork_choice_fallback(user_state: UserState) -> list[Option] | None:
+    """When the user names two alternatives (A or B), surface them as first-class options."""
+    raw = (user_state.raw_input or "").strip()
+    if not raw or " or " not in raw.lower():
+        return None
+    m = re.search(
+        r"(?:should i|shall i|do i|would it be better to|is it better to|help me decide whether to)\s+(.+?)\s+or\s+(.+?)\s*\??\s*$",
+        raw,
+        flags=re.I | re.S,
+    )
+    if not m:
+        m = re.search(r"(.+?)\s+or\s+(.+?)\s*\??\s*$", raw, flags=re.I | re.S)
+    if not m:
+        return None
+    left = _clean_choice_label(m.group(1))
+    right = _clean_choice_label(m.group(2))
+    if len(left) < 4 or len(right) < 4:
+        return None
+    return [
+        Option(
+            option_id="opt_choice_left",
+            name=f"Choose: {left}",
+            description=f"Commit to {left} as your primary path and execute against your stated goals.",
+            key_assumptions=["This path fits your priorities better than the alternative"],
+            cost_of_reversal="medium",
+        ),
+        Option(
+            option_id="opt_choice_right",
+            name=f"Choose: {right}",
+            description=f"Commit to {right} as your primary path and execute against your stated goals.",
+            key_assumptions=["This path fits your priorities better than the alternative"],
+            cost_of_reversal="medium",
+        ),
+        Option(
+            option_id="opt_compare_deadline",
+            name="Compare both with a fixed decision deadline",
+            description=(
+                f"Score {left} vs {right} on 3–5 criteria that matter to you, then decide by a specific date."
+            ),
+            key_assumptions=["A short structured comparison reduces regret"],
+            cost_of_reversal="low",
+        ),
+    ]
+
+
 def _fallback_options(user_state: UserState) -> list[Option]:
+    forked = _fork_choice_fallback(user_state)
+    if forked:
+        return forked
     text = user_state.raw_input.lower()
     if any(k in text for k in ("food", "hungry", "meal", "pantry", "budget", "broke", "money")):
         return [

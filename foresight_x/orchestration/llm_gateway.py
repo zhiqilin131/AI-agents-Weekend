@@ -16,6 +16,19 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from foresight_x.orchestration.chaos import (
+    TARGET_LLM_FALLBACK,
+    TARGET_LLM_PRIMARY,
+    DependencyDegraded,
+    consume_partial_json_slot,
+    get_profile,
+    maybe_raise,
+)
+from foresight_x.orchestration.circuit_breaker import (
+    breaker_before_call,
+    breaker_record_failure,
+    breaker_record_success,
+)
 from foresight_x.resilience.runtime import degrade, record_provider_call
 
 
@@ -85,6 +98,8 @@ class LLMGateway:
         return 0.0
 
     def _is_retryable(self, exc: Exception) -> bool:
+        if isinstance(exc, DependencyDegraded) and exc.retryable:
+            return True
         name = type(exc).__name__.lower()
         msg = str(exc).lower()
         if self._retry_after_seconds(exc) > 0:
@@ -107,6 +122,14 @@ class LLMGateway:
         return False
 
     def _fallback_reason(self, exc: Exception) -> str:
+        if isinstance(exc, DependencyDegraded):
+            if exc.status == 429:
+                return "primary_429"
+            if exc.status >= 500:
+                return "primary_5xx"
+            if exc.status == 408:
+                return "primary_timeout"
+            return "primary_error"
         msg = str(exc).lower()
         name = type(exc).__name__.lower()
         if "429" in msg or "ratelimit" in name or self._retry_after_seconds(exc) > 0:
@@ -141,14 +164,29 @@ class LLMGateway:
                 return getattr(provider.client, method)(*args, **kwargs), attempts
         raise RuntimeError("unreachable_retry_loop")
 
+    def _chaos_target(self, idx: int) -> str:
+        return TARGET_LLM_PRIMARY if idx == 0 else TARGET_LLM_FALLBACK
+
     def invoke(self, method: str, *args: Any, **kwargs: Any) -> LLMGatewayResult:
         primary_error: Exception | None = None
         first_reason = ""
         for idx, p in enumerate(self._providers):
+            target = self._chaos_target(idx)
+            profile = get_profile(target)
             t0 = time.perf_counter()
             try:
+                breaker_before_call(target)
+                if profile is not None:
+                    maybe_raise(target)
+                if (
+                    profile is not None
+                    and method == "structured_predict"
+                    and consume_partial_json_slot(target, profile)
+                ):
+                    raise ValueError("chaos_partial_json: truncated structured output")
                 value, attempts = self._with_retry(p, method, *args, **kwargs)
                 latency_ms = (time.perf_counter() - t0) * 1000.0
+                breaker_record_success(target, latency_ms=latency_ms)
                 record_provider_call(
                     p.provider,
                     ok=True,
@@ -165,6 +203,7 @@ class LLMGateway:
                 return LLMGatewayResult(value=value, call=call)
             except Exception as exc:
                 latency_ms = (time.perf_counter() - t0) * 1000.0
+                breaker_record_failure(target, latency_ms=latency_ms, error_kind=type(exc).__name__)
                 record_provider_call(
                     p.provider,
                     ok=False,

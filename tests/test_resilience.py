@@ -22,6 +22,7 @@ def test_resilience_health_endpoint_shape():
 
 
 def test_tavily_gateway_chaos_outage_returns_empty(monkeypatch):
+    monkeypatch.setenv("FX_CHAOS", "1")
     monkeypatch.setenv("CHAOS_TAVILY_MODE", "outage")
     monkeypatch.setattr("foresight_x.retrieval.tavily_client.TavilyClient", lambda key: SimpleNamespace(search=lambda *_a, **_k: {}))
     g = TavilyGateway("dummy")

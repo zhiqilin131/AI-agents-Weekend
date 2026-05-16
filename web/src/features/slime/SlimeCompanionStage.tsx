@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { animate, motion, useMotionValue } from 'motion/react';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
-import { TypewriterText } from '../../app/components/TypewriterText';
 import { cn } from '../../app/components/ui/utils';
 import type { SlimeProfile } from '../../app/model';
 import type { MemoryEvidenceItem } from '../../app/components/profile/memoryEvidenceTypes';
@@ -305,7 +304,7 @@ export function SlimeCompanionStage({
             </motion.div>
             {speechOutput?.text ? (
               <motion.div
-                key={`${speechOutput.source}:${speechOutput.text}`}
+                key={`${speechOutput.source}:${speechOutput.utteranceId ?? speechOutput.text}`}
                 initial={{ opacity: 0, y: 10, scale: 0.92, rotate: -1.5 }}
                 animate={{ opacity: 1, y: 0, scale: 1, rotate: 0 }}
                 exit={{ opacity: 0, y: 6, scale: 0.96 }}
@@ -316,15 +315,9 @@ export function SlimeCompanionStage({
                   speechOutput.source === 'system' && 'slime-comic-bubble-system',
                 )}
               >
-                <TypewriterText
-                  key={speechOutput.text}
-                  text={speechOutput.text}
-                  enabled
-                  as="p"
-                  charStep={2}
-                  intervalMs={18}
-                  className="break-keep text-[15px] font-medium leading-relaxed text-slate-800"
-                />
+                <p className="whitespace-pre-wrap break-words text-[15px] font-medium leading-relaxed text-slate-800">
+                  {speechOutput.text}
+                </p>
                 {speechOutput.evidenceItems?.length ? (
                   <div className="mt-3 flex max-w-full flex-wrap gap-1.5 border-t border-violet-100/80 pt-2">
                     {speechOutput.evidenceItems.slice(0, 3).map((item) => (

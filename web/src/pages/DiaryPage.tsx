@@ -1,29 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft,
-  ArrowRight,
   BookOpen,
   Brain,
   CalendarClock,
   CalendarDays,
   Compass,
   FileText,
-  Home,
   Link2,
   MessageCircle,
   Mic,
   Sparkles,
 } from 'lucide-react';
 import { MainNavButtons } from '../app/components/MainNavButtons';
+import { DiaryDateRail } from '../features/diary/DiaryDateRail';
 import { DiaryEntryCard } from '../features/diary/DiaryEntryCard';
 import { useDiaryKeyboardShortcuts } from '../features/diary/DiaryKeyboardShortcuts';
 import {
-  buildVisibleDateWindow,
+  buildMonthDateWindow,
   monthsTouchingDates,
   nextDiaryDateFromMap,
   prevDiaryDateFromMap,
   shiftCalendarDay,
-  shiftMonthPreserveDay,
 } from '../features/diary/diaryNavigation';
 import type { DiaryEntryDto, DiaryMonthDay, DiarySourceCounts } from '../features/diary/types';
 import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
@@ -121,17 +118,18 @@ export default function DiaryPage() {
     [mergeDays, tz],
   );
 
-  const visibleDates = useMemo(() => buildVisibleDateWindow(selectedDate, 6), [selectedDate]);
+  const displayMonth = selectedDate.slice(0, 7);
+  const monthDates = useMemo(() => buildMonthDateWindow(displayMonth), [displayMonth]);
 
-  const visibleDays = useMemo(
-    () => visibleDates.map((d) => dayMeta[d] ?? { date: d, has_entry: false }),
-    [visibleDates, dayMeta],
+  const monthDays = useMemo(
+    () => monthDates.map((d) => dayMeta[d] ?? { date: d, has_entry: false }),
+    [monthDates, dayMeta],
   );
 
   useEffect(() => {
-    const months = monthsTouchingDates([...visibleDates, selectedDate]);
+    const months = monthsTouchingDates([...monthDates, selectedDate]);
     for (const m of months) void fetchMonth(m);
-  }, [selectedDate, visibleDates, fetchMonth]);
+  }, [selectedDate, monthDates, fetchMonth]);
 
   const fetchEntry = useCallback(async (date: string) => {
     setLoadingEntry(true);
@@ -335,9 +333,8 @@ export default function DiaryPage() {
     }
   }
 
-  const displayMonth = selectedDate.slice(0, 7);
   const loadedEntryCount = useMemo(() => Object.values(dayMeta).filter((d) => d.has_entry).length, [dayMeta]);
-  const visibleEntryCount = visibleDays.filter((d) => d.has_entry).length;
+  const visibleEntryCount = monthDays.filter((d) => d.has_entry).length;
   const activeCounts = entry?.source_counts ?? sourceCounts;
   const activeSourceTotal = totalSources(activeCounts);
   const statusLabel = entry
@@ -373,7 +370,7 @@ export default function DiaryPage() {
             { label: 'Selected', value: formatShortDate(selectedDate), Icon: CalendarDays },
             { label: 'State', value: statusLabel, Icon: Sparkles },
             { label: 'Loaded days', value: String(loadedEntryCount), Icon: BookOpen },
-            { label: 'Visible entries', value: `${visibleEntryCount}/${visibleDays.length}`, Icon: Compass },
+            { label: 'This month', value: `${visibleEntryCount}/${monthDays.length}`, Icon: Compass },
           ].map(({ label, value, Icon }) => (
             <div key={label} className="rounded-lg border border-white/85 bg-white/72 px-4 py-3 shadow-sm backdrop-blur-md">
               <div className="flex items-center justify-between gap-3">
@@ -385,89 +382,17 @@ export default function DiaryPage() {
           ))}
         </section>
 
-        <section className="mt-5 overflow-hidden rounded-lg border border-white/85 bg-white/66 shadow-[0_18px_60px_rgba(79,70,229,0.09)] backdrop-blur-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/80 px-5 py-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-violet-600">Date rail</p>
-              <p className="mt-1 text-sm text-slate-600">{displayMonth} · arrow keys move day by day</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                title="Previous month"
-                aria-label="Previous month"
-                className="inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-violet-300 hover:text-violet-700"
-                onClick={() => handleSelectDate(shiftMonthPreserveDay(selectedDate, -1))}
-              >
-                <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-                Month
-              </button>
-              <button
-                type="button"
-                title="Today"
-                aria-label="Today"
-                className="inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-violet-300 hover:text-violet-700"
-                onClick={() => handleSelectDate(today)}
-              >
-                <Home className="h-3.5 w-3.5" aria-hidden />
-                Today
-              </button>
-              <button
-                type="button"
-                title="Next month"
-                aria-label="Next month"
-                className="inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-violet-300 hover:text-violet-700"
-                onClick={() => handleSelectDate(shiftMonthPreserveDay(selectedDate, 1))}
-              >
-                Month
-                <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-              </button>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto px-5 py-5">
-            <div className="relative grid min-w-[44rem] grid-cols-[repeat(13,minmax(0,1fr))] gap-2">
-              <div className="pointer-events-none absolute left-6 right-6 top-[2.35rem] h-px bg-gradient-to-r from-transparent via-violet-300/70 to-transparent" />
-              {visibleDays.map((d) => {
-                const [y, mo, day] = d.date.split('-').map(Number);
-                const date = new Date(y, mo - 1, day);
-                const selected = selectedDate === d.date;
-                return (
-                  <button
-                    key={d.date}
-                    type="button"
-                    onClick={() => handleSelectDate(d.date)}
-                    data-date={d.date}
-                    data-has-entry={d.has_entry ? 'true' : 'false'}
-                    data-selected={selected ? 'true' : 'false'}
-                    className={`relative z-10 flex min-h-[5rem] flex-col items-center justify-center rounded-lg border px-2 py-3 text-center transition ${
-                      selected
-                        ? 'border-violet-400 bg-violet-50 text-slate-950 shadow-[0_16px_36px_rgba(124,58,237,0.18)] ring-2 ring-violet-200'
-                        : d.has_entry
-                          ? 'border-cyan-200/90 bg-white/90 text-slate-800 shadow-sm hover:border-violet-300'
-                          : 'border-white/80 bg-white/58 text-slate-500 hover:bg-white/90'
-                    }`}
-                    aria-current={selected ? 'date' : undefined}
-                    aria-label={`${d.date}${d.has_entry ? ', diary entry' : ', no entry'}`}
-                  >
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                      {date.toLocaleDateString(undefined, { weekday: 'short' })}
-                    </span>
-                    <span className="mt-1 text-lg font-semibold">{day}</span>
-                    <span
-                      className={`mt-2 h-1.5 w-1.5 rounded-full ${
-                        d.has_entry
-                          ? 'bg-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.8)]'
-                          : 'bg-slate-300/60'
-                      }`}
-                      aria-hidden
-                    />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </section>
+        <DiaryDateRail
+          selectedDate={selectedDate}
+          today={today}
+          monthDays={monthDays}
+          displayMonth={displayMonth}
+          hasEntryForDate={(d) => Boolean(dayMeta[d]?.has_entry)}
+          onSelectDate={handleSelectDate}
+          onStepDay={stepCalendarDay}
+          onEnsureMonth={(ym) => void fetchMonth(ym)}
+          onToday={() => handleSelectDate(today)}
+        />
 
         <section className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
           <DiaryEntryCard

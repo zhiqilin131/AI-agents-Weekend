@@ -104,3 +104,16 @@ def test_generate_options_fallback_when_llm_fails() -> None:
         llm=FakeLLM([], raise_error=True),
     )
     assert 2 <= len(out) <= 4
+
+
+def test_fallback_fork_parses_a_or_b_question() -> None:
+    out = generate_options(
+        _state("Should I go to the NBA playoffs or the Drake performance?"),
+        _memory(),
+        _evidence(),
+        llm=None,
+    )
+    names = " ".join(o.name.lower() for o in out)
+    assert "nba" in names or "playoffs" in names
+    assert "drake" in names
+    assert not any(o.option_id == "opt_ask_extension" for o in out)

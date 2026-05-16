@@ -9,13 +9,16 @@ import re
 from tavily import TavilyClient
 
 from foresight_x.config import Settings, load_settings
-from foresight_x.resilience.runtime import (
-    chaos_mode,
+from foresight_x.orchestration.chaos import TARGET_TAVILY, DependencyDegraded, get_profile, maybe_raise
+from foresight_x.orchestration.circuit_breaker import (
+    BREAKER_TAVILY,
+    breaker_before_call,
+    breaker_record_failure,
+    breaker_record_success,
     circuit_allow,
     circuit_record,
-    degrade,
-    record_provider_call,
 )
+from foresight_x.resilience.runtime import degrade, record_provider_call
 from foresight_x.schemas import Fact, UserState
 
 # https://docs.tavily.com/ — API rejects queries over 400 characters.
@@ -162,7 +165,7 @@ class TavilyGateway:
         confidence: float = 0.75,
         search_depth: str | None = None,
     ) -> list[Fact]:
-        provider = "tavily"
+        provider = BREAKER_TAVILY
         s = self._settings
         if not circuit_allow(
             provider,
@@ -177,16 +180,32 @@ class TavilyGateway:
                 error_kind="circuit_open",
             )
             return []
-        mode = chaos_mode("tavily")
-        if mode in ("outage", "timeout", "5xx"):
+        profile = get_profile(TARGET_TAVILY)
+        if profile is not None:
+            try:
+                maybe_raise(TARGET_TAVILY)
+            except DependencyDegraded as exc:
+                err_kind = profile.legacy_mode() or exc.reason or "outage"
+                degrade(
+                    component=provider,
+                    reason=f"chaos injection active ({err_kind}); using cache-only world knowledge",
+                    stage="retrieve",
+                    retryable=True,
+                    error_kind=err_kind,
+                )
+                breaker_record_failure(provider, error_kind=err_kind)
+                return []
+
+        try:
+            breaker_before_call(provider)
+        except DependencyDegraded:
             degrade(
-                component=provider,
-                reason=f"chaos injection active ({mode}); using cache-only world knowledge",
+                component="tavily",
+                reason="circuit breaker open; using cache-only world knowledge",
                 stage="retrieve",
                 retryable=True,
-                error_kind=mode,
+                error_kind="circuit_open",
             )
-            circuit_record(provider, ok=False)
             return []
 
         safe_q = _truncate_tavily_query(query)
@@ -205,6 +224,7 @@ class TavilyGateway:
                 )
                 ok = True
                 latency_ms = (time.perf_counter() - t0) * 1000.0
+                breaker_record_success(provider, latency_ms=latency_ms)
                 circuit_record(provider, ok=True)
                 record_provider_call(
                     provider,
@@ -216,6 +236,7 @@ class TavilyGateway:
             except Exception as exc:
                 latency_ms = (time.perf_counter() - t0) * 1000.0
                 err_kind = type(exc).__name__
+                breaker_record_failure(provider, latency_ms=latency_ms, error_kind=err_kind)
                 circuit_record(provider, ok=False)
                 record_provider_call(
                     provider,

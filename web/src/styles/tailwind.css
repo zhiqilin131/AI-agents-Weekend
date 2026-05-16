@@ -529,3 +529,49 @@
     animation: none;
   }
 }
+
+/* Diary date rail — minimal scroll chrome */
+.diary-date-rail-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(124, 58, 237, 0.35) transparent;
+}
+.diary-date-rail-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.diary-date-rail-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.diary-date-rail-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(124, 58, 237, 0.28), rgba(34, 211, 238, 0.32));
+}
+
+/* Shadow Chat — manual Decision Mode active glow */
+@keyframes decision-mode-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(56, 189, 248, 0.35),
+      0 0 28px rgba(59, 130, 246, 0.22),
+      0 16px 42px rgba(99, 102, 241, 0.09);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(56, 189, 248, 0.55),
+      0 0 42px rgba(37, 99, 235, 0.38),
+      0 16px 42px rgba(99, 102, 241, 0.12);
+  }
+}
+
+.decision-mode-glow {
+  animation: decision-mode-pulse 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .decision-mode-glow {
+    animation: none;
+    box-shadow:
+      0 0 0 2px rgba(56, 189, 248, 0.45),
+      0 0 24px rgba(59, 130, 246, 0.25);
+  }
+}

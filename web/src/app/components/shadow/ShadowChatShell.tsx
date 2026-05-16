@@ -12,7 +12,7 @@ import { parseSseBlocks } from '../../../utils/parseSse';
 import { refetchSlimeProfileGlobal } from '../../../hooks/useSlimeProfile';
 import { useExecutionStorageUserKey } from '../../../hooks/useExecutionStorageUserKey';
 import { useDecisionReportStream } from '../../../hooks/useDecisionReportStream';
-import { ModelSelector } from '../../../features/models/ModelSelector';
+import { ShadowChatComposerDock } from './ShadowChatComposerDock';
 import { buildCheaperModelHint } from '../../../features/models/slimeModelsApi';
 import { useSlimeModelCatalog } from '../../../features/models/useSlimeModelCatalog';
 import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
@@ -20,12 +20,12 @@ import type { SlimeCreditFeature } from '../../../features/models/types';
 import { AgentPresence3DPanel } from './AgentPresence3DPanel';
 import { ChatMessageList } from './ChatMessageList';
 import { ChatSidebar } from './ChatSidebar';
+import { DegradedModeBanner } from '../DegradedModeBanner';
 import { DecisionReportStreamingPanel } from './DecisionReportStreamingPanel';
 import { ThreadActionDock } from './ThreadActionDock';
 import {
   buildClarificationPendingAction,
   decisionPromptFromPendingAction,
-  messagesHaveDecisionReportArtifact,
   normalizeThreadMessages,
   pendingActionToSuggestion,
   type PendingAction,
@@ -36,7 +36,6 @@ import {
   type ProfileMemoryToast,
   profileMemoryEventDedupeKey,
 } from './ProfileMemoryToastStack';
-import { ShadowChatInput } from './ShadowChatInput';
 import type { AgentStatus, ShadowMessage, ShadowSuggestion, ShadowThread } from './types';
 import { detectCalendarFeedbackIntent } from '../../../utils/calendarFeedbackIntent';
 import {
@@ -100,6 +99,7 @@ export function ShadowChatShell({
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const [inputBootstrap, setInputBootstrap] = useState<string | null>(null);
+  const [decisionModeManual, setDecisionModeManual] = useState(false);
   const reportStream = useDecisionReportStream();
   const { loadExistingTrace } = reportStream;
 
@@ -196,13 +196,7 @@ export function ShadowChatShell({
     const msgs = normalizeThreadMessages(data.thread.messages || []);
     setMessages(msgs);
     const pa = data.thread.pending_action;
-    const hasArtifact = messagesHaveDecisionReportArtifact(msgs);
-    if (
-      pa &&
-      typeof pa === 'object' &&
-      pa.type &&
-      !(pa.type === 'decision_report' && hasArtifact)
-    ) {
+    if (pa && typeof pa === 'object' && pa.type) {
       setPendingAction(pa as PendingAction);
     } else if (!opts?.preservePendingSuggestion) {
       setPendingAction(null);
@@ -388,6 +382,7 @@ export function ShadowChatShell({
     userAction: string = 'send_message',
     clarificationAnswers?: Record<string, string>,
     saveClarificationToProfile?: boolean,
+    opts?: { manualDecisionMode?: boolean },
   ) => {
     if (!activeThreadId) return;
     setSending(true);
@@ -419,6 +414,7 @@ export function ShadowChatShell({
             client_turn_seq: streamSeq,
             credit_request_id: creditReq,
             ...(modelOptionId ? { model_option_id: modelOptionId } : {}),
+            ...(opts?.manualDecisionMode ? { manual_decision_mode: true } : {}),
           }),
         });
       } catch (e) {
@@ -849,18 +845,14 @@ export function ShadowChatShell({
     }
   }, [messages, hasClarificationPending, pendingAction, requestClarifyIfNeeded]);
 
-  const hasReportArtifact = useMemo(
-    () => messagesHaveDecisionReportArtifact(messages),
-    [messages],
-  );
   const isReportGenerating = reportStream.isStreaming;
   const dockPendingAction = useMemo(() => {
     if (!pendingAction) return null;
-    if (pendingAction.type === 'decision_report' && (isReportGenerating || hasReportArtifact)) {
+    if (pendingAction.type === 'decision_report' && isReportGenerating) {
       return null;
     }
     return pendingAction;
-  }, [pendingAction, isReportGenerating, hasReportArtifact]);
+  }, [pendingAction, isReportGenerating]);
   const suggestion = useMemo(() => pendingActionToSuggestion(dockPendingAction), [dockPendingAction]);
 
   return (
@@ -898,6 +890,9 @@ export function ShadowChatShell({
                 <div ref={bottomRef} />
               </div>
               <div className="mt-3 space-y-3 border-t border-gray-200/80 pt-3">
+                {reportStream.degradedWarnings.length > 0 ? (
+                  <DegradedModeBanner messages={reportStream.degradedWarnings} />
+                ) : null}
                 {isReportGenerating && !reportOpen ? (
                   <div className="rounded-2xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/95 to-violet-50/80 px-4 py-3 shadow-[0_4px_20px_rgba(99,102,241,0.1)]">
                     <div className="flex items-center justify-between gap-3">
@@ -1052,27 +1047,20 @@ export function ShadowChatShell({
                     Starting a fresh chat for you…
                   </p>
                 ) : null}
-                <div className="mb-2">
-                  <ModelSelector
-                    feature="shadow_chat"
-                    selectedModelId={modelOptionId || slimeModels.defaultModel}
-                    onChange={setModelOptionId}
-                    models={slimeModels.models}
-                    selectorEnabled={slimeModels.selectorEnabled}
-                    showCostPreview
-                    variant="compact"
-                    label="Slime model"
-                    hint="Little tier is the default (lowest credits). Upgrade per message thread."
-                    disabled={sending}
-                  />
-                </div>
-                <ShadowChatInput
+                <ShadowChatComposerDock
                   disabled={sending || !activeThreadId}
+                  decisionModeActive={decisionModeManual}
+                  onToggleDecisionMode={() => setDecisionModeManual((v) => !v)}
+                  modelOptionId={modelOptionId || slimeModels.defaultModel || ''}
+                  onModelChange={setModelOptionId}
+                  models={slimeModels.models}
+                  selectorEnabled={slimeModels.selectorEnabled}
+                  defaultModelId={slimeModels.defaultModel || 'little'}
                   bootstrapText={inputBootstrap}
                   onBootstrapConsumed={() => setInputBootstrap(null)}
-                  onSend={async (t) => {
+                  onSend={async (t, opts) => {
                     if (!activeThreadId || sending) return;
-                    await streamMessage(t);
+                    await streamMessage(t, 'send_message', undefined, undefined, opts);
                   }}
                 />
               </div>

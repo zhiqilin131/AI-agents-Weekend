@@ -37,6 +37,31 @@ def _asr_provider_from_env() -> str:
     return (os.getenv("ASR_PROVIDER") or "faster_whisper").strip().lower()
 
 
+def _faster_whisper_available() -> bool:
+    try:
+        import faster_whisper  # noqa: F401
+    except ModuleNotFoundError:
+        return False
+    return True
+
+
+def resolve_asr_provider(*, settings: Settings | None = None) -> str:
+    """Effective ASR provider after optional fallback when faster-whisper is missing."""
+    prov = _asr_provider_from_env()
+    if prov not in ("faster_whisper", "faster-whisper"):
+        return prov
+    if _faster_whisper_available():
+        return "faster_whisper"
+    settings = settings or load_settings()
+    if (settings.openai_api_key or "").strip():
+        _log.warning(
+            "faster-whisper is not installed; using OpenAI Whisper (ASR_PROVIDER=openai). "
+            "Install with: pip install -e '.[web]'"
+        )
+        return "openai"
+    return prov
+
+
 def _fw_model_name() -> str:
     return (os.getenv("FASTER_WHISPER_MODEL") or "small").strip()
 
@@ -81,8 +106,8 @@ def get_faster_whisper_model():
 
 
 def warmup_asr_model() -> None:
-    """Eagerly load faster-whisper when ASR_PROVIDER=faster_whisper."""
-    if _asr_provider_from_env() != "faster_whisper":
+    """Eagerly load faster-whisper when that provider is active."""
+    if resolve_asr_provider() != "faster_whisper":
         return
     get_faster_whisper_model()
 
@@ -204,7 +229,8 @@ def transcribe_with_vosk(_audio_path: str | Path, *, settings: Settings | None =
 
 def transcribe_audio(audio_path: str | Path, *, settings: Settings | None = None) -> TranscriptionResult:
     """Dispatch to configured ASR provider (ASR_PROVIDER env)."""
-    prov = _asr_provider_from_env()
+    settings = settings or load_settings()
+    prov = resolve_asr_provider(settings=settings)
     if prov in ("faster_whisper", "faster-whisper"):
         return transcribe_with_faster_whisper(audio_path, settings=settings)
     if prov == "openai":

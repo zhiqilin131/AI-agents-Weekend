@@ -34,6 +34,24 @@ def test_asr_dispatch_faster_whisper(monkeypatch, tmp_path: Path) -> None:
     m.assert_called_once()
 
 
+def test_asr_falls_back_to_openai_when_faster_whisper_missing(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ASR_PROVIDER", "faster_whisper")
+    monkeypatch.delenv("ASR_PROVIDER", raising=False)
+    monkeypatch.setenv("ASR_PROVIDER", "faster_whisper")
+    audio = tmp_path / "x.webm"
+    audio.write_bytes(b"x")
+    fake = TranscriptionResult(text="fallback", provider="openai", language=None, timing={})
+    settings = Settings(openai_api_key="sk-test")
+    with (
+        patch("foresight_x.voice.asr._faster_whisper_available", return_value=False),
+        patch("foresight_x.voice.asr.transcribe_with_openai", return_value=fake) as m,
+        patch("foresight_x.voice.asr.load_settings", return_value=settings),
+    ):
+        r = transcribe_audio(audio, settings=settings)
+    assert r.provider == "openai"
+    m.assert_called_once()
+
+
 def test_asr_dispatch_openai(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ASR_PROVIDER", "openai")
     audio = tmp_path / "x.wav"

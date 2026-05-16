@@ -445,23 +445,46 @@ def _duration_estimate(action: str, deadline: str | None) -> str:
 def _how_answered_line(trace: DecisionTrace) -> str:
     runtime = trace.runtime
     provider_parts: list[str] = []
-    if runtime and runtime.provider_per_stage:
-        finalize_provider = (runtime.provider_per_stage.get("finalize") or "").strip()
-        infer_provider = (runtime.provider_per_stage.get("infer") or "").strip()
-        chosen = finalize_provider or infer_provider
-        if chosen and chosen not in ("unknown", "none"):
-            if ":" in chosen:
-                provider_parts.append(f"Answered with {chosen}")
+    if runtime:
+        llm_used = (runtime.llm_provider_used or "").strip()
+        fallback_reason = (runtime.llm_fallback_reason or "").strip()
+        if llm_used and llm_used not in ("unknown", "none", "deterministic"):
+            if fallback_reason:
+                provider_parts.append(f"Answered with backup {llm_used} ({fallback_reason})")
             else:
-                provider_parts.append(f"Answered with {chosen} model")
+                provider_parts.append(f"Answered with {llm_used}")
+        elif runtime.provider_per_stage:
+            stages = {
+                str(v).strip().lower()
+                for v in runtime.provider_per_stage.values()
+                if str(v).strip()
+            }
+            if stages and stages <= {"deterministic"}:
+                provider_parts.append("Answered with deterministic fallback")
+            else:
+                finalize_provider = (runtime.provider_per_stage.get("finalize") or "").strip()
+                infer_provider = (runtime.provider_per_stage.get("infer") or "").strip()
+                chosen = finalize_provider or infer_provider
+                if chosen and chosen not in ("unknown", "none", "deterministic"):
+                    if ":" in chosen:
+                        provider_parts.append(f"Answered with {chosen}")
+                    else:
+                        provider_parts.append(f"Answered with {chosen} model")
 
-        seen = {
-            (d.component or "").strip().lower()
-            for d in trace.degradations
-            if (d.error_kind or "").strip().lower() in {"timeout", "ratelimiterror", "internalservererror", "circuit_open"}
-        }
-        if seen and ("llm:openai" in seen or "openai" in seen):
-            provider_parts[0:0] = [f"Answered with backup {chosen or 'provider'}"]
+    if not provider_parts:
+        for d in trace.degradations:
+            kind = (d.error_kind or "").strip().lower()
+            comp = (d.component or "").strip().lower()
+            path = (d.fallback_path or "").strip()
+            if kind in {
+                "llm_unavailable",
+                "timeout",
+                "ratelimiterror",
+                "internalservererror",
+                "circuit_open",
+            } or path or "llm" in comp:
+                provider_parts.append("Answered with deterministic fallback")
+                break
 
     cache_part = ""
     for ev in trace.degradations:

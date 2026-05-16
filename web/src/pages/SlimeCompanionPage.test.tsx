@@ -63,5 +63,6 @@ describe('SlimeCompanionPage', () => {
     expect(html).toContain('data-testid="buddy-recent-chat-panel"');
     expect(html).toContain('Personalize');
     expect(html).toContain('Talk to Mochi');
+    expect(html).toContain('data-testid="slime-decision-mode-toggle"');
   });
 });

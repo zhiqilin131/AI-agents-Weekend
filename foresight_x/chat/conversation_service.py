@@ -116,6 +116,101 @@ def _enrich_decision_suggestion_for_voice(
     }
 
 
+def process_manual_decision_voice_turn(
+    *,
+    settings: Settings,
+    thread: dict[str, Any],
+    transcript: str,
+    llm: Any,
+    profile: Any | None = None,
+    on_reply_delta: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Manual Decision Mode for Slime voice: enhance transcript, confirm, set pending action."""
+    from foresight_x.chat.manual_decision_mode import build_manual_decision_confirmation
+    from foresight_x.chat.pending_action import set_manual_decision_pending
+    from foresight_x.perception.query_enhance import prepare_decision_text
+    from foresight_x.profile.store import load_user_profile
+
+    raw = (transcript or "").strip()
+    if not raw:
+        raise ValueError("no_speech_detected")
+
+    prof = profile if profile is not None else load_user_profile(settings)
+    original, enhanced = prepare_decision_text(raw, llm, profile=prof)
+    assistant_text = build_manual_decision_confirmation(original=original, enhanced=enhanced)
+    mode = str(thread.get("mode") or "normal")
+
+    append_message(
+        thread,
+        role="user",
+        content=raw,
+        mode=mode,
+        intent="decision_candidate",
+        metadata_extra={"interaction_source": "slime_voice", "modality": "voice", "manual_decision_mode": True},
+    )
+    append_message(
+        thread,
+        role="assistant",
+        content=assistant_text,
+        mode=mode,
+        intent="decision_candidate",
+        memory_used=False,
+    )
+    set_manual_decision_pending(thread, original_prompt=original, enhanced_prompt=enhanced)
+    maybe_update_thread_summary(thread, settings=settings)
+    save_thread(thread)
+
+    eff = get_effective_slime_persona(settings)
+    shadow_sug = {
+        "type": "decision_report",
+        "title": "Confirm this decision question?",
+        "message": "Tap Yes to generate a structured decision report from the enhanced question above.",
+        "actions": ["generate_decision_report", "continue_normally", "dismiss_suggestion"],
+        "manual_mode": True,
+        "decision_prompt": enhanced,
+    }
+    decision_suggestion = _enrich_decision_suggestion_for_voice(
+        shadow_sug,
+        user_message=enhanced,
+        slime_name=eff.name,
+        persona=eff.persona,
+    )
+    if decision_suggestion:
+        decision_suggestion["decision_prompt"] = enhanced
+        decision_suggestion["description"] = (
+            "Tap **Yes** below when you're ready and I'll generate the structured decision report."
+        )
+
+    if on_reply_delta is not None:
+        chunk = 48
+        for i in range(0, len(assistant_text), chunk):
+            on_reply_delta(assistant_text[i : i + chunk])
+
+    spoken = (
+        (decision_suggestion or {}).get("spoken_prompt") or assistant_text
+    ).strip()
+    return {
+        "thread_id": str(thread.get("thread_id") or ""),
+        "assistant_text": assistant_text,
+        "spoken_sequence": [spoken] if spoken else [assistant_text],
+        "intent": "decision_candidate",
+        "decision_suggestion": decision_suggestion,
+        "shadow_suggestion": shadow_sug,
+        "memory_updates": [],
+        "memory_update_details": [],
+        "evidence_items": [],
+        "frontend_action": {
+            "type": "show_decision_mode_confirmation",
+            "payload": {
+                "decision_prompt": enhanced,
+                "display_text": (decision_suggestion or {}).get("display_text"),
+                "spoken_prompt": spoken,
+                "manual_mode": True,
+            },
+        },
+    }
+
+
 def maybe_slime_voice_preflight_reply(raw_msg: str, *, settings: Settings) -> tuple[str, str] | None:
     """
     Short-circuit replies for Slime Buddy / voice (nickname + slime self identity).

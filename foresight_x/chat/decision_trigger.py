@@ -155,6 +155,13 @@ def _set_cooldown(state: dict[str, Any], *, now: datetime, hours: int = _DECISIO
     state["dismissed_until"] = _to_iso(now + timedelta(hours=hours))
 
 
+def _clear_decision_suppression(state: dict[str, Any], thread: dict[str, Any]) -> None:
+    """Allow a fresh decision offer on the next detected fork (no stale dismiss/cooldown)."""
+    state["dismissed_until"] = ""
+    ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
+    ds["decision_report"] = False
+
+
 def preview_will_auto_start_decision(thread: dict[str, Any], message: str) -> bool:
     """Only auto-start after the user confirmed a pending offer (e.g. replied yes)."""
     state = _ensure_state(thread)
@@ -181,13 +188,11 @@ def evaluate_decision_trigger(
         state["pending_confirmation"] = False
         state["pending_prompt"] = ""
         state["soft_signal_count"] = 0
-        _set_cooldown(state, now=now)
         return DecisionTriggerEvaluation(effective_action=action)
 
     if action == "continue_normally":
         state["pending_confirmation"] = False
         state["pending_prompt"] = ""
-        _set_cooldown(state, now=now, hours=2)
         return DecisionTriggerEvaluation(effective_action="send_message")
 
     if action == "generate_decision_report":
@@ -207,10 +212,10 @@ def evaluate_decision_trigger(
         return DecisionTriggerEvaluation(effective_action=action)
 
     if is_explicit_decision_mode_command(message):
+        _clear_decision_suppression(state, thread)
         state["pending_confirmation"] = True
         state["pending_prompt"] = decision_prompt
         state["pending_since"] = _to_iso(now)
-        state["dismissed_until"] = ""
         state["soft_signal_count"] = 0
         state["last_trigger_reason"] = "hard_command"
         return DecisionTriggerEvaluation(
@@ -237,12 +242,27 @@ def evaluate_decision_trigger(
             state["pending_confirmation"] = False
             state["pending_prompt"] = ""
             state["soft_signal_count"] = 0
-            _set_cooldown(state, now=now)
             return DecisionTriggerEvaluation(
                 effective_action="send_message",
                 should_offer_suggestion=False,
                 auto_triggered=False,
                 reason="followup_confirm_no",
+            )
+        refresh_pending = (
+            is_explicit_decision_mode_command(message)
+            or intent_label == "decision_candidate"
+            or any(k in message.lower() for k in _WEAK_DECISION_CUES)
+        )
+        if refresh_pending:
+            _clear_decision_suppression(state, thread)
+            state["pending_prompt"] = decision_prompt
+            state["pending_since"] = _to_iso(now)
+            state["last_trigger_reason"] = "pending_refresh"
+            return DecisionTriggerEvaluation(
+                effective_action="send_message",
+                should_offer_suggestion=True,
+                decision_prompt=decision_prompt,
+                reason="pending_refresh",
             )
 
     last_signal_at = _parse_iso(str(state.get("last_signal_at") or ""))
@@ -260,14 +280,15 @@ def evaluate_decision_trigger(
     else:
         state["soft_signal_count"] = max(0, int(state.get("soft_signal_count", 0)) - 1)
 
-    if _cooldown_active(state, now=now):
+    strong_decision_signal = intent_label == "decision_candidate" and intent_confidence >= 0.68
+    if _cooldown_active(state, now=now) and not strong_decision_signal:
         return DecisionTriggerEvaluation(effective_action="send_message", should_offer_suggestion=False)
 
-    should_offer = (
-        intent_label == "decision_candidate"
-        and (intent_confidence >= 0.68 or int(state.get("soft_signal_count", 0)) >= 1)
+    should_offer = intent_label == "decision_candidate" and (
+        intent_confidence >= 0.68 or int(state.get("soft_signal_count", 0)) >= 1
     )
     if should_offer:
+        _clear_decision_suppression(state, thread)
         state["pending_confirmation"] = True
         state["pending_prompt"] = decision_prompt
         state["pending_since"] = _to_iso(now)

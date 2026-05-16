@@ -31,7 +31,7 @@ clean-web:
 	rm -rf web/dist
 
 chaos-demo:
-	$(PYTHON) scripts/chaos_demo.py
+	FX_CHAOS=1 $(PYTHON) scripts/chaos_demo.py
 
 .PHONY: eval eval-single eval-baseline
 

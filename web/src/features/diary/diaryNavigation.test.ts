@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { buildVisibleDateWindow, nextDiaryDateFromMap, prevDiaryDateFromMap, shiftCalendarDay } from './diaryNavigation';
+import {
+  buildMonthDateWindow,
+  buildVisibleDateWindow,
+  computeRailScrollLeft,
+  formatMonthHeading,
+  nextDiaryDateFromMap,
+  prevDiaryDateFromMap,
+  shiftCalendarDay,
+  shiftMonthPreserveDay,
+} from './diaryNavigation';
 import type { DiaryMonthDay } from './types';
 
 const days: DiaryMonthDay[] = [
@@ -31,5 +40,29 @@ describe('diaryNavigation', () => {
   it('prev diary wraps among loaded dates', () => {
     expect(prevDiaryDateFromMap(meta, '2026-05-02')).toBe('2026-05-05');
     expect(prevDiaryDateFromMap(meta, '2026-05-03')).toBe('2026-05-02');
+  });
+
+  it('buildMonthDateWindow returns every day in month', () => {
+    const may = buildMonthDateWindow('2026-05');
+    expect(may).toHaveLength(31);
+    expect(may[0]).toBe('2026-05-01');
+    expect(may[30]).toBe('2026-05-31');
+    const feb = buildMonthDateWindow('2024-02');
+    expect(feb).toHaveLength(29);
+  });
+
+  it('formatMonthHeading is human readable', () => {
+    expect(formatMonthHeading('2026-05')).toMatch(/May/i);
+    expect(formatMonthHeading('2026-05')).toMatch(/2026/);
+  });
+
+  it('shiftMonthPreserveDay clamps to month end', () => {
+    expect(shiftMonthPreserveDay('2026-01-31', 1)).toBe('2026-02-28');
+  });
+
+  it('computeRailScrollLeft centers chip and clamps to scroll bounds', () => {
+    expect(computeRailScrollLeft(300, 900, 0, 50)).toBe(0);
+    expect(computeRailScrollLeft(300, 900, 400, 50)).toBe(275);
+    expect(computeRailScrollLeft(300, 900, 850, 50)).toBe(600);
   });
 });

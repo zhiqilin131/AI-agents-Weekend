@@ -1,138 +1,244 @@
-"""Chaos demo runner: asserts successful SSE decision traces under injected faults."""
+"""Chaos demo: scripted fault injection timeline with PASS/FAIL per leg (requires ``FX_CHAOS=1``)."""
 
 from __future__ import annotations
 
 import json
 import os
+import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from foresight_x.ui.api_server import app
+from foresight_x.config import Settings
+from foresight_x.orchestration.chaos import (
+    TARGET_LLM_PRIMARY,
+    TARGET_MCP_LINEAR,
+    TARGET_TAVILY,
+    ChaosProfile,
+    apply_env_leg,
+    chaos_armed,
+    clear_runtime_profiles,
+    reset_partial_json_slots,
+)
+from foresight_x.orchestration.pipeline import PipelineContext, iter_pipeline_events, run_pipeline
+from foresight_x.resilience.runtime import reset_resilience_runtime_state, resilience_health_report
+
+ARTIFACTS_DIR = REPO_ROOT / "artifacts"
+TIMELINE_PATH = ARTIFACTS_DIR / "chaos_timeline.json"
+REPORT_PATH = REPO_ROOT / "report_card.md"
+
+# Accelerated timings for CI; set CHAOS_DEMO_REALTIME=1 for full 10s/30s pacing.
+FAST = os.getenv("CHAOS_DEMO_REALTIME", "").strip().lower() not in ("1", "true", "yes")
+LEG_DWELL_SEC = 0.15 if FAST else 10.0
+CHAOS_DWELL_SEC = 0.35 if FAST else 30.0
+
+LEGS: list[tuple[str, dict[str, ChaosProfile | str], float, set[str]]] = [
+    ("healthy", {}, LEG_DWELL_SEC, set()),
+    (
+        "primary_5xx",
+        {TARGET_LLM_PRIMARY: ChaosProfile(status=500, outage=True)},
+        CHAOS_DWELL_SEC,
+        {"openai", "llm", "llm.primary"},
+    ),
+    (
+        "primary_429",
+        {TARGET_LLM_PRIMARY: ChaosProfile(status=429)},
+        CHAOS_DWELL_SEC,
+        {"openai", "llm", "llm.primary"},
+    ),
+    (
+        "tavily_outage",
+        {TARGET_TAVILY: ChaosProfile(outage=True)},
+        CHAOS_DWELL_SEC,
+        {"tavily"},
+    ),
+    (
+        "linear_mcp_outage",
+        {TARGET_MCP_LINEAR: ChaosProfile(outage=True)},
+        CHAOS_DWELL_SEC,
+        {"linear_mcp", "mcp.linear"},
+    ),
+    ("recovery", {}, LEG_DWELL_SEC, set()),
+]
+
+_SEED_TRACE: dict | None = None
 
 
-def _parse_sse_payload(text: str) -> list[dict]:
-    out: list[dict] = []
-    blocks = text.split("\n\n")
-    for b in blocks:
-        lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
-        if not lines:
-            continue
-        data_lines = [ln[5:] for ln in lines if ln.startswith("data:")]
-        if not data_lines:
-            continue
-        raw = "\n".join(data_lines).strip()
-        if not raw:
-            continue
-        try:
-            out.append(json.loads(raw))
-        except Exception:
-            continue
-    return out
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _run_probe(mode_openai: str, mode_tavily: str, mode_linear: str) -> dict:
-    if mode_openai:
-        os.environ["CHAOS_OPENAI_MODE"] = mode_openai
-    else:
-        os.environ.pop("CHAOS_OPENAI_MODE", None)
-    if mode_tavily:
-        os.environ["CHAOS_TAVILY_MODE"] = mode_tavily
-    else:
-        os.environ.pop("CHAOS_TAVILY_MODE", None)
-    if mode_linear:
-        os.environ["CHAOS_LINEAR_MCP_MODE"] = mode_linear
-    else:
-        os.environ.pop("CHAOS_LINEAR_MCP_MODE", None)
-
-    c = TestClient(app)
-    traces_dir = Path("data/traces")
-    seed_path = traces_dir / "pipe-test-1.json"
-    if not seed_path.exists():
-        candidates = sorted(traces_dir.glob("*.json"))
-        if not candidates:
-            raise RuntimeError("no seed trace available under data/traces for stage resume demo")
-        seed_path = candidates[0]
-    seed_trace = json.loads(seed_path.read_text(encoding="utf-8"))
-    stream_res = c.post(
-        "/api/run/stream",
-        json={
-            "raw_input": "I need to decide whether to accept a new role this month.",
-            "preserve_raw_input": True,
-            "resume_from_stage": "finalize",
-            "resume_partial": seed_trace,
-        },
+def _ensure_seed_trace() -> dict:
+    global _SEED_TRACE
+    if _SEED_TRACE is not None:
+        return _SEED_TRACE
+    traces_dir = REPO_ROOT / "data" / "traces"
+    for candidate in (traces_dir / "pipe-test-1.json", *sorted(traces_dir.glob("*.json"))):
+        if candidate.is_file():
+            _SEED_TRACE = json.loads(candidate.read_text(encoding="utf-8"))
+            return _SEED_TRACE
+    tmp_data = REPO_ROOT / "data" / "chaos_demo_tmp"
+    tmp_data.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("FORESIGHT_DATA_DIR", str(tmp_data))
+    os.environ.setdefault("TAVILY_API_KEY", "")
+    settings = Settings(foresight_data_dir=tmp_data)
+    ctx = PipelineContext(settings=settings, llm=None, user_memory=None, world=None)
+    trace = run_pipeline(
+        ctx,
+        "I need to decide whether to accept a new role this month.",
+        decision_id="chaos-seed",
+        persist_trace=False,
     )
-    if stream_res.status_code != 200:
-        raise RuntimeError(f"run stream failed: {stream_res.status_code} {stream_res.text}")
-    events = _parse_sse_payload(stream_res.text)
-    complete = next((e for e in events if e.get("event") == "complete"), None)
-    if not complete:
-        raise RuntimeError("no complete event in SSE stream")
-    trace = complete.get("trace")
-    if not isinstance(trace, dict) or not trace.get("decision_id"):
-        raise RuntimeError("complete event missing decision trace")
-    degradations = trace.get("degradations")
-    if not isinstance(degradations, list):
-        raise RuntimeError("trace missing degradations list")
-    runtime = trace.get("runtime")
-    if not isinstance(runtime, dict):
-        raise RuntimeError("trace missing runtime metadata")
-    provider_per_stage = runtime.get("provider_per_stage")
-    if not isinstance(provider_per_stage, dict) or not provider_per_stage:
-        raise RuntimeError("trace runtime.provider_per_stage is empty")
-    if (mode_openai or mode_tavily or mode_linear) and not degradations:
-        raise RuntimeError("chaos scenario produced empty trace.degradations")
-    degraded_events = [e for e in events if e.get("event") == "degraded"]
-    if (mode_openai or mode_tavily or mode_linear) and not degraded_events:
-        raise RuntimeError("fault scenario produced no degraded event")
+    _SEED_TRACE = trace.model_dump(mode="json")
+    seed_path = traces_dir / "chaos-seed.json"
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    seed_path.write_text(json.dumps(_SEED_TRACE, ensure_ascii=False, indent=2), encoding="utf-8")
+    return _SEED_TRACE
 
-    h = c.get("/api/health/resilience")
-    if h.status_code != 200:
-        raise RuntimeError(f"resilience health probe failed: {h.status_code} {h.text}")
-    body = h.json()
-    body["scenario"] = {
-        "openai": mode_openai or "none",
-        "tavily": mode_tavily or "none",
-        "linear_mcp": mode_linear or "none",
+
+def _degradation_components(degradations: list) -> set[str]:
+    comps: set[str] = set()
+    for d in degradations:
+        if not isinstance(d, dict):
+            continue
+        c = str(d.get("component") or "").strip().lower()
+        if c:
+            comps.add(c)
+    return comps
+
+
+def _run_leg(
+    leg_name: str,
+    profiles: dict[str, ChaosProfile | str],
+    expect_components: set[str],
+) -> dict:
+    reset_resilience_runtime_state()
+    clear_runtime_profiles()
+    reset_partial_json_slots()
+    apply_env_leg(profiles)
+
+    started = _utc_now()
+    t0 = time.perf_counter()
+    errors: list[str] = []
+
+    seed = _ensure_seed_trace()
+    tmp_data = REPO_ROOT / "data" / "chaos_demo_tmp"
+    tmp_data.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("FORESIGHT_DATA_DIR", str(tmp_data))
+    os.environ.setdefault("TAVILY_API_KEY", "")
+    settings = Settings(foresight_data_dir=tmp_data)
+    ctx = PipelineContext(settings=settings, llm=None, user_memory=None, world=None)
+    try:
+        events = list(
+            iter_pipeline_events(
+                ctx,
+                "I need to decide whether to accept a new role this month.",
+                preserve_raw_input=True,
+                resume_from_stage="finalize",
+                resume_partial=seed,
+                persist_trace=False,
+            )
+        )
+    except Exception as exc:
+        errors.append(f"pipeline error: {exc}")
+        events = []
+
+    complete = next((e for e in events if e.get("event") == "complete"), None)
+    degraded_events = [e for e in events if e.get("event") == "degraded"]
+
+    trace = (complete or {}).get("trace") if isinstance(complete, dict) else None
+    degradations = trace.get("degradations") if isinstance(trace, dict) else None
+    if not isinstance(degradations, list):
+        errors.append("missing trace.degradations")
+        degradations = []
+
+    if not complete:
+        errors.append("no complete event")
+
+    if isinstance(trace, dict) and not trace.get("decision_id"):
+        errors.append("complete missing decision_id")
+
+    comps = _degradation_components(degradations)
+    if expect_components and not (comps & expect_components):
+        errors.append(f"expected degradation component in {sorted(expect_components)}, got {sorted(comps)}")
+
+    if expect_components and not degraded_events:
+        errors.append("no degraded SSE events")
+
+    health_body = resilience_health_report()
+
+    elapsed_ms = int(round((time.perf_counter() - t0) * 1000.0))
+    passed = not errors
+
+    return {
+        "leg": leg_name,
+        "started_at": started,
+        "elapsed_ms": elapsed_ms,
+        "pass": passed,
+        "errors": errors,
+        "profiles": {k: (v.legacy_mode() if isinstance(v, ChaosProfile) else str(v)) for k, v in profiles.items()},
+        "degradations": degradations,
+        "degraded_sse_count": len(degraded_events),
+        "decision_id": (trace or {}).get("decision_id") if isinstance(trace, dict) else None,
+        "health": health_body,
     }
-    body["chaos_assertions"] = {
-        "sse_complete": True,
-        "decision_id": trace.get("decision_id"),
-        "degraded_events_seen": len(degraded_events),
-        "trace_degradations_seen": len(degradations),
-        "provider_per_stage_keys": sorted(list(provider_per_stage.keys())),
-        "never_500": stream_res.status_code != 500,
-    }
-    return body
 
 
 def main() -> int:
-    scenarios = [
-        ("5xx", "", ""),
-        ("429", "", ""),
-        ("", "outage", ""),
-        ("", "", "outage"),
+    os.environ.setdefault("FX_CHAOS", "1")
+    if not chaos_armed():
+        print("FAIL: FX_CHAOS must be set (e.g. FX_CHAOS=1 make chaos-demo)", file=sys.stderr)
+        return 1
+
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    timeline: dict = {
+        "generated_at": _utc_now(),
+        "fast_mode": FAST,
+        "fx_chaos": True,
+        "legs": [],
+    }
+
+    all_pass = True
+    for leg_name, profiles, dwell, expect in LEGS:
+        if dwell > 0:
+            time.sleep(dwell)
+        row = _run_leg(leg_name, profiles, expect)
+        timeline["legs"].append(row)
+        status = "PASS" if row["pass"] else "FAIL"
+        print(f"LEG {leg_name}: {status}" + (f" — {', '.join(row['errors'])}" if row["errors"] else ""))
+        if not row["pass"]:
+            all_pass = False
+
+    TIMELINE_PATH.write_text(json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Wrote {TIMELINE_PATH}")
+
+    lines = [
+        "# Resilience Report Card",
+        "",
+        f"Generated: {timeline['generated_at']}",
+        f"Fast mode: {FAST}",
+        "",
+        "## Chaos timeline",
+        "",
     ]
-    out: list[dict] = []
-    for o, t, l in scenarios:
-        out.append(_run_probe(o, t, l))
-    target = Path("report_card.md")
-    lines = ["# Resilience Report Card", ""]
-    for row in out:
-        sc = row.get("scenario", {})
+    for row in timeline["legs"]:
         lines.append(
-            f"- Scenario openai={sc.get('openai')} tavily={sc.get('tavily')} linear_mcp={sc.get('linear_mcp')}: status={row.get('status')}, complete={row.get('chaos_assertions', {}).get('sse_complete')}, degraded={row.get('chaos_assertions', {}).get('degraded_events_seen')}"
+            f"- **{row['leg']}**: {'PASS' if row['pass'] else 'FAIL'}"
+            f" — degradations={len(row.get('degradations') or [])},"
+            f" degraded_sse={row.get('degraded_sse_count', 0)},"
+            f" decision_id={row.get('decision_id')}"
         )
-    lines.append("")
-    lines.append("## Raw")
-    lines.append("")
-    lines.append("```json")
-    lines.append(json.dumps(out, ensure_ascii=False, indent=2))
-    lines.append("```")
-    target.write_text("\n".join(lines), encoding="utf-8")
-    print(f"Wrote {target}")
-    return 0
+        if row.get("errors"):
+            lines.append(f"  - errors: {', '.join(row['errors'])}")
+    lines.extend(["", f"Full timeline: `{TIMELINE_PATH.relative_to(REPO_ROOT)}`", ""])
+    REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Wrote {REPORT_PATH}")
+
+    return 0 if all_pass else 1
 
 
 if __name__ == "__main__":

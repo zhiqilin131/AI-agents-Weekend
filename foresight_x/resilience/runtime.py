@@ -42,14 +42,15 @@ def _append_run_event(ev: dict[str, Any]) -> None:
 
 _LOCK = threading.Lock()
 _PROVIDER_STATS: dict[str, dict[str, float]] = {}
-_BREAKERS: dict[str, dict[str, float]] = {}
 
 
 def reset_resilience_runtime_state() -> None:
     """Testing helper: clear global counters and breaker state."""
+    from foresight_x.orchestration.circuit_breaker import reset_all_breakers
+
     with _LOCK:
         _PROVIDER_STATS.clear()
-        _BREAKERS.clear()
+    reset_all_breakers()
 
 
 def _provider_stat_row(provider: str) -> dict[str, float]:
@@ -68,41 +69,19 @@ def _provider_stat_row(provider: str) -> dict[str, float]:
 
 
 def circuit_allow(provider: str, *, failure_threshold: int, open_seconds: float) -> bool:
-    now = time.time()
-    with _LOCK:
-        b = _BREAKERS.get(provider)
-        if b is None:
-            b = {
-                "failures": 0.0,
-                "open_until": 0.0,
-                "failure_threshold": float(max(1, failure_threshold)),
-                "open_seconds": float(max(1.0, open_seconds)),
-            }
-            _BREAKERS[provider] = b
-        else:
-            b["failure_threshold"] = float(max(1, failure_threshold))
-            b["open_seconds"] = float(max(1.0, open_seconds))
-        return now >= float(b.get("open_until", 0.0))
+    from foresight_x.orchestration.circuit_breaker import circuit_allow as _allow
+
+    return _allow(
+        provider,
+        failure_threshold=failure_threshold,
+        open_seconds=open_seconds,
+    )
 
 
 def circuit_record(provider: str, *, ok: bool) -> None:
-    now = time.time()
-    with _LOCK:
-        b = _BREAKERS.setdefault(
-            provider,
-            {
-                "failures": 0.0,
-                "open_until": 0.0,
-                "failure_threshold": 3.0,
-                "open_seconds": 30.0,
-            },
-        )
-        if ok:
-            b["failures"] = 0.0
-            return
-        b["failures"] = float(b.get("failures", 0.0)) + 1.0
-        if b["failures"] >= float(b.get("failure_threshold", 3.0)):
-            b["open_until"] = now + float(b.get("open_seconds", 30.0))
+    from foresight_x.orchestration.circuit_breaker import circuit_record as _record
+
+    _record(provider, ok=ok)
 
 
 def record_provider_call(
@@ -146,6 +125,8 @@ def degrade(
     stage: str = "",
     retryable: bool = True,
     error_kind: str = "",
+    provider: str = "",
+    fallback_path: str = "",
 ) -> dict[str, Any]:
     ev = {
         "at": _utc_now(),
@@ -154,35 +135,56 @@ def degrade(
         "reason": (reason or "degraded").strip()[:240],
         "retryable": bool(retryable),
         "error_kind": (error_kind or "").strip()[:80],
+        "provider": (provider or "").strip()[:80],
+        "fallback_path": (fallback_path or "").strip()[:120],
     }
     _append_run_event(ev)
     return ev
 
 
 def chaos_mode(provider: str) -> str:
-    p = (provider or "").strip().upper()
-    if not p:
-        return ""
-    return os.getenv(f"CHAOS_{p}_MODE", "").strip().lower()
+    from foresight_x.orchestration.chaos import chaos_mode as _chaos_mode
+
+    return _chaos_mode(provider)
 
 
 def probe_linear_mcp() -> None:
     """Record Linear MCP availability signal for this run (non-blocking)."""
+    from foresight_x.orchestration.circuit_breaker import BREAKER_MCP_LINEAR, breaker_before_call
+    from foresight_x.orchestration.chaos import TARGET_MCP_LINEAR, DependencyDegraded, get_profile, maybe_raise
+
+    try:
+        maybe_raise(TARGET_MCP_LINEAR)
+    except Exception:
+        pass
+    try:
+        breaker_before_call(BREAKER_MCP_LINEAR)
+    except DependencyDegraded:
+        degrade(
+            component="linear_mcp",
+            reason="circuit breaker open; continuing without MCP assist",
+            stage="infra_probe",
+            retryable=True,
+            error_kind="circuit_open",
+        )
+        return
     mode = chaos_mode("linear_mcp")
-    if mode in ("outage", "timeout", "5xx"):
+    profile = get_profile(TARGET_MCP_LINEAR)
+    if profile is not None or mode in ("outage", "timeout", "5xx"):
+        err = mode or (profile.legacy_mode() if profile else "outage")
         record_provider_call(
             "linear_mcp",
             ok=False,
             latency_ms=0.0,
             brownout_threshold_ms=10_000.0,
-            error_kind=mode,
+            error_kind=err,
         )
         degrade(
             component="linear_mcp",
             reason="Linear MCP unavailable; continuing without MCP assist",
             stage="infra_probe",
             retryable=True,
-            error_kind=mode,
+            error_kind=err,
         )
         return
     record_provider_call(
@@ -194,18 +196,12 @@ def probe_linear_mcp() -> None:
 
 
 def resilience_health_report() -> dict[str, Any]:
+    from foresight_x.orchestration.circuit_breaker import get_resilience_snapshot
+
     with _LOCK:
         stats = {k: dict(v) for k, v in _PROVIDER_STATS.items()}
-        breakers = {k: dict(v) for k, v in _BREAKERS.items()}
-    now = time.time()
-    breaker_view: dict[str, Any] = {}
-    for p, b in breakers.items():
-        open_until = float(b.get("open_until", 0.0))
-        breaker_view[p] = {
-            "state": "open" if now < open_until else "closed",
-            "failures": int(b.get("failures", 0.0)),
-            "open_until_epoch": open_until,
-        }
+    snap = get_resilience_snapshot()
+    breaker_view = snap.get("breakers") or {}
     return {
         "status": "ok",
         "generated_at": _utc_now(),
@@ -221,24 +217,18 @@ def resilience_health_report() -> dict[str, Any]:
 
 def breaker_states_snapshot() -> dict[str, Any]:
     """Return a copy of current breaker states for trace runtime metadata."""
-    with _LOCK:
-        breakers = {k: dict(v) for k, v in _BREAKERS.items()}
-    now = time.time()
-    out: dict[str, Any] = {}
-    for provider, row in breakers.items():
-        open_until = float(row.get("open_until", 0.0))
-        out[provider] = {
-            "state": "open" if now < open_until else "closed",
-            "failures": int(row.get("failures", 0.0)),
-            "open_until_epoch": open_until,
-        }
-    return out
+    from foresight_x.orchestration.circuit_breaker import breaker_states_snapshot as _snap
+
+    return _snap()
 
 
 def chaos_profile_snapshot() -> dict[str, str]:
     """Snapshot active chaos profile for provider/runtime diagnostics."""
+    from foresight_x.orchestration.chaos import chaos_profile_snapshot as _snapshot
+
+    snap = _snapshot()
     return {
-        "openai": chaos_mode("openai"),
-        "tavily": chaos_mode("tavily"),
-        "linear_mcp": chaos_mode("linear_mcp"),
+        "openai": snap.get("openai") or chaos_mode("openai"),
+        "tavily": snap.get("tavily") or chaos_mode("tavily"),
+        "linear_mcp": snap.get("linear_mcp") or chaos_mode("linear_mcp"),
     }

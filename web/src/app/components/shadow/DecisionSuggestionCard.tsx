@@ -6,15 +6,24 @@ export function DecisionSuggestionCard({
   onGenerate,
   onKeep,
   disabled = false,
+  confirmLabel = 'Generate Decision Report',
 }: {
   suggestion: ShadowSuggestion | null;
   onGenerate: () => void;
   onKeep: () => void;
   disabled?: boolean;
+  confirmLabel?: string;
 }) {
   if (!suggestion || suggestion.type !== 'decision_report') return null;
+  const manual = confirmLabel === 'Yes';
   return (
-    <div className="rounded-2xl border border-amber-200 bg-amber-50/90 p-4">
+    <div
+      className={
+        manual
+          ? 'rounded-2xl border border-sky-300/90 bg-gradient-to-br from-sky-50/95 to-indigo-50/85 p-4 shadow-[0_0_22px_rgba(56,189,248,0.18)]'
+          : 'rounded-2xl border border-amber-200 bg-amber-50/90 p-4'
+      }
+    >
       <p className="text-sm font-semibold text-amber-900">{suggestion.title}</p>
       <p className="mt-1 text-sm text-amber-800">{suggestion.message}</p>
       <div className="mt-3 flex gap-2">
@@ -29,7 +38,7 @@ export function DecisionSuggestionCard({
               onGenerate();
             }}
           >
-            Generate Decision Report
+            {confirmLabel}
           </button>
         </BuddyTooltip>
         <button
