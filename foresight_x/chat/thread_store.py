@@ -3,15 +3,20 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from foresight_x.config import load_settings
 from foresight_x.db.supabase_client import get_client
-from foresight_x.chat.thread_title import apply_title_for_first_user_message, heuristic_thread_title
+from foresight_x.chat.thread_title import heuristic_thread_title
+from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.perception.clarification_gate import default_clarification_state
+from foresight_x.structured_predict import structured_predict
 
 _log = logging.getLogger(__name__)
 
@@ -60,11 +65,335 @@ def _default_title(first_message: str = "") -> str:
     return heuristic_thread_title(first_message)
 
 
+_PLACEHOLDER_TITLES = {
+    "",
+    "new chat",
+    "untitled",
+    "conversation",
+    "chat",
+    "shadow chat",
+}
+
+_LIGHT_GREETINGS = {
+    "hi",
+    "hello",
+    "hey",
+    "yo",
+    "sup",
+    "thanks",
+    "thank you",
+    "ok",
+    "okay",
+    "cool",
+}
+
+_COMMON_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "between",
+    "be",
+    "but",
+    "by",
+    "for",
+    "from",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "im",
+    "i'm",
+    "it",
+    "its",
+    "me",
+    "my",
+    "of",
+    "on",
+    "or",
+    "our",
+    "so",
+    "that",
+    "the",
+    "their",
+    "them",
+    "this",
+    "to",
+    "us",
+    "we",
+    "what",
+    "when",
+    "while",
+    "with",
+    "you",
+    "your",
+}
+
+
+class ThreadTitleLLM(BaseModel):
+    title: str = Field(
+        default="",
+        description="A concise chat title capturing the user's core intent, ideally 3-8 words.",
+        max_length=64,
+    )
+
+
+_TITLE_PROMPT = """Generate a concise title for this chat.
+
+Goal:
+- Capture the user's intent in plain language.
+- Title should be intuitive and skimmable.
+
+Rules:
+- 3 to 8 words.
+- Prefer noun/verb phrases (not a full sentence).
+- Use the same language as the user.
+- Avoid generic titles like "Conversation", "New chat", "Question".
+- No surrounding quotes.
+
+Recent messages:
+---
+{recent}
+---
+
+Return JSON with only: title
+"""
+
+_AUTOTITLE_LLM_ATTEMPTED_THREAD_IDS: set[str] = set()
+_TITLE_SOURCE_AUTO = "auto"
+_TITLE_SOURCE_MANUAL = "manual"
+
+
+def _is_placeholder_title(title: str | None) -> bool:
+    t = " ".join(str(title or "").strip().lower().split())
+    return t in _PLACEHOLDER_TITLES
+
+
+def _is_cjk_text(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff]", text or ""))
+
+
+def _sanitize_summary_source(text: str) -> str:
+    raw = " ".join(str(text or "").strip().split())
+    if not raw:
+        return ""
+    return raw.strip(" .,:;!?-_=+*#`~()[]{}<>\"'")
+
+
+def _is_meaningful_user_text(text: str) -> bool:
+    s = _sanitize_summary_source(text).lower()
+    if not s:
+        return False
+    if s in _LIGHT_GREETINGS:
+        return False
+    if _is_cjk_text(s):
+        return len(s) >= 6
+    words = [w for w in s.split() if w]
+    if len(words) <= 2 and len(s) < 16:
+        return False
+    return True
+
+
+def _summarize_user_text(text: str) -> str:
+    s = _sanitize_summary_source(text)
+    if not s:
+        return ""
+
+    if _is_cjk_text(s):
+        compact = "".join(s.split())
+        return compact[:18] + ("..." if len(compact) > 18 else "")
+
+    def _compact_phrase_for_title(phrase: str, *, max_words: int = 5) -> str:
+        clean = re.sub(r"\s+", " ", phrase.strip())
+        clean = clean.strip(" .,:;!?-_=+*#`~()[]{}<>\"'")
+        if not clean:
+            return ""
+        words = [w.strip(".,:;!?()[]{}\"'").lower() for w in clean.split()]
+        words = [w for w in words if w]
+        words = [w for w in words if w not in _COMMON_STOPWORDS]
+        if not words:
+            return ""
+        return " ".join(words[:max_words])
+
+    # Strong pattern for common decision framing:
+    # "I'm torn between X and/or Y" -> "X vs Y"
+    m = re.search(
+        r"\bbetween\s+(.+?)\s+(?:and|or|vs|versus)\s+(.+?)(?:[.!?\n]|$)",
+        s,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        left = _compact_phrase_for_title(m.group(1), max_words=5)
+        right = _compact_phrase_for_title(m.group(2), max_words=5)
+        if left and right:
+            pair = f"{left} vs {right}"
+            return pair[:64] + ("..." if len(pair) > 64 else "")
+
+    sentence = re.split(r"[.!?\n]", s, maxsplit=1)[0].strip() or s
+    tokens = [w.strip(".,:;!?()[]{}\"'").lower() for w in sentence.split()]
+    tokens = [w for w in tokens if w]
+    content_words = [w for w in tokens if w not in _COMMON_STOPWORDS]
+    picked = content_words[:6] if len(content_words) >= 3 else tokens[:8]
+    if not picked:
+        return ""
+
+    out = " ".join(picked)
+    return out[:64] + ("..." if len(out) > 64 else "")
+
+
+def _format_autotitle_recent_messages(messages: list[dict[str, Any]]) -> str:
+    rows: list[str] = []
+    picked = messages[-8:] if len(messages) > 8 else messages
+    for row in picked:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role") or "").strip().lower() or "unknown"
+        content = " ".join(str(row.get("content") or "").strip().split())
+        if not content:
+            continue
+        if len(content) > 280:
+            content = content[:280] + "..."
+        rows.append(f"{role}: {content}")
+    return "\n".join(rows)
+
+
+def _normalize_generated_title(title: str) -> str:
+    t = " ".join(str(title or "").strip().split())
+    t = t.strip("\"'`")
+    if not t:
+        return ""
+    if _is_placeholder_title(t):
+        return ""
+    words = t.split()
+    if len(words) > 8:
+        t = " ".join(words[:8]).strip()
+    return t[:64] + ("..." if len(t) > 64 else "")
+
+
+def _llm_summarize_thread_title(thread: dict[str, Any], *, force: bool = False) -> str:
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return ""
+
+    thread_id = str(thread.get("thread_id") or "")
+    if (not force) and thread_id and thread_id in _AUTOTITLE_LLM_ATTEMPTED_THREAD_IDS:
+        return ""
+    if thread_id:
+        _AUTOTITLE_LLM_ATTEMPTED_THREAD_IDS.add(thread_id)
+
+    settings = load_settings()
+    if not (settings.openai_api_key or "").strip():
+        return ""
+
+    messages = thread.get("messages") or []
+    if not isinstance(messages, list):
+        return ""
+    recent = _format_autotitle_recent_messages(messages)
+    if not recent:
+        return ""
+
+    prompt = _TITLE_PROMPT.format(recent=recent)
+    try:
+        llm = build_openai_llm(settings=settings, temperature=0.1)
+        out = structured_predict(llm, ThreadTitleLLM, prompt)
+    except Exception:
+        _log.debug("llm autotitle generation failed", exc_info=True)
+        return ""
+
+    title = _normalize_generated_title(getattr(out, "title", ""))
+    return title
+
+
+def _maybe_autotitle_from_messages(thread: dict[str, Any]) -> bool:
+    if not _is_placeholder_title(thread.get("title")):
+        return False
+    title = _compute_best_title_from_messages(thread, require_assistant=True)
+    if not title:
+        return False
+    thread["title"] = title
+    thread["title_source"] = _TITLE_SOURCE_AUTO
+    return True
+
+
+def _ensure_thread_title_source(thread: dict[str, Any]) -> None:
+    src = str(thread.get("title_source") or "").strip().lower()
+    if src in {_TITLE_SOURCE_AUTO, _TITLE_SOURCE_MANUAL}:
+        return
+    if _is_placeholder_title(thread.get("title")):
+        thread["title_source"] = _TITLE_SOURCE_AUTO
+    else:
+        thread["title_source"] = _TITLE_SOURCE_MANUAL
+
+
+def _compute_best_title_from_messages(
+    thread: dict[str, Any],
+    *,
+    force_llm: bool = False,
+    require_assistant: bool = False,
+) -> str:
+    messages = thread.get("messages") or []
+    if not isinstance(messages, list):
+        return ""
+    if require_assistant:
+        has_assistant = any(
+            isinstance(row, dict) and str(row.get("role") or "") == "assistant"
+            for row in messages
+        )
+        if not has_assistant:
+            return ""
+    meaningful_user_rows: list[dict[str, Any]] = []
+    for row in messages:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("role") or "") != "user":
+            continue
+        content = str(row.get("content") or "")
+        if _is_meaningful_user_text(content):
+            meaningful_user_rows.append(row)
+    if not meaningful_user_rows:
+        return ""
+
+    llm_title = _llm_summarize_thread_title(thread, force=force_llm)
+    if llm_title:
+        return llm_title
+
+    for row in meaningful_user_rows:
+        content = str(row.get("content") or "")
+        title = _summarize_user_text(content)
+        if title:
+            return title
+    return ""
+
+
+def regenerate_thread_title(thread: dict[str, Any]) -> str:
+    """Recompute title from conversation; explicit user-triggered auto title refresh."""
+    title = _compute_best_title_from_messages(thread, force_llm=True, require_assistant=False)
+    if not title:
+        return str(thread.get("title") or "")
+    thread["title"] = title
+    thread["title_source"] = _TITLE_SOURCE_AUTO
+    return title
+
+
+def set_manual_thread_title(thread: dict[str, Any], title: str) -> str:
+    clean = " ".join(str(title or "").strip().split())
+    if not clean:
+        clean = "New chat"
+    thread["title"] = clean[:200]
+    thread["title_source"] = _TITLE_SOURCE_MANUAL
+    return thread["title"]
+
+
 def _default_thread_payload(*, user_id: str, thread_id: str, title: str | None = None) -> dict[str, Any]:
+    provided_title = " ".join(str(title or "").strip().split())
     return {
         "thread_id": thread_id,
         "user_id": user_id,
-        "title": title or "New chat",
+        "title": provided_title or "New chat",
+        "title_source": (_TITLE_SOURCE_MANUAL if provided_title else _TITLE_SOURCE_AUTO),
         "created_at": _now(),
         "updated_at": _now(),
         "mode": "shadow",
@@ -93,10 +422,12 @@ def _local_list_threads(*, user_id: str) -> list[dict[str, Any]]:
     for p in sorted(d.glob("*.json"), reverse=True):
         try:
             t = json.loads(p.read_text(encoding="utf-8"))
+            _ensure_thread_title_source(t)
             out.append(
                 {
                     "thread_id": t.get("thread_id"),
                     "title": t.get("title") or "New chat",
+                    "title_source": t.get("title_source", _TITLE_SOURCE_AUTO),
                     "updated_at": t.get("updated_at"),
                     "created_at": t.get("created_at"),
                     "mode": t.get("mode", "shadow"),
@@ -122,6 +453,9 @@ def _local_load_thread(thread_id: str | None, *, user_id: str, allow_create: boo
         t = json.loads(p.read_text(encoding="utf-8"))
         if not t.get("user_id"):
             t["user_id"] = user_id
+        _ensure_thread_title_source(t)
+        if _is_placeholder_title(t.get("title")):
+            _maybe_autotitle_from_messages(t)
         if not t.get("title"):
             first = (t.get("messages") or [{}])[0].get("content", "")
             t["title"] = _default_title(first)
@@ -188,6 +522,7 @@ def _handle_supabase_failure(op: str, user_id: str, exc: Exception):
 
 def _thread_metadata_from_thread(thread: dict[str, Any]) -> dict[str, Any]:
     return {
+        "title_source": thread.get("title_source", _TITLE_SOURCE_AUTO),
         "memory_events": thread.get("memory_events", []),
         "dismissed_suggestions": thread.get("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
         "linked_decision_ids": thread.get("linked_decision_ids", []),
@@ -213,6 +548,7 @@ def _hydrate_thread_from_row(
         "thread_id": str(row.get("id") or ""),
         "user_id": user_id,
         "title": row.get("title") or "New chat",
+        "title_source": md.get("title_source", _TITLE_SOURCE_AUTO),
         "created_at": row.get("created_at") or _now(),
         "updated_at": row.get("updated_at") or row.get("created_at") or _now(),
         "mode": row.get("mode", "shadow"),
@@ -235,6 +571,9 @@ def _hydrate_thread_from_row(
         out["clarification_state"] = base
     if not isinstance(out.get("decision_trigger_state"), dict):
         out["decision_trigger_state"] = {}
+    if _is_placeholder_title(out.get("title")):
+        _maybe_autotitle_from_messages(out)
+    _ensure_thread_title_source(out)
     return out
 
 
@@ -372,7 +711,7 @@ def list_threads(*, user_id: str) -> list[dict[str, Any]]:
             client = get_client()
             resp = (
                 client.table("threads")
-                .select("id,title,mode,created_at,updated_at")
+                .select("id,title,mode,metadata,created_at,updated_at")
                 .eq("user_id", user_id)
                 .order("updated_at", desc=True)
                 .execute()
@@ -406,6 +745,11 @@ def list_threads(*, user_id: str) -> list[dict[str, Any]]:
                     {
                         "thread_id": tid,
                         "title": r.get("title") or "New chat",
+                        "title_source": (
+                            (r.get("metadata") or {}).get("title_source", _TITLE_SOURCE_AUTO)
+                            if isinstance(r.get("metadata"), dict)
+                            else _TITLE_SOURCE_AUTO
+                        ),
                         "updated_at": r.get("updated_at") or r.get("created_at"),
                         "created_at": r.get("created_at"),
                         "mode": r.get("mode", "shadow"),
@@ -449,6 +793,7 @@ def load_thread(thread_id: str | None, *, user_id: str, allow_create: bool = Tru
 
 def save_thread(thread: dict[str, Any]) -> None:
     uid = str(thread.get("user_id") or "demo_user")
+    _ensure_thread_title_source(thread)
 
     if _supabase_enabled():
         try:
@@ -568,8 +913,8 @@ def append_message(
         "metadata": meta,
     }
     thread.setdefault("messages", []).append(msg)
-    if role == "user":
-        apply_title_for_first_user_message(thread, content, llm=title_llm)
+    if role == "assistant" and _is_placeholder_title(thread.get("title")):
+        _maybe_autotitle_from_messages(thread)
     if decision_id:
         ids = thread.setdefault("linked_decision_ids", [])
         if decision_id not in ids:
