@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { ClarifyDialog, type ClarifyQuestion } from '../app/components/ClarifyDialog';
+import type { ClarifyQuestion } from '../app/components/ClarifyDialog';
+import { ThreadActionDock } from '../app/components/shadow/ThreadActionDock';
+import { buildClarificationPendingAction, type PendingAction } from '../app/components/shadow/pendingActionTypes';
 import { InputPanel } from '../app/components/InputPanel';
 import { MainNavButtons } from '../app/components/MainNavButtons';
 import { DecisionQuestionStrip } from '../app/components/DecisionQuestionStrip';
@@ -100,9 +102,9 @@ export default function HomePage() {
   const [runProgress, setRunProgress] = useState(0);
   const [runStageLabel, setRunStageLabel] = useState('Starting…');
   const [tier3Profile, setTier3Profile] = useState<Tier3ProfileView | null>(null);
-  const [clarifyOpen, setClarifyOpen] = useState(false);
   const [clarifyChecking, setClarifyChecking] = useState(false);
-  const [clarifyPayload, setClarifyPayload] = useState<{ questions: ClarifyQuestion[]; note: string } | null>(null);
+  const [homePendingAction, setHomePendingAction] = useState<PendingAction | null>(null);
+  const clarifyOpen = homePendingAction?.type === 'clarification';
   /** Shown only when clarify fails or LLM is missing — not when the model simply says no extra questions. */
   const [clarifyGateHint, setClarifyGateHint] = useState<string | null>(null);
   const [degradeNotices, setDegradeNotices] = useState<DegradeNotice[]>([]);
@@ -524,13 +526,16 @@ export default function HomePage() {
           skip_reason?: string;
         };
         if (gate.need_clarification && Array.isArray(gate.questions) && gate.questions.length > 0) {
-          setClarifyPayload({ questions: gate.questions, note: String(gate.note ?? '') });
-          // Ensure we do not show pipeline loading until user clicks "Continue analysis".
+          const gatePa = (gate as { pending_action?: PendingAction }).pending_action;
+          setHomePendingAction(
+            gatePa?.type === 'clarification'
+              ? gatePa
+              : buildClarificationPendingAction(gate.questions, null, String(gate.note ?? '')),
+          );
           setState('empty');
           setLoadingStage(null);
           setRunProgress(0);
           setRunStageLabel('Starting…');
-          setClarifyOpen(true);
           setClarifyChecking(false);
           return;
         }
@@ -568,6 +573,7 @@ export default function HomePage() {
     setShowOutcome(false);
     setError(null);
     setClarifyGateHint(null);
+    setHomePendingAction(null);
     setLoadingStage(null);
     setCommitInfo(null);
     setCommitError(null);
@@ -721,6 +727,25 @@ export default function HomePage() {
               disabled={state === 'loading'}
             />
           </div>
+          {homePendingAction ? (
+            <ThreadActionDock
+              pendingAction={homePendingAction}
+              disabled={state === 'loading'}
+              onClarifySkip={() => {
+                setHomePendingAction(null);
+                void runPipelineStream();
+              }}
+              onClarifyAnswer={(answers, saveToProfile) => {
+                setHomePendingAction(null);
+                void runPipelineStream({
+                  clarification_answers: answers,
+                  save_clarification_to_profile: saveToProfile,
+                });
+              }}
+              onGenerateDecisionReport={() => {}}
+              onDismissSuggestion={() => setHomePendingAction(null)}
+            />
+          ) : null}
           <InputPanel
             decisionInput={decisionInput}
             onInputChange={setDecisionInput}
@@ -821,25 +846,6 @@ export default function HomePage() {
         )}
         {state === 'empty' ? <HomeRoamingSlime /> : null}
       </div>
-
-      <ClarifyDialog
-        open={clarifyOpen}
-        onOpenChange={(open) => {
-          setClarifyOpen(open);
-          if (!open) {
-            setClarifyPayload(null);
-            setClarifyChecking(false);
-          }
-        }}
-        questions={clarifyPayload?.questions ?? []}
-        note={clarifyPayload?.note}
-        onConfirm={(answers, saveToProfile) => {
-          void runPipelineStream({
-            clarification_answers: answers,
-            save_clarification_to_profile: saveToProfile,
-          });
-        }}
-      />
 
       {showOutcome && decisionId && (
         <OutcomeHarness

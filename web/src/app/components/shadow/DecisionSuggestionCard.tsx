@@ -23,16 +23,27 @@ export function DecisionSuggestionCard({
             type="button"
             disabled={disabled}
             className="rounded-full bg-indigo-600 px-4 py-2 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={onGenerate}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onGenerate();
+            }}
           >
             Generate Decision Report
           </button>
         </BuddyTooltip>
-        <BuddyTooltip content="Dismiss the suggestion and continue normal Shadow Chat.">
-          <button type="button" className="rounded-full border border-gray-300 px-4 py-2 text-xs" onClick={onKeep}>
-            Keep Chatting
-          </button>
-        </BuddyTooltip>
+        <button
+          type="button"
+          disabled={disabled}
+          className="rounded-full border border-gray-300 px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onKeep();
+          }}
+        >
+          Keep Chatting
+        </button>
       </div>
     </div>
   );

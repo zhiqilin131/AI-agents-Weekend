@@ -7,19 +7,14 @@ import { ChatInput } from './ChatInput';
 import { DecisionReportPanel } from './DecisionReportPanel';
 import { MainNavButtons } from './MainNavButtons';
 import { ModePill } from './ModePill';
-import { ModeSuggestionBanner } from './ModeSuggestionBanner';
+import { ThreadActionDock } from './shadow/ThreadActionDock';
+import type { PendingAction } from './shadow/pendingActionTypes';
 import { unlockSlimeAudioContext } from '../../utils/slimeAudioContext';
 
 type Message = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
-};
-
-type Suggestion = {
-  type: 'role_mode' | 'decision_report' | null;
-  title: string;
-  message: string;
 };
 
 export function UnifiedChat() {
@@ -34,7 +29,7 @@ export function UnifiedChat() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [mode, setMode] = useState('normal');
-  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [decisionTrace, setDecisionTrace] = useState<Record<string, unknown> | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -42,7 +37,7 @@ export function UnifiedChat() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, suggestion]);
+  }, [messages, pendingAction]);
 
   const callUnified = async (payload: Record<string, unknown>) => {
     if (payload.user_action === 'generate_decision_report') {
@@ -62,13 +57,27 @@ export function UnifiedChat() {
     const data = (await res.json()) as {
       thread_id: string;
       mode: string;
-      suggestion: Suggestion | null;
+      suggestion: { type: string; title: string; message: string } | null;
+      pending_action?: PendingAction | null;
       decision_trace: Record<string, unknown> | null;
       messages: Message[];
     };
     setThreadId(data.thread_id);
     setMode(data.mode);
-    setSuggestion(data.suggestion);
+    if (data.pending_action && typeof data.pending_action === 'object') {
+      setPendingAction(data.pending_action);
+    } else if (data.suggestion?.type) {
+      setPendingAction({
+        id: `unified-${Date.now()}`,
+        type: data.suggestion.type as PendingAction['type'],
+        title: data.suggestion.title,
+        message: data.suggestion.message,
+        blocks: data.suggestion.type === 'decision_report' ? ['generate_decision_report'] : ['send_message'],
+        payload: {},
+      });
+    } else {
+      setPendingAction(null);
+    }
     setMessages(data.messages || []);
     if (data.decision_trace) {
       setDecisionTrace(data.decision_trace);
@@ -84,6 +93,8 @@ export function UnifiedChat() {
       setSending(false);
     }
   };
+
+  const hasClarification = pendingAction?.type === 'clarification';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
@@ -101,12 +112,19 @@ export function UnifiedChat() {
             <div ref={bottomRef} />
           </div>
           <div className="sticky bottom-0 space-y-3 border-t border-gray-200/80 bg-white/35 pt-3 backdrop-blur-sm">
-            <ModeSuggestionBanner
-              suggestion={suggestion}
+            <ThreadActionDock
+              pendingAction={pendingAction}
+              disabled={sending || hasClarification}
+              onClarifySkip={() => void callUnified({ user_action: 'send_message', message: '' })}
+              onClarifyAnswer={() => {}}
+              onGenerateDecisionReport={() =>
+                void callUnified({
+                  user_action: 'generate_decision_report',
+                  message: messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || '',
+                })
+              }
+              onDismissSuggestion={() => void callUnified({ user_action: 'dismiss_suggestion' })}
               onEnterRoleMode={() => void callUnified({ user_action: 'enter_role_mode' })}
-              onGenerateDecisionReport={() => void callUnified({ user_action: 'generate_decision_report', message: messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || '' })}
-              onContinue={() => setSuggestion(null)}
-              onDismiss={() => void callUnified({ user_action: 'dismiss_suggestion' })}
             />
             <div className="px-1">
               <ModelSelector
@@ -123,7 +141,7 @@ export function UnifiedChat() {
                 disabled={sending}
               />
             </div>
-            <ChatInput disabled={sending} onSend={(t) => void sendMessage(t)} />
+            <ChatInput disabled={sending || hasClarification} onSend={(t) => void sendMessage(t)} />
           </div>
         </div>
       </div>

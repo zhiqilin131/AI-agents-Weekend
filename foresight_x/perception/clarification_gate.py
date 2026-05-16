@@ -363,12 +363,9 @@ def should_show_clarification_fast(
         return ClarificationFastResult(
             should_ask=True,
             confidence=0.82,
-            reason="vague_help_request",
+            reason="vague_help_request_memory_gated",
             domain="generic_decision",
-            fast_question=q,
-            requires_llm=False,
-            target_dimension=tid,
-            fast_option_labels=opts,
+            requires_llm=True,
         )
 
     # Decision-shaped but needs richer tailoring → LLM unless domain-specific template fits
@@ -396,12 +393,9 @@ def should_show_clarification_fast(
         return ClarificationFastResult(
             should_ask=True,
             confidence=0.74,
-            reason=f"decision_candidate_domain:{dom}",
+            reason=f"decision_candidate_domain_memory_gated:{dom}",
             domain=dom,
-            fast_question=q,
-            requires_llm=False,
-            target_dimension=tid,
-            fast_option_labels=opts,
+            requires_llm=True,
         )
 
     return ClarificationFastResult(

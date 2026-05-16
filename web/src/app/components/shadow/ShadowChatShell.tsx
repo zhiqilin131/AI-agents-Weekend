@@ -6,7 +6,7 @@ import { useAuth } from '../../../auth/AuthContext';
 import { useSlimeCredits } from '../credits/SlimeCreditsContext';
 import { MainNavButtons } from '../MainNavButtons';
 import type { ClarifyQuestion } from '../ClarifyDialog';
-import { ClarificationCard, type ClarificationGateMeta } from './ClarificationCard';
+import type { ClarificationGateMeta } from './ClarificationCard';
 import { apiFetch } from '../../../utils/apiFetch';
 import { parseSseBlocks } from '../../../utils/parseSse';
 import { refetchSlimeProfileGlobal } from '../../../hooks/useSlimeProfile';
@@ -21,7 +21,15 @@ import { AgentPresence3DPanel } from './AgentPresence3DPanel';
 import { ChatMessageList } from './ChatMessageList';
 import { ChatSidebar } from './ChatSidebar';
 import { DecisionReportStreamingPanel } from './DecisionReportStreamingPanel';
-import { DecisionSuggestionCard } from './DecisionSuggestionCard';
+import { ThreadActionDock } from './ThreadActionDock';
+import {
+  buildClarificationPendingAction,
+  decisionPromptFromPendingAction,
+  messagesHaveDecisionReportArtifact,
+  normalizeThreadMessages,
+  pendingActionToSuggestion,
+  type PendingAction,
+} from './pendingActionTypes';
 import {
   ProfileMemoryToastStack,
   type ProfileMemoryDetail,
@@ -69,19 +77,13 @@ export function ShadowChatShell({
   const [messages, setMessages] = useState<ShadowMessage[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
   const [timeline, setTimeline] = useState<string[]>(['Ready']);
-  const [suggestion, setSuggestion] = useState<ShadowSuggestion | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [profileMemoryToasts, setProfileMemoryToasts] = useState<ProfileMemoryToast[]>([]);
   const profileMemoryToastThreadRef = useRef<string | null>(null);
   const profileMemoryToastKeysRef = useRef<Set<string>>(new Set());
   const profileMemoryToastTimersRef = useRef<Map<string, number>>(new Map());
   const [reportOpen, setReportOpen] = useState(false);
   const [sending, setSending] = useState(false);
-  const [clarifyOpen, setClarifyOpen] = useState(false);
-  const [clarifyPayload, setClarifyPayload] = useState<{
-    questions: ClarifyQuestion[];
-    note: string;
-    meta?: ClarificationGateMeta | null;
-  } | null>(null);
   const [pendingClarifyAction, setPendingClarifyAction] = useState<{
     kind: 'chat' | 'report';
     text: string;
@@ -164,7 +166,10 @@ export function ShadowChatShell({
       await refreshThreads();
       return;
     }
-    if (!res.ok) return;
+    if (!res.ok) {
+      pushTimeline(`Could not load chat (${res.status})`);
+      return;
+    }
     const data = (await res.json()) as { thread: ShadowThread };
     const tid = data.thread.thread_id;
     const mem = Array.isArray(data.thread.memory_events)
@@ -188,8 +193,20 @@ export function ShadowChatShell({
     }
 
     setActiveThreadId(tid);
-    setMessages(data.thread.messages || []);
-    setSuggestion(null);
+    const msgs = normalizeThreadMessages(data.thread.messages || []);
+    setMessages(msgs);
+    const pa = data.thread.pending_action;
+    const hasArtifact = messagesHaveDecisionReportArtifact(msgs);
+    if (
+      pa &&
+      typeof pa === 'object' &&
+      pa.type &&
+      !(pa.type === 'decision_report' && hasArtifact)
+    ) {
+      setPendingAction(pa as PendingAction);
+    } else if (!opts?.preservePendingSuggestion) {
+      setPendingAction(null);
+    }
     if (!opts?.preservePendingSuggestion) {
       lastDecisionSuggestionRef.current = null;
     }
@@ -238,7 +255,7 @@ export function ShadowChatShell({
       setMessages([]);
       setThreadsLoaded(false);
       autoCreateThreadRef.current = false;
-      setSuggestion(null);
+      setPendingAction(null);
       lastDecisionSuggestionRef.current = null;
       profileMemoryToastThreadRef.current = null;
       profileMemoryToastKeysRef.current.clear();
@@ -275,7 +292,7 @@ export function ShadowChatShell({
       if (autoCreateThreadRef.current) return;
       autoCreateThreadRef.current = true;
       setMessages([]);
-      setSuggestion(null);
+      setPendingAction(null);
       lastDecisionSuggestionRef.current = null;
       profileMemoryToastThreadRef.current = null;
       profileMemoryToastKeysRef.current.clear();
@@ -375,10 +392,8 @@ export function ShadowChatShell({
     if (!activeThreadId) return;
     setSending(true);
     try {
-      setSuggestion(null);
+      setPendingAction(null);
       lastDecisionSuggestionRef.current = null;
-      setClarifyOpen(false);
-      setClarifyPayload(null);
       setPendingClarifyAction(null);
 
       const streamSeq = ++streamTurnSeqRef.current;
@@ -445,6 +460,8 @@ export function ShadowChatShell({
       }
       if (!res.ok || !res.body) {
         setAgentStatus('error');
+        const errText = !res.ok ? `Chat request failed (${res.status})` : 'Chat stream unavailable';
+        pushTimeline(errText.length > 80 ? `${errText.slice(0, 80)}…` : errText);
         setSending(false);
         return;
       }
@@ -497,13 +514,18 @@ export function ShadowChatShell({
           const metaRaw = ev.clarification_meta;
           const meta =
             metaRaw && typeof metaRaw === 'object' ? (metaRaw as ClarificationGateMeta) : null;
-          setClarifyPayload({
-            questions: qs as ClarifyQuestion[],
-            note: typeof ev.note === 'string' ? ev.note : '',
-            meta,
-          });
-          setClarifyOpen(true);
+          const paEv = ev.pending_action;
+          if (paEv && typeof paEv === 'object') {
+            setPendingAction(paEv as PendingAction);
+          } else {
+            setPendingAction(
+              buildClarificationPendingAction(qs as ClarifyQuestion[], meta, typeof ev.note === 'string' ? ev.note : ''),
+            );
+          }
           setPendingClarifyAction(null);
+        } else if (type === 'pending_action_updated') {
+          const paUp = ev.pending_action;
+          if (paUp && typeof paUp === 'object') setPendingAction(paUp as PendingAction);
         } else if (type === 'decision_suggestion') {
           lastDecisionSuggestionRef.current = (ev.suggestion || null) as ShadowSuggestion | null;
         } else if (type === 'done') {
@@ -523,20 +545,46 @@ export function ShadowChatShell({
               setAgentStatus('idle');
             }
           }
-          // Drop streaming draft; reload thread from server so user text matches merged clarification
-          // and assistant rows are never stuck missing after a partial stream failure.
-          setMessages((prev) => prev.filter((x) => x.id !== draftId));
-          if (activeThreadId) {
-            void loadThread(activeThreadId, { preservePendingSuggestion: true }).then(() => {
-              const fromDone =
-                ev && typeof ev === 'object' && 'suggestion' in ev
-                  ? ((ev as { suggestion?: ShadowSuggestion | null }).suggestion ?? null)
-                  : undefined;
-              setSuggestion(
-                fromDone !== undefined ? fromDone : lastDecisionSuggestionRef.current,
-              );
-              lastDecisionSuggestionRef.current = null;
+          const paDone = ev.pending_action;
+          if (paDone && typeof paDone === 'object') {
+            setPendingAction(paDone as PendingAction);
+          }
+          const serverLast = normalizeThreadMessages(ev.message ? [ev.message] : [])[0];
+          if (serverLast?.content?.trim()) {
+            setMessages((prev) => {
+              const withoutDraft = prev.filter((x) => x.id !== draftId && x.id !== serverLast.id);
+              return [...withoutDraft, serverLast];
             });
+          } else if (draft.trim()) {
+            setMessages((prev) => {
+              const idx = prev.findIndex((x) => x.id === draftId);
+              if (idx >= 0) return prev;
+              return [...prev, { id: draftId, role: 'assistant', content: draft }];
+            });
+          }
+          if (activeThreadId) {
+            void loadThread(activeThreadId, { preservePendingSuggestion: true })
+              .then(() => {
+                if (!paDone && lastDecisionSuggestionRef.current) {
+                  const sug = lastDecisionSuggestionRef.current;
+                  if (sug?.type === 'decision_report' || sug?.type === 'role_mode') {
+                    setPendingAction({
+                      id: `sse-sug-${Date.now()}`,
+                      type: sug.type,
+                      title: sug.title,
+                      message: sug.message,
+                      blocks: sug.type === 'decision_report' ? ['generate_decision_report'] : ['send_message'],
+                      payload: {},
+                    });
+                  }
+                }
+                lastDecisionSuggestionRef.current = null;
+              })
+              .catch(() => {
+                pushTimeline('Could not refresh thread from server');
+              });
+          } else {
+            lastDecisionSuggestionRef.current = null;
           }
         } else if (type === 'error') {
           setAgentStatus('error');
@@ -594,8 +642,12 @@ export function ShadowChatShell({
     unlockSlimeAudioContext();
     reportGeneratingRef.current = true;
     try {
-      const lastUser = seedPrompt ?? (messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.');
-      setSuggestion(null);
+      const lastUser =
+        seedPrompt ??
+        (decisionPromptFromPendingAction(pendingAction) ||
+          (messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.'));
+      setPendingAction(null);
+      lastDecisionSuggestionRef.current = null;
       setReportOpen(true);
       setAgentStatus('report_generating' as AgentStatus);
       pushTimeline('Generating report');
@@ -691,12 +743,18 @@ export function ShadowChatShell({
           };
           if (gate.need_clarification && Array.isArray(gate.questions) && gate.questions.length > 0) {
             setPendingClarifyAction({ kind, text });
-            setClarifyPayload({
-              questions: gate.questions,
-              note: String(gate.note ?? ''),
-              meta: gate.clarification_meta ?? null,
-            });
-            setClarifyOpen(true);
+            const gatePa = (gate as { pending_action?: PendingAction }).pending_action;
+            if (gatePa && typeof gatePa === 'object' && gatePa.type) {
+              setPendingAction(gatePa);
+            } else {
+              setPendingAction(
+                buildClarificationPendingAction(
+                  gate.questions,
+                  gate.clarification_meta ?? null,
+                  String(gate.note ?? ''),
+                ),
+              );
+            }
             return true;
           }
         }
@@ -744,18 +802,66 @@ export function ShadowChatShell({
     }
   }, [calendarCoachHint, navigate, pushTimeline, storageReady, storageUserKey]);
 
+  const dismissPendingSuggestion = useCallback(async () => {
+    lastDecisionSuggestionRef.current = null;
+    if (!activeThreadId) {
+      setPendingAction(null);
+      return;
+    }
+    try {
+      const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_action: 'dismiss_suggestion', message: '' }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { thread?: { pending_action?: PendingAction | null } };
+        const pa = data.thread?.pending_action;
+        setPendingAction(pa && typeof pa === 'object' && pa.type ? pa : null);
+      } else {
+        setPendingAction(null);
+      }
+    } catch {
+      setPendingAction(null);
+    }
+  }, [activeThreadId]);
+
+  const hasClarificationPending = pendingAction?.type === 'clarification';
+
   const onGenerateDecisionReport = useCallback(async () => {
     unlockSlimeAudioContext();
-    const lastUser = messages.filter((m) => m.role === 'user').slice(-1)[0]?.content || 'Help me decide.';
-    if (clarifyOpen) {
+    if (hasClarificationPending) {
       pushTimeline('Answer or skip the clarification card below first');
+      return;
+    }
+    const fromPending = decisionPromptFromPendingAction(pendingAction);
+    const lastUser =
+      fromPending ||
+      messages.filter((m) => m.role === 'user').slice(-1)[0]?.content ||
+      'Help me decide.';
+    if (pendingAction?.type === 'decision_report') {
+      await beginDecisionReportRef.current(lastUser);
       return;
     }
     const blockedByClarify = await requestClarifyIfNeeded(lastUser, 'report');
     if (!blockedByClarify) {
       await beginDecisionReportRef.current(lastUser);
     }
-  }, [messages, clarifyOpen, requestClarifyIfNeeded]);
+  }, [messages, hasClarificationPending, pendingAction, requestClarifyIfNeeded]);
+
+  const hasReportArtifact = useMemo(
+    () => messagesHaveDecisionReportArtifact(messages),
+    [messages],
+  );
+  const isReportGenerating = reportStream.isStreaming;
+  const dockPendingAction = useMemo(() => {
+    if (!pendingAction) return null;
+    if (pendingAction.type === 'decision_report' && (isReportGenerating || hasReportArtifact)) {
+      return null;
+    }
+    return pendingAction;
+  }, [pendingAction, isReportGenerating, hasReportArtifact]);
+  const suggestion = useMemo(() => pendingActionToSuggestion(dockPendingAction), [dockPendingAction]);
 
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
@@ -792,11 +898,88 @@ export function ShadowChatShell({
                 <div ref={bottomRef} />
               </div>
               <div className="mt-3 space-y-3 border-t border-gray-200/80 pt-3">
-                <DecisionSuggestionCard
-                  suggestion={suggestion}
-                  disabled={sending || (clarifyOpen && pendingClarifyAction?.kind === 'report')}
-                  onGenerate={() => void onGenerateDecisionReport()}
-                  onKeep={() => setSuggestion(null)}
+                {isReportGenerating && !reportOpen ? (
+                  <div className="rounded-2xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/95 to-violet-50/80 px-4 py-3 shadow-[0_4px_20px_rgba(99,102,241,0.1)]">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-600"
+                          aria-hidden
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-indigo-950">Generating decision report</p>
+                          <p className="truncate text-xs text-indigo-800/90">{reportStream.progressStep}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReportOpen(true);
+                          setAgentStatus('report_generating');
+                        }}
+                        className="shrink-0 rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+                      >
+                        View progress
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <ThreadActionDock
+                  pendingAction={dockPendingAction}
+                  disabled={sending || (hasClarificationPending && pendingClarifyAction?.kind === 'report')}
+                  onGenerateDecisionReport={() => void onGenerateDecisionReport()}
+                  onDismissSuggestion={() => void dismissPendingSuggestion()}
+                  onClarifySkip={async () => {
+                    unlockSlimeAudioContext();
+                    const pending = pendingClarifyAction;
+                    const clar = pendingAction?.type === 'clarification' ? pendingAction : null;
+                    const q0 = clar?.payload?.questions;
+                    const firstQ = Array.isArray(q0) && q0.length ? (q0[0] as ClarifyQuestion) : null;
+                    const meta = clar?.payload?.meta as ClarificationGateMeta | undefined;
+                    const dim = (meta?.target_dimension || firstQ?.id || '').trim();
+                    const qp = firstQ?.prompt ?? '';
+                    setPendingAction(null);
+                    setPendingClarifyAction(null);
+                    if (activeThreadId && dim) {
+                      try {
+                        await apiFetch(
+                          `/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/clarification-skip`,
+                          {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              target_dimension: dim,
+                              question_prompt: qp,
+                            }),
+                          },
+                        );
+                      } catch {
+                        /* optional */
+                      }
+                    }
+                    if (!pending) return;
+                    if (pending.kind === 'chat') {
+                      await streamMessage(pending.text);
+                      return;
+                    }
+                    await beginDecisionReport(pending.text);
+                  }}
+                  onClarifyAnswer={(answers, saveToProfile) => {
+                    const pending = pendingClarifyAction;
+                    setPendingAction(null);
+                    setPendingClarifyAction(null);
+                    if (pending?.kind === 'report') {
+                      void beginDecisionReport(pending.text, answers, saveToProfile);
+                      return;
+                    }
+                    if (pending?.kind === 'chat') {
+                      void streamMessage(pending.text, 'send_message', answers, saveToProfile);
+                      return;
+                    }
+                    const users = messagesRef.current.filter((m) => m.role === 'user');
+                    const lastUser = users[users.length - 1]?.content?.trim();
+                    if (lastUser) void streamMessage(lastUser, 'send_message', answers, saveToProfile);
+                  }}
                 />
                 {calendarCoachHint ? (
                   <div className="relative overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-white/95 via-indigo-50/40 to-violet-50/50 px-3 py-3 shadow-[0_8px_30px_rgba(99,102,241,0.12)]">
@@ -869,64 +1052,6 @@ export function ShadowChatShell({
                     Starting a fresh chat for you…
                   </p>
                 ) : null}
-                {clarifyOpen && clarifyPayload ? (
-                  <ClarificationCard
-                    questions={clarifyPayload.questions}
-                    meta={clarifyPayload.meta}
-                    disabled={sending}
-                    onSkip={async () => {
-                      unlockSlimeAudioContext();
-                      const pending = pendingClarifyAction;
-                      const payload = clarifyPayload;
-                      const q0 = payload?.questions[0];
-                      const dim = (payload?.meta?.target_dimension || q0?.id || "").trim();
-                      const qp = q0?.prompt ?? '';
-                      setClarifyOpen(false);
-                      setClarifyPayload(null);
-                      setPendingClarifyAction(null);
-                      if (activeThreadId && dim) {
-                        try {
-                          await apiFetch(
-                            `/api/shadow-chat/threads/${encodeURIComponent(activeThreadId)}/clarification-skip`,
-                            {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                target_dimension: dim,
-                                question_prompt: qp,
-                              }),
-                            },
-                          );
-                        } catch {
-                          /* optional */
-                        }
-                      }
-                      if (!pending) return;
-                      if (pending.kind === 'chat') {
-                        await streamMessage(pending.text);
-                        return;
-                      }
-                      await beginDecisionReport(pending.text);
-                    }}
-                    onAnswer={(answers, saveToProfile) => {
-                      const pending = pendingClarifyAction;
-                      setClarifyOpen(false);
-                      setClarifyPayload(null);
-                      setPendingClarifyAction(null);
-                      if (pending?.kind === 'report') {
-                        void beginDecisionReport(pending.text, answers, saveToProfile);
-                        return;
-                      }
-                      if (pending?.kind === 'chat') {
-                        void streamMessage(pending.text, 'send_message', answers, saveToProfile);
-                        return;
-                      }
-                      const users = messagesRef.current.filter((m) => m.role === 'user');
-                      const lastUser = users[users.length - 1]?.content?.trim();
-                      if (lastUser) void streamMessage(lastUser, 'send_message', answers, saveToProfile);
-                    }}
-                  />
-                ) : null}
                 <div className="mb-2">
                   <ModelSelector
                     feature="shadow_chat"
@@ -958,7 +1083,7 @@ export function ShadowChatShell({
               status={agentStatus}
               timeline={timeline}
               suggestion={suggestion}
-              generateReportDisabled={sending || (clarifyOpen && pendingClarifyAction?.kind === 'report')}
+              generateReportDisabled={sending || (hasClarificationPending && pendingClarifyAction?.kind === 'report')}
               onGenerateReport={() => void onGenerateDecisionReport()}
               reportOverlaySession={
                 reportOpen
@@ -981,11 +1106,19 @@ export function ShadowChatShell({
         }}
         onClose={() => {
           setReportOpen(false);
-          setAgentStatus('idle');
+          if (reportStream.isStreaming) {
+            setAgentStatus('report_generating');
+          } else {
+            setAgentStatus('idle');
+          }
         }}
         onContinueChat={() => {
           setReportOpen(false);
-          setAgentStatus('idle');
+          if (reportStream.isStreaming) {
+            setAgentStatus('report_generating');
+          } else {
+            setAgentStatus('idle');
+          }
         }}
         onOpenExecutionCalendar={(decisionId) => {
           openExecutionCalendar(decisionId);

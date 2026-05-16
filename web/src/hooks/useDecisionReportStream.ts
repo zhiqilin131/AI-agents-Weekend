@@ -85,8 +85,10 @@ export function useDecisionReportStream() {
       } else if (type === 'warning') {
         const msg = String(ev.message || 'Running in degraded mode');
         setDegradedWarnings((prev) => (prev.includes(msg) ? prev : [...prev.slice(-2), msg]));
-      } else if (type === 'done') {
-        setIsStreaming(false);
+        } else if (type === 'pending_action_updated') {
+          /* Parent clears decision dock when report stream starts. */
+        } else if (type === 'done') {
+          setIsStreaming(false);
         if (ev.stream_error) {
           if (!streamError) {
             streamError = 'Report failed';

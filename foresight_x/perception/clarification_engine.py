@@ -17,7 +17,7 @@ def run_personalized_clarify_gate_timed(
     raw: str,
     llm: StructuredPredictLLM | None,
     *,
-    timeout_s: float = 1.5,
+    timeout_s: float = 2.5,
     profile: UserProfile | None = None,
     recent_messages: list[dict[str, str]] | None = None,
     thread_clarification_events: list[dict[str, Any]] | None = None,

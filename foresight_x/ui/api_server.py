@@ -25,7 +25,7 @@ import chromadb
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from foresight_x.config import load_settings
 from foresight_x.harness.improvement_loop import apply_outcome_to_memory
@@ -44,14 +44,12 @@ from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.orchestration.pipeline import PipelineContext, iter_pipeline_events, run_pipeline
 from foresight_x.perception.clarify_gate import merge_clarification_answers, run_clarify_gate
 from foresight_x.perception.clarification_gate import (
-    build_fast_clarify_questions,
-    build_timeout_fallback_questions,
     default_clarification_state,
     fast_gate_timing_ms,
     should_show_clarification_fast,
 )
 from foresight_x.perception.personalized_clarify import (
-    heuristic_domain,
+    memory_and_message_sufficient_for_reply,
     persist_clarification_followup,
     run_personalized_clarify_gate,
 )
@@ -116,6 +114,13 @@ from foresight_x.chat import (
 )
 from foresight_x.chat.decision_trigger import evaluate_decision_trigger, preview_will_auto_start_decision
 from foresight_x.chat.option_coach import build_option_chat_prompt
+from foresight_x.chat.pending_action import (
+    clear_pending_action,
+    enrich_thread_with_pending_action,
+    set_clarification_pending,
+    set_suggestion_pending,
+    sync_decision_pending_from_trigger,
+)
 from foresight_x.chat.thread_store import append_clarification_event
 from foresight_x.auth import (
     decode_supabase_access_token,
@@ -1631,7 +1636,21 @@ def clarify(body: ClarifyRequest, request: Request):
                     target_dimension=q.id,
                     question_prompt=q.prompt,
                 )
-        return result.model_dump(mode="json")
+            qs_json = [q.model_dump(mode="json") for q in result.questions]
+            meta = dict(result.clarification_meta or {})
+            set_clarification_pending(
+                thread,
+                questions=qs_json,
+                meta=meta,
+                note=str(result.note or ""),
+            )
+            save_thread(thread)
+        out = result.model_dump(mode="json")
+        if thread is not None:
+            enrich_thread_with_pending_action(thread)
+            if thread.get("pending_action"):
+                out["pending_action"] = thread["pending_action"]
+        return out
     except Exception:
         if tx is not None:
             refund_for_transaction(tx, "Clarify gate failed", settings=settings)
@@ -1650,11 +1669,13 @@ def shadow_clarification_skip(thread_id: str, body: ClarifySkipRequest) -> dict:
         target_dimension=body.target_dimension.strip(),
         question_prompt=body.question_prompt.strip(),
     )
+    clear_pending_action(thread, resolution="skipped")
     st = thread.setdefault("clarification_state", default_clarification_state())
     n_user = sum(1 for m in thread.get("messages", []) if str(m.get("role") or "") == "user")
     st["suppress_clarify_until_user_count"] = n_user + 8
     save_thread(thread)
-    return {"ok": True, "thread": _load_thread_or_404(thread_id, uid=uid)}
+    refreshed = _load_thread_or_404(thread_id, uid=uid)
+    return {"ok": True, "thread": _shadow_response_thread(refreshed)}
 
 
 @app.get("/api/traces")
@@ -2080,7 +2101,7 @@ class ShadowThreadCreateRequest(BaseModel):
 
 
 class ShadowThreadMessageRequest(BaseModel):
-    message: str = Field(min_length=1)
+    message: str = ""
     mode: str | None = None
     user_action: str = "send_message"
     clarification_answers: dict[str, str] | None = Field(default=None)
@@ -2090,6 +2111,13 @@ class ShadowThreadMessageRequest(BaseModel):
     #: Idempotency / dedupe for Slime Credits charging when the client retries the same turn.
     credit_request_id: str | None = Field(default=None, max_length=200)
     model_option_id: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _message_required_for_send(self) -> "ShadowThreadMessageRequest":
+        action = (self.user_action or "send_message").strip() or "send_message"
+        if action == "send_message" and not (self.message or "").strip():
+            raise ValueError("message is required for send_message")
+        return self
 
 
 class ShadowDecisionReportStreamRequest(BaseModel):
@@ -2211,9 +2239,16 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
         append_message(thread, role="user", content=message, mode=mode)
 
     if action == "dismiss_suggestion":
+        pa = thread.get("pending_action") if isinstance(thread.get("pending_action"), dict) else {}
         ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
-        ds["role_mode"] = True
-        ds["decision_report"] = False
+        if pa.get("type") == "role_mode":
+            ds["role_mode"] = True
+        elif pa.get("type") == "decision_report":
+            ds["decision_report"] = True
+        else:
+            ds["role_mode"] = True
+            ds["decision_report"] = True
+        clear_pending_action(thread, resolution="dismissed")
         save_thread(thread)
 
     try:
@@ -2318,10 +2353,19 @@ def unified_chat(body: UnifiedChatRequest, request: Request):
             )
 
         thread = _load_thread_or_404(str(thread["thread_id"]), uid=uid)
+        if suggestion:
+            set_suggestion_pending(thread, suggestion, decision_prompt=message)
+            save_thread(thread)
+            thread = _load_thread_or_404(str(thread["thread_id"]), uid=uid)
+        else:
+            sync_decision_pending_from_trigger(thread, last_user_message=message)
+            save_thread(thread)
+            thread = _load_thread_or_404(str(thread["thread_id"]), uid=uid)
         return {
             "assistant_message": thread.get("messages", [])[-1] if thread.get("messages") else None,
             "mode": thread.get("mode", "normal"),
             "suggestion": suggestion,
+            "pending_action": thread.get("pending_action"),
             "decision_trace": decision_trace,
             "profile_updates": profile_updates,
             "shadow_updates": shadow_updates,
@@ -2339,6 +2383,30 @@ def _chunk_text(text: str, *, step: int = 18) -> list[str]:
     if not t:
         return []
     return [t[i : i + step] for i in range(0, len(t), step)]
+
+
+def _shadow_response_thread(thread: dict[str, Any], *, last_user_message: str = "") -> dict[str, Any]:
+    out = dict(thread)
+    enrich_thread_with_pending_action(out, last_user_message=last_user_message)
+    return out
+
+
+def _persist_stream_clarification(
+    thread: dict[str, Any],
+    questions: list[Any],
+    *,
+    meta: dict[str, Any] | None = None,
+    note: str = "",
+) -> dict[str, Any]:
+    qs_json: list[dict[str, Any]] = []
+    for q in questions:
+        if hasattr(q, "model_dump"):
+            qs_json.append(q.model_dump(mode="json"))
+        elif isinstance(q, dict):
+            qs_json.append(q)
+    pa = set_clarification_pending(thread, questions=qs_json, meta=meta or {}, note=note or "")
+    save_thread(thread)
+    return pa
 
 
 def _slice_shadow_messages(thread: dict) -> list[dict]:
@@ -2443,7 +2511,7 @@ def get_shadow_chat_thread(thread_id: str) -> dict:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
     t = _load_thread_or_404(thread_id, uid=uid)
-    return {"thread": t}
+    return {"thread": _shadow_response_thread(t)}
 
 
 @app.delete("/api/shadow-chat/threads/{thread_id}")
@@ -2484,6 +2552,33 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         if d_gate:
             rev_id_gate = d_gate
     request_action = str(body.user_action or "send_message").strip() or "send_message"
+    if request_action == "dismiss_suggestion":
+        pa = thread.get("pending_action") if isinstance(thread.get("pending_action"), dict) else {}
+        ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
+        if pa.get("type") == "role_mode":
+            ds["role_mode"] = True
+        elif pa.get("type") == "decision_report":
+            ds["decision_report"] = True
+        else:
+            ds["decision_report"] = True
+        evaluate_decision_trigger(
+            thread=thread,
+            user_action="dismiss_suggestion",
+            user_message=(body.message or "").strip(),
+            intent_label="normal",
+            intent_confidence=0.0,
+        )
+        clear_pending_action(thread, resolution="dismissed")
+        save_thread(thread)
+        refreshed = _load_thread_or_404(thread_id, uid=uid)
+        return {
+            "thread": _shadow_response_thread(refreshed),
+            "suggestion": None,
+            "pending_action": None,
+            "decision_trace": None,
+            "profile_updates": [],
+            "thread_context_kept": False,
+        }
     if request_action == "send_message" and preview_will_auto_start_decision(thread, body.message):
         request_action = "generate_decision_report"
     if request_action == "generate_decision_report":
@@ -2521,6 +2616,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
             )
         except Exception:
             _log.exception("persist_clarification_followup failed (non-stream) thread_id=%s", thread_id)
+        clear_pending_action(thread, resolution="answered")
     intent_probe = effective_msg.strip() if effective_msg.strip() != msg.strip() else msg
     intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
     trigger_eval = evaluate_decision_trigger(
@@ -2570,6 +2666,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
     profile_updates: list[str] = []
     thread_context_kept = False
     if effective_action == "generate_decision_report":
+        clear_pending_action(thread, resolution="confirmed")
         try:
             ctx, _ = _build_context(settings, llm_model=chat_pm)
             report_prompt = trigger_eval.decision_prompt or effective_msg
@@ -2655,10 +2752,18 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
             dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
             allow_decision=trigger_eval.should_offer_suggestion,
         )
+        if suggestion:
+            set_suggestion_pending(thread, suggestion, decision_prompt=trigger_eval.decision_prompt or msg)
+        elif trigger_eval.should_offer_suggestion:
+            sync_decision_pending_from_trigger(thread, last_user_message=msg)
+        else:
+            clear_pending_action(thread)
+        save_thread(thread)
     refreshed = _load_thread_or_404(thread_id, uid=uid)
     return {
-        "thread": refreshed,
+        "thread": _shadow_response_thread(refreshed, last_user_message=msg),
         "suggestion": suggestion,
+        "pending_action": refreshed.get("pending_action"),
         "decision_trace": decision_trace,
         "profile_updates": profile_updates,
         "thread_context_kept": thread_context_kept,
@@ -2715,6 +2820,28 @@ def stream_shadow_chat_message(
         try:
             thread = load_thread(thread_id, user_id=uid, allow_create=False)
             tid = str(thread.get("thread_id") or thread_id)
+            if request_action == "dismiss_suggestion":
+                pa = thread.get("pending_action") if isinstance(thread.get("pending_action"), dict) else {}
+                ds = thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False})
+                if pa.get("type") == "role_mode":
+                    ds["role_mode"] = True
+                elif pa.get("type") == "decision_report":
+                    ds["decision_report"] = True
+                else:
+                    ds["decision_report"] = True
+                clear_pending_action(thread, resolution="dismissed")
+                save_thread(thread)
+                refreshed = load_thread(thread_id, user_id=uid, allow_create=False)
+                yield _sse_chunk(
+                    {
+                        "type": "done",
+                        "thread_id": refreshed.get("thread_id"),
+                        "message": (refreshed.get("messages") or [])[-1] if refreshed.get("messages") else None,
+                        "suggestion": None,
+                        "pending_action": None,
+                    }
+                )
+                return
             mode = str(body.mode or thread.get("mode") or "normal")
             message = body.message.strip()
             effective_message = merge_clarification_answers(message, body.clarification_answers)
@@ -2731,6 +2858,7 @@ def stream_shadow_chat_message(
                     )
                 except Exception:
                     _log.exception("persist_clarification_followup failed; continuing shadow reply thread_id=%s", tid)
+                clear_pending_action(thread, resolution="answered")
             t0 = datetime.now(timezone.utc)
             intent_probe = (
                 effective_message.strip()
@@ -2840,62 +2968,35 @@ def stream_shadow_chat_message(
                 clar_metrics["clarification_fast_gate_ms"] = fast_gate_timing_ms(t_fg)
                 if not fast.should_ask:
                     clar_metrics["clarification_suppressed_reason"] = fast.reason
-                elif fast.requires_llm and ctx.llm is not None:
-                    clar_metrics["clarification_suppressed_reason"] = "pending_async_llm"
-                    ex = ThreadPoolExecutor(max_workers=1)
-                    t_llm_start = time.perf_counter()
-                    llm_future = ex.submit(
-                        run_personalized_clarify_gate,
-                        effective_message,
-                        ctx.llm,
-                        profile=profile,
-                        recent_messages=recent_slice,
-                        thread_clarification_events=events,
-                        interaction_purpose="shadow_chat",
-                    )
                 else:
-                    clar_metrics["clarification_suppressed_reason"] = "pending_fast_template"
+                    mem_ok, mem_reason = memory_and_message_sufficient_for_reply(
+                        effective_message, profile, events
+                    )
+                    if mem_ok:
+                        clar_metrics["clarification_suppressed_reason"] = f"memory_sufficient:{mem_reason}"
+                    elif ctx.llm is not None:
+                        clar_metrics["clarification_suppressed_reason"] = "pending_memory_gated_llm"
+                        ex = ThreadPoolExecutor(max_workers=1)
+                        t_llm_start = time.perf_counter()
+                        llm_future = ex.submit(
+                            run_personalized_clarify_gate,
+                            effective_message,
+                            ctx.llm,
+                            profile=profile,
+                            recent_messages=recent_slice,
+                            thread_clarification_events=events,
+                            interaction_purpose="shadow_chat",
+                        )
+                    else:
+                        clar_metrics["clarification_suppressed_reason"] = "memory_gated_no_llm"
 
             yield _sse_chunk({"type": "status", "status": "reading_memory", "label": "Reading memory..."})
             yield _sse_chunk({"type": "status", "status": "thinking", "label": "Thinking..."})
 
-            if fast is not None and fast.should_ask and fast.fast_question and not fast.requires_llm:
-                qs_fast = build_fast_clarify_questions(fast)
-                if qs_fast:
-                    cmeta = {
-                        "domain": fast.domain,
-                        "target_dimension": fast.target_dimension,
-                        "why_this_question": (
-                            "Quick domain check so we don't guess what matters — no extra model round-trip."
-                        ),
-                        "fast_path": True,
-                    }
-                    yield _sse_chunk(
-                        {
-                            "type": "clarification",
-                            "client_turn_seq": body.client_turn_seq,
-                            "user_message_id": user_msg_id,
-                            "need_clarification": True,
-                            "questions": [q.model_dump(mode="json") for q in qs_fast],
-                            "note": "",
-                            "clarification_meta": {**cmeta, **clar_metrics},
-                        }
-                    )
-                    for q in qs_fast:
-                        append_clarification_event(
-                            thread,
-                            kind="asked",
-                            target_dimension=q.id,
-                            question_prompt=q.prompt,
-                        )
-                    shown_clar = True
-                    clar_metrics["clarification_shown"] = True
-                    clar_metrics["clarification_used_llm"] = False
-                    clar_metrics["clarification_suppressed_reason"] = "none"
-
             suggestion = None
             profile_updates: list[str] = []
             if turn_action == "generate_decision_report":
+                clear_pending_action(thread, resolution="confirmed")
                 if ex is not None:
                     ex.shutdown(wait=False, cancel_futures=True)
                 ctx, _ = _build_context(settings, llm_model=chat_pm_outer)
@@ -2999,12 +3100,12 @@ def stream_shadow_chat_message(
                     not body.clarification_answers
                     and fast is not None
                     and fast.should_ask
-                    and fast.requires_llm
                     and not shown_clar
+                    and clar_metrics.get("clarification_suppressed_reason") == "pending_memory_gated_llm"
                 ):
                     llm_res = None
                     if llm_future is not None and t_llm_start is not None:
-                        remaining = max(0.0, 1.5 - (time.perf_counter() - t_llm_start))
+                        remaining = max(0.0, 2.5 - (time.perf_counter() - t_llm_start))
                         try:
                             llm_res = llm_future.result(timeout=remaining)
                         except FuturesTimeout:
@@ -3026,6 +3127,19 @@ def stream_shadow_chat_message(
                         if llm_res and llm_res.need_clarification and llm_res.questions:
                             mcomb = dict(llm_res.clarification_meta or {})
                             mcomb.update(clar_metrics)
+                            for q in llm_res.questions:
+                                append_clarification_event(
+                                    thread,
+                                    kind="asked",
+                                    target_dimension=q.id,
+                                    question_prompt=q.prompt,
+                                )
+                            pa_clar = _persist_stream_clarification(
+                                thread,
+                                llm_res.questions,
+                                meta=mcomb,
+                                note=str(llm_res.note or ""),
+                            )
                             yield _sse_chunk(
                                 {
                                     "type": "clarification",
@@ -3035,82 +3149,17 @@ def stream_shadow_chat_message(
                                     "questions": [q.model_dump(mode="json") for q in llm_res.questions],
                                     "note": llm_res.note,
                                     "clarification_meta": mcomb,
+                                    "pending_action": pa_clar,
                                 }
                             )
-                            for q in llm_res.questions:
-                                append_clarification_event(
-                                    thread,
-                                    kind="asked",
-                                    target_dimension=q.id,
-                                    question_prompt=q.prompt,
-                                )
+                            yield _sse_chunk({"type": "pending_action_updated", "pending_action": pa_clar})
                             clar_metrics["clarification_used_llm"] = True
                             clar_metrics["clarification_shown"] = True
                             clar_metrics["clarification_suppressed_reason"] = "none"
                         elif llm_future is not None and llm_res is None:
-                            fb_qs = build_timeout_fallback_questions(heuristic_domain(effective_message))
-                            dom = heuristic_domain(effective_message)
-                            cmeta = {
-                                "domain": dom,
-                                "why_this_question": (
-                                    "Smart clarification timed out — using a quick domain fallback instead."
-                                ),
-                                "fast_path": True,
-                                "fallback_after_llm": True,
-                                **clar_metrics,
-                            }
-                            yield _sse_chunk(
-                                {
-                                    "type": "clarification",
-                                    "client_turn_seq": body.client_turn_seq,
-                                    "user_message_id": user_msg_id,
-                                    "need_clarification": True,
-                                    "questions": [q.model_dump(mode="json") for q in fb_qs],
-                                    "note": "",
-                                    "clarification_meta": cmeta,
-                                }
-                            )
-                            for q in fb_qs:
-                                append_clarification_event(
-                                    thread,
-                                    kind="asked",
-                                    target_dimension=q.id,
-                                    question_prompt=q.prompt,
-                                )
-                            clar_metrics["clarification_shown"] = True
-                            clar_metrics["clarification_suppressed_reason"] = "llm_timeout_fallback"
+                            clar_metrics["clarification_suppressed_reason"] = "memory_gated_llm_timeout"
                         elif llm_future is None:
-                            fb_qs = build_timeout_fallback_questions(heuristic_domain(effective_message))
-                            dom = heuristic_domain(effective_message)
-                            cmeta = {
-                                "domain": dom,
-                                "why_this_question": (
-                                    "Smart clarification isn't available — quick domain fallback instead."
-                                ),
-                                "fast_path": True,
-                                "fallback_after_llm": False,
-                                **clar_metrics,
-                            }
-                            yield _sse_chunk(
-                                {
-                                    "type": "clarification",
-                                    "client_turn_seq": body.client_turn_seq,
-                                    "user_message_id": user_msg_id,
-                                    "need_clarification": True,
-                                    "questions": [q.model_dump(mode="json") for q in fb_qs],
-                                    "note": "",
-                                    "clarification_meta": cmeta,
-                                }
-                            )
-                            for q in fb_qs:
-                                append_clarification_event(
-                                    thread,
-                                    kind="asked",
-                                    target_dimension=q.id,
-                                    question_prompt=q.prompt,
-                                )
-                            clar_metrics["clarification_shown"] = True
-                            clar_metrics["clarification_suppressed_reason"] = "no_llm_fallback"
+                            clar_metrics["clarification_suppressed_reason"] = "memory_gated_no_llm"
                         elif llm_res is not None:
                             clar_metrics["clarification_shown"] = False
                             clar_metrics["clarification_suppressed_reason"] = str(llm_res.skip_reason or "not_needed")
@@ -3125,11 +3174,28 @@ def stream_shadow_chat_message(
                 dismissed=thread.setdefault("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
                 allow_decision=trigger_eval.should_offer_suggestion,
             )
+            pa_offer: dict[str, Any] | None = None
+            if suggestion:
+                pa_offer = set_suggestion_pending(
+                    thread,
+                    suggestion,
+                    decision_prompt=trigger_eval.decision_prompt or message,
+                )
+                save_thread(thread)
+            elif trigger_eval.should_offer_suggestion:
+                pa_offer = sync_decision_pending_from_trigger(thread, last_user_message=message)
+                if pa_offer:
+                    save_thread(thread)
+            else:
+                clear_pending_action(thread)
+                save_thread(thread)
             if suggestion and suggestion.get("type") == "decision_report":
                 yield _sse_chunk({"type": "status", "status": "decision_detected", "label": "Decision detected"})
                 yield _sse_chunk({"type": "decision_suggestion", "suggestion": suggestion})
             elif suggestion and suggestion.get("type") == "role_mode":
                 yield _sse_chunk({"type": "decision_suggestion", "suggestion": suggestion})
+            if pa_offer:
+                yield _sse_chunk({"type": "pending_action_updated", "pending_action": pa_offer})
             t_done = datetime.now(timezone.utc)
             metrics = {
                 "first_ui_feedback_ms": 0,
@@ -3141,12 +3207,14 @@ def stream_shadow_chat_message(
                 "profile_update_ms": 0 if not profile_updates else 1,
                 **clar_metrics,
             }
+            enrich_thread_with_pending_action(thread, last_user_message=message)
             yield _sse_chunk(
                 {
                     "type": "done",
                     "thread_id": thread["thread_id"],
                     "message": thread.get("messages", [])[-1],
                     "suggestion": suggestion,
+                    "pending_action": thread.get("pending_action"),
                     "metrics": metrics,
                 }
             )
@@ -3198,8 +3266,19 @@ def stream_shadow_decision_report(
         try:
             thread = load_thread(thread_id, user_id=uid, allow_create=False)
             tid = str(thread.get("thread_id") or thread_id)
-            ctx, _ = _build_context(settings, llm_model=decision_pm)
             prompt = body.decision_prompt.strip()
+            evaluate_decision_trigger(
+                thread=thread,
+                user_action="generate_decision_report",
+                user_message=prompt,
+                intent_label="decision_candidate",
+                intent_confidence=1.0,
+            )
+            clear_pending_action(thread, resolution="confirmed")
+            thread["mode"] = "decision_report"
+            save_thread(thread)
+            yield _sse_chunk({"type": "pending_action_updated", "pending_action": None})
+            ctx, _ = _build_context(settings, llm_model=decision_pm)
             if body.clarification_answers:
                 persist_clarification_followup(
                     settings,
@@ -3277,12 +3356,14 @@ def stream_shadow_decision_report(
                         )
                         if isinstance(trace, dict):
                             _try_create_decision_followup(settings, trace, tid)
+                    save_thread(thread)
                     t1 = datetime.now(timezone.utc)
                     yield _sse_chunk(
                         {
                             "type": "done",
                             "decision_trace": trace,
                             "decision_id": did,
+                            "pending_action": None,
                             "metrics": {
                                 "report_stream_first_event_ms": int(((first_meta_at or t1) - t0).total_seconds() * 1000),
                                 "report_total_ms": int((t1 - t0).total_seconds() * 1000),

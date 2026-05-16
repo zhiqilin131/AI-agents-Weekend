@@ -25,7 +25,7 @@ def test_empty_message_no_clarify() -> None:
     assert r.reason == "empty_chat"
 
 
-def test_help_me_decide_fast_no_llm() -> None:
+def test_help_me_decide_signals_memory_gated_llm() -> None:
     r = should_show_clarification_fast(
         "Help me decide",
         [],
@@ -33,8 +33,8 @@ def test_help_me_decide_fast_no_llm() -> None:
         interaction_purpose="shadow_chat",
     )
     assert r.should_ask is True
-    assert r.requires_llm is False
-    assert r.fast_question
+    assert r.requires_llm is True
+    assert not r.fast_question
 
 
 def test_specific_fork_no_clarify() -> None:
@@ -75,7 +75,7 @@ def test_recent_skip_suppresses() -> None:
     assert r.reason == "recently_skipped"
 
 
-def test_social_issue_fast_question_not_budget() -> None:
+def test_social_issue_memory_gated_not_template() -> None:
     r = should_show_clarification_fast(
         "Should I speak up about discrimination I saw?",
         [],
@@ -85,10 +85,9 @@ def test_social_issue_fast_question_not_budget() -> None:
         interaction_purpose="shadow_chat",
     )
     assert r.should_ask is True
-    assert r.requires_llm is False
+    assert r.requires_llm is True
     assert r.domain == "social_issue"
-    q = (r.fast_question or "").lower()
-    assert "budget" not in q and "urgency" not in q
+    assert not r.fast_question
 
 
 def test_timed_llm_returns_none_on_bad_llm() -> None:

@@ -51,18 +51,20 @@ def test_enter_role_mode_changes_thread_mode(monkeypatch, tmp_path: Path) -> Non
     assert out.json()["mode"] == "roleplay"
 
 
-def test_unified_chat_hard_start_decision_mode_auto_generates_report(monkeypatch, tmp_path: Path) -> None:
+def test_unified_chat_hard_start_decision_mode_offers_confirmation(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     c = TestClient(app)
-    with patch("foresight_x.ui.api_server.run_pipeline", return_value=_FakeTrace("d-hard")):
+    with patch("foresight_x.ui.api_server.run_shadow_turn", return_value=_FakeShadowTurnOut("Okay.")):
         out = c.post(
             "/api/chat/unified",
             json={"message": "Start decision mode", "user_action": "send_message"},
         )
     assert out.status_code == 200
     body = out.json()
-    assert body["mode"] == "decision_report"
-    assert body["decision_trace"]["decision_id"] == "d-hard"
+    assert body["mode"] == "shadow"
+    assert body["suggestion"]["type"] == "decision_report"
+    assert body["decision_trace"] is None
+    assert body["pending_action"]["type"] == "decision_report"
 
 
 def test_unified_chat_yes_after_prompt_auto_generates_report(monkeypatch, tmp_path: Path) -> None:

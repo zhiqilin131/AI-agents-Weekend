@@ -15,8 +15,11 @@ import { MiniReadAloudControl } from './MiniReadAloudControl';
 import { ResourceDrops } from './ResourceDrops';
 import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
 import { slimeBubbleLabel } from '../../../utils/slimeBubbleLabel';
-import { apiFetch } from '../../../utils/apiFetch';
-import { normalizeTtsVoiceName } from '../../../utils/ttsVoices';
+import { playMp3BlobWithWebAudio, unlockSlimeAudioContext } from '../../../utils/slimeAudioContext';
+import {
+  fetchSlimeTtsBlob,
+  slimeTtsHintForFetchError,
+} from '../../../utils/slimeTtsFetch';
 
 export function RecommendationCard({
   report,
@@ -53,6 +56,8 @@ export function RecommendationCard({
   const [readAloudHint, setReadAloudHint] = useState('');
   const cloudAudioRef = useRef<HTMLAudioElement | null>(null);
   const cloudAudioUrlRef = useRef<string | null>(null);
+  const cloudPendingBlobRef = useRef<Blob | null>(null);
+  const cloudWebAudioStopRef = useRef<(() => void) | null>(null);
   const cloudTtsGenRef = useRef(0);
 
   const bubbleText = useMemo(
@@ -80,6 +85,8 @@ export function RecommendationCard({
   }, [isStreaming, refreshSlimeProfile]);
 
   const cleanupCloudAudio = useCallback(() => {
+    cloudWebAudioStopRef.current?.();
+    cloudWebAudioStopRef.current = null;
     const audio = cloudAudioRef.current;
     cloudAudioRef.current = null;
     if (audio) {
@@ -91,73 +98,106 @@ export function RecommendationCard({
     const url = cloudAudioUrlRef.current;
     cloudAudioUrlRef.current = null;
     if (url) URL.revokeObjectURL(url);
+    cloudPendingBlobRef.current = null;
     setCloudSpeaking(false);
     setCloudPaused(false);
     setCloudLoading(false);
   }, []);
 
-  const startCloudReadAloud = useCallback(() => {
-    const text = speechText.trim();
-    if (!text) return;
-    setReadAloudHint('');
-    // Cancel any in-flight TTS generation from previous presses.
-    cloudTtsGenRef.current += 1;
-    const gen = cloudTtsGenRef.current;
-    cleanupCloudAudio();
-    setCloudLoading(true);
-
-    void (async () => {
-      try {
-        const requestId =
-          typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `report-tts-${Date.now()}`;
-        const res = await apiFetch('/api/slime/tts', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Credit-Request-Id': requestId,
-          },
-          body: JSON.stringify({
-            text,
-            ...(normalizeTtsVoiceName(slimeProfile.voice?.preferredVoiceName)
-              ? { voice: normalizeTtsVoiceName(slimeProfile.voice?.preferredVoiceName) }
-              : {}),
-            ...(typeof slimeProfile.voice?.rate === 'number' ? { speed: slimeProfile.voice.rate } : {}),
-          }),
-        });
-        if (gen !== cloudTtsGenRef.current) return;
-        if (res.status === 402) {
-          setReadAloudHint('Cloud voice needs more Slime Credits. Redeem your code, then play again.');
-          setCloudLoading(false);
-          return;
-        }
-        if (!res.ok) throw new Error(await res.text());
-        const blob = await res.blob();
-        if (gen !== cloudTtsGenRef.current) return;
-        const url = URL.createObjectURL(blob);
-        cloudAudioUrlRef.current = url;
-        const audio = new Audio(url);
-        cloudAudioRef.current = audio;
-        audio.setAttribute('playsinline', 'true');
-        audio.onended = () => {
-          if (gen === cloudTtsGenRef.current) cleanupCloudAudio();
-        };
-        audio.onerror = () => {
+  const playCloudBlob = useCallback(
+    async (blob: Blob, gen: number): Promise<'played' | 'blocked' | 'failed'> => {
+      const finish = () => {
+        if (gen === cloudTtsGenRef.current) cleanupCloudAudio();
+      };
+      const webOk = await playMp3BlobWithWebAudio(blob, {
+        onStart: () => {
           if (gen !== cloudTtsGenRef.current) return;
-          cleanupCloudAudio();
-          setReadAloudHint('TTS audio could not play. Try again after tapping the page once.');
-        };
-        await audio.play();
+          setCloudLoading(false);
+          setCloudSpeaking(true);
+          setCloudPaused(false);
+        },
+        onEnded: finish,
+        trackSource: (node) => {
+          cloudWebAudioStopRef.current = node
+            ? () => {
+                try {
+                  node.stop();
+                } catch {
+                  /* already stopped */
+                }
+              }
+            : null;
+        },
+      });
+      if (gen !== cloudTtsGenRef.current) return 'failed';
+      if (webOk) return 'played';
+
+      const url = URL.createObjectURL(blob);
+      cloudAudioUrlRef.current = url;
+      const audio = new Audio(url);
+      cloudAudioRef.current = audio;
+      audio.setAttribute('playsinline', 'true');
+      audio.onended = finish;
+      audio.onerror = () => {
         if (gen !== cloudTtsGenRef.current) return;
+        cleanupCloudAudio();
+        setReadAloudHint('TTS audio could not play. Tap play again.');
+      };
+      try {
+        await audio.play();
+        if (gen !== cloudTtsGenRef.current) return 'failed';
         setCloudLoading(false);
         setCloudSpeaking(true);
         setCloudPaused(false);
+        return 'played';
       } catch {
-        if (gen !== cloudTtsGenRef.current) return;
-        cleanupCloudAudio();
-        setReadAloudHint('TTS voice was unavailable. Check API / credits, then play again.');
+        if (gen !== cloudTtsGenRef.current) return 'failed';
+        setCloudLoading(false);
+        setCloudSpeaking(false);
+        setCloudPaused(false);
+        return 'blocked';
       }
-    })();
-  }, [cleanupCloudAudio, slimeProfile.voice, speechText]);
+    },
+    [cleanupCloudAudio],
+  );
+
+  const startCloudReadAloud = useCallback(
+    (opts?: { reuseBlob?: boolean }) => {
+      const text = speechText.trim();
+      if (!text) return;
+      setReadAloudHint('');
+      cloudTtsGenRef.current += 1;
+      const gen = cloudTtsGenRef.current;
+      const cached = opts?.reuseBlob ? cloudPendingBlobRef.current : null;
+      if (!cached) cleanupCloudAudio();
+      setCloudLoading(true);
+
+      void (async () => {
+        let blob = cached;
+        if (!blob) {
+          const fetched = await fetchSlimeTtsBlob(text, 'report-tts', {
+            preferredVoiceName: slimeProfile.voice?.preferredVoiceName,
+            rate: slimeProfile.voice?.rate,
+          });
+          if (gen !== cloudTtsGenRef.current) return;
+          if (!fetched.ok) {
+            cleanupCloudAudio();
+            setReadAloudHint(slimeTtsHintForFetchError(fetched.kind, fetched.message));
+            return;
+          }
+          blob = fetched.blob;
+          cloudPendingBlobRef.current = blob;
+        }
+        if (gen !== cloudTtsGenRef.current) return;
+        const outcome = await playCloudBlob(blob, gen);
+        if (gen !== cloudTtsGenRef.current) return;
+        if (outcome === 'blocked') {
+          setReadAloudHint('Tap the play button to hear this — your browser blocked autoplay.');
+        }
+      })();
+    },
+    [cleanupCloudAudio, playCloudBlob, slimeProfile.voice, speechText],
+  );
 
   useEffect(() => {
     if (isStreaming) {
@@ -196,6 +236,7 @@ export function RecommendationCard({
 
   const handleReadAloud = () => {
     if (!speechText.trim()) return;
+    unlockSlimeAudioContext();
     setReadAloudHint('');
     if (cloudLoading) {
       cloudTtsGenRef.current += 1;
@@ -210,6 +251,21 @@ export function RecommendationCard({
       }
       cloudAudioRef.current.pause();
       setCloudPaused(true);
+      return;
+    }
+    if (cloudPendingBlobRef.current && !cloudSpeaking && !cloudLoading) {
+      cloudTtsGenRef.current += 1;
+      const gen = cloudTtsGenRef.current;
+      setCloudLoading(true);
+      void playCloudBlob(cloudPendingBlobRef.current, gen).then((outcome) => {
+        if (gen !== cloudTtsGenRef.current) return;
+        if (outcome === 'blocked') {
+          setReadAloudHint('Tap the play button again after interacting with the page.');
+        } else if (outcome === 'failed') {
+          cloudPendingBlobRef.current = null;
+          startCloudReadAloud();
+        }
+      });
       return;
     }
     startCloudReadAloud();

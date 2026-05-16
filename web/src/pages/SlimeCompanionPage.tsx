@@ -5,7 +5,12 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Ghost, Home, MessageSquare, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
-import { DecisionSuggestionCard } from '../app/components/shadow/DecisionSuggestionCard';
+import { ThreadActionDock } from '../app/components/shadow/ThreadActionDock';
+import {
+  decisionPromptFromPendingAction,
+  pendingActionToSuggestion,
+  type PendingAction,
+} from '../app/components/shadow/pendingActionTypes';
 import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionReportStreamingPanel';
 import type { ShadowSuggestion } from '../app/components/shadow/types';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
@@ -57,6 +62,7 @@ export default function SlimeCompanionPage() {
   const [buddyThreadId, setBuddyThreadId] = useState<string | null>(null);
   const [buddyRecapRefresh, setBuddyRecapRefresh] = useState(0);
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
+  const [buddyPendingAction, setBuddyPendingAction] = useState<PendingAction | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const reportStream = useDecisionReportStream();
 
@@ -170,8 +176,36 @@ export default function SlimeCompanionPage() {
     [],
   );
 
+  useEffect(() => {
+    const tid = buddyThreadId?.trim();
+    if (!tid) {
+      setBuddyPendingAction(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(tid)}`);
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { thread?: { pending_action?: PendingAction } };
+        const pa = data.thread?.pending_action;
+        if (pa && typeof pa === 'object' && pa.type) {
+          setBuddyPendingAction(pa);
+        } else if (!cancelled) {
+          setBuddyPendingAction(null);
+        }
+      } catch {
+        if (!cancelled) setBuddyPendingAction(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [buddyThreadId, buddyRecapRefresh]);
+
   const buddyDecisionSuggestion: ShadowSuggestion | null =
-    pendingDecision?.should_show
+    pendingActionToSuggestion(buddyPendingAction) ??
+    (pendingDecision?.should_show
       ? {
           type: 'decision_report',
           title: pendingDecision.display_text?.trim() || 'Turn this into a decision report?',
@@ -179,20 +213,30 @@ export default function SlimeCompanionPage() {
             pendingDecision.description?.trim() ||
             'I can structure this into options, trade-offs, risks, consequences, and an action plan.',
         }
-      : null;
+      : null);
 
   const dismissBuddyDecisionSuggestion = useCallback(async () => {
     setPendingDecision(null);
     const tid = buddyThreadId?.trim();
-    if (!tid) return;
+    if (!tid) {
+      setBuddyPendingAction(null);
+      return;
+    }
     try {
-      await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(tid)}/messages`, {
+      const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(tid)}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_action: 'dismiss_suggestion', message: '' }),
       });
+      if (res.ok) {
+        const data = (await res.json()) as { thread?: { pending_action?: PendingAction | null } };
+        const pa = data.thread?.pending_action;
+        setBuddyPendingAction(pa && typeof pa === 'object' && pa.type ? pa : null);
+      } else {
+        setBuddyPendingAction(null);
+      }
     } catch {
-      /* ignore */
+      setBuddyPendingAction(null);
     }
   }, [buddyThreadId]);
 
@@ -205,6 +249,7 @@ export default function SlimeCompanionPage() {
     unlockSlimeAudioContext();
     const p = prompt.trim() || 'Help me decide.';
     setPendingDecision(null);
+    setBuddyPendingAction(null);
     setReportOpen(true);
     const { error } = await reportStream.start({ threadId: tid, decisionPrompt: p });
     if (error === 'insufficient_credits') {
@@ -416,18 +461,36 @@ export default function SlimeCompanionPage() {
           />
         </div>
 
-        {buddyDecisionSuggestion ? (
+        {buddyPendingAction || buddyDecisionSuggestion ? (
           <div
             data-slime-avoid
             className="relative z-[48] mx-auto mt-3 w-full max-w-lg px-1 sm:mt-4"
           >
-            <DecisionSuggestionCard
-              suggestion={buddyDecisionSuggestion}
-              disabled={reportStream.isStreaming}
-              onGenerate={() =>
-                void startDecisionReportFlow(pendingDecision?.decision_prompt || '')
+            <ThreadActionDock
+              pendingAction={
+                buddyPendingAction ??
+                (buddyDecisionSuggestion
+                  ? {
+                      id: 'buddy-voice-sug',
+                      type: buddyDecisionSuggestion.type || 'decision_report',
+                      title: buddyDecisionSuggestion.title,
+                      message: buddyDecisionSuggestion.message,
+                      blocks: ['generate_decision_report'],
+                      payload: { decision_prompt: pendingDecision?.decision_prompt || '' },
+                    }
+                  : null)
               }
-              onKeep={() => void dismissBuddyDecisionSuggestion()}
+              disabled={reportStream.isStreaming}
+              onClarifySkip={() => void dismissBuddyDecisionSuggestion()}
+              onClarifyAnswer={() => {}}
+              onGenerateDecisionReport={() =>
+                void startDecisionReportFlow(
+                  pendingDecision?.decision_prompt ||
+                    decisionPromptFromPendingAction(buddyPendingAction) ||
+                    '',
+                )
+              }
+              onDismissSuggestion={() => void dismissBuddyDecisionSuggestion()}
             />
           </div>
         ) : null}

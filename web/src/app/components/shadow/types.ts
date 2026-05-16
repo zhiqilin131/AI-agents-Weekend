@@ -9,11 +9,23 @@ export type ShadowMessage = {
   metadata?: Record<string, unknown>;
 };
 
+export type ThreadPendingAction = {
+  id: string;
+  type: 'clarification' | 'decision_report' | 'role_mode';
+  title: string;
+  message: string;
+  blocks: string[];
+  payload: Record<string, unknown>;
+  created_at?: string;
+  why?: string;
+};
+
 export type ShadowThread = {
   thread_id: string;
   title: string;
   updated_at?: string;
   mode?: string;
+  pending_action?: ThreadPendingAction | null;
   messages?: ShadowMessage[];
   memory_events?: Array<{
     kind: string;

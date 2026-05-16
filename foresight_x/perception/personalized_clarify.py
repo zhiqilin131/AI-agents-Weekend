@@ -402,6 +402,70 @@ def _message_clear_enough_to_skip(user_message: str) -> bool:
     return False
 
 
+_FORK_OR = re.compile(r"\sor\s", re.I)
+_DECISIONISH_SOFT = re.compile(r"\b(should i|ought i|would it be worth|is it worth)\b", re.I)
+
+
+def gather_clarify_memory_lines(
+    user_message: str,
+    profile: UserProfile,
+    *,
+    retrieved_memory_lines: list[str] | None = None,
+) -> list[str]:
+    """Profile + saved clarification lines relevant to this message (no full memory dump)."""
+    dom = heuristic_domain(user_message)
+    lines = [x.strip() for x in (retrieved_memory_lines or []) if str(x).strip()]
+    if not lines:
+        lines = filter_memory_for_clarify(user_message, dom, profile)
+    for t in profile.clarification_priority_texts():
+        s = str(t or "").strip()
+        if s and s not in lines:
+            lines.append(s)
+    return lines[:18]
+
+
+def memory_and_message_sufficient_for_reply(
+    user_message: str,
+    profile: UserProfile,
+    thread_clarification_events: list[dict[str, Any]] | None = None,
+    *,
+    retrieved_memory_lines: list[str] | None = None,
+) -> tuple[bool, str]:
+    """
+    Deterministic pre-check after loading memory: skip clarification when message + memory
+    already give enough to proceed without another multiple-choice gate.
+    """
+    text = (user_message or "").strip()
+    if not text:
+        return True, "empty"
+    if _message_clear_enough_to_skip(text):
+        return True, "message_detail_sufficient"
+
+    mem_lines = gather_clarify_memory_lines(
+        text, profile, retrieved_memory_lines=retrieved_memory_lines
+    )
+    if not mem_lines:
+        return False, "no_relevant_memory"
+
+    blob = " ".join(mem_lines).lower()
+    msg_toks = _token_set(text)
+    mem_toks = _token_set(blob)
+    overlap = len(msg_toks & mem_toks) if msg_toks else 0
+
+    if _FORK_OR.search(text) and len(text) >= 36 and overlap >= 3 and len(mem_lines) >= 2:
+        return True, "memory_covers_fork_context"
+
+    if len(mem_lines) >= 5 and overlap >= 4:
+        return True, "rich_memory_overlap"
+
+    events = list(thread_clarification_events or [])
+    for ev in events[-6:]:
+        if str(ev.get("kind") or "") == "answered" and overlap >= 2:
+            return True, "recent_clarification_with_memory"
+
+    return False, ""
+
+
 _JOKE_SERIOUS_MARKERS = (
     "not a joke",
     "no joke",
@@ -459,10 +523,24 @@ def run_personalized_clarify_gate(
     if llm is None:
         return ClarifyGateResult(need_clarification=False, skip_reason="no_llm")
 
+    mem_lines = gather_clarify_memory_lines(text, prof)
+    sufficient, suff_reason = memory_and_message_sufficient_for_reply(text, prof, events)
+    if sufficient:
+        return ClarifyGateResult(
+            need_clarification=False,
+            skip_reason="not_needed",
+            clarification_meta={
+                "note": "memory_sufficient_before_llm",
+                "memory_sufficient_reason": suff_reason,
+                "memory_lines_used": len(mem_lines),
+            },
+        )
+
     ctx = build_clarification_context(
         text,
         recent_messages or [],
         prof,
+        retrieved_memory_lines=mem_lines,
         thread_clarification_events=events,
     )
     unknown_hint = UNKNOWN_DIMENSIONS_BY_DOMAIN.get(
@@ -472,13 +550,18 @@ def run_personalized_clarify_gate(
         "You are the Personalized Clarification Engine for a decision-support assistant.\n"
         "Pick high value-of-information questions: domain-specific, memory-aware, NOT a generic checklist.\n\n"
         "RULES:\n"
-        "- Set should_ask=false when the user message is already specific enough to analyze well.\n"
+        "- FIRST read === Relevant profile / memory lines === and === Prior saved clarification answers ===.\n"
+        "- Set should_ask=false when memory + the user message already contain enough to answer well; "
+        "  populate known_about_user with what you used from memory.\n"
+        "- Only ask when a specific dimension is STILL missing after memory (list it in missing_dimensions).\n"
+        "- Never ask generic 'what are your options' or budget/urgency/deadline unless that gap is real and "
+        "  not already in memory.\n"
         "- Never ask budget, urgency, or generic deadline unless domain is finance, scheduling, or the user "
         "  clearly raised money/time as the crux.\n"
         "- Never ask questions that invite stereotypes or broad judgments about protected classes; for social_issue "
         "  ask about framing, specific incident, audience, or goal.\n"
         "- Each candidate must include target_dimension (snake_case) and 2–5 distinct multiple-choice options "
-        "  (value + short label).\n"
+        "  (value + short label) tailored to THIS user's message and memory gaps.\n"
         "- candidate_questions: 3–5 items; each targets a different missing dimension.\n"
         "- selected_question MUST exactly match one candidate's `question` string.\n"
         "- Use known_about_user + missing_dimensions to avoid repeating what profile/thread already settled.\n"
