@@ -5,7 +5,9 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Ghost, Home, MessageSquare, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
+import { DecisionSuggestionCard } from '../app/components/shadow/DecisionSuggestionCard';
 import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionReportStreamingPanel';
+import type { ShadowSuggestion } from '../app/components/shadow/types';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
 import { BuddyRecentChatPanel } from '../features/slime/BuddyRecentChatPanel';
 import { SlimeCompanionStage } from '../features/slime/SlimeCompanionStage';
@@ -167,6 +169,32 @@ export default function SlimeCompanionPage() {
     },
     [],
   );
+
+  const buddyDecisionSuggestion: ShadowSuggestion | null =
+    pendingDecision?.should_show
+      ? {
+          type: 'decision_report',
+          title: pendingDecision.display_text?.trim() || 'Turn this into a decision report?',
+          message:
+            pendingDecision.description?.trim() ||
+            'I can structure this into options, trade-offs, risks, consequences, and an action plan.',
+        }
+      : null;
+
+  const dismissBuddyDecisionSuggestion = useCallback(async () => {
+    setPendingDecision(null);
+    const tid = buddyThreadId?.trim();
+    if (!tid) return;
+    try {
+      await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(tid)}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_action: 'dismiss_suggestion', message: '' }),
+      });
+    } catch {
+      /* ignore */
+    }
+  }, [buddyThreadId]);
 
   const startDecisionReportFlow = async (prompt: string) => {
     const tid = buddyThreadId;
@@ -385,9 +413,24 @@ export default function SlimeCompanionPage() {
             speechOutput={speechOutput}
             decisionSuggestion={pendingDecision}
             onEvidenceOpen={() => setEvidenceDrawerOpen(true)}
-            onDecisionStart={(prompt) => void startDecisionReportFlow(prompt)}
           />
         </div>
+
+        {buddyDecisionSuggestion ? (
+          <div
+            data-slime-avoid
+            className="relative z-[48] mx-auto mt-3 w-full max-w-lg px-1 sm:mt-4"
+          >
+            <DecisionSuggestionCard
+              suggestion={buddyDecisionSuggestion}
+              disabled={reportStream.isStreaming}
+              onGenerate={() =>
+                void startDecisionReportFlow(pendingDecision?.decision_prompt || '')
+              }
+              onKeep={() => void dismissBuddyDecisionSuggestion()}
+            />
+          </div>
+        ) : null}
       </div>
 
       <DecisionReportStreamingPanel

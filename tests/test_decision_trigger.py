@@ -30,6 +30,21 @@ def test_soft_signals_offer_suggestion_with_no_cooldown() -> None:
     assert out.should_offer_suggestion is True
 
 
+def test_explicit_decision_mode_offers_confirmation() -> None:
+    thread: dict = {}
+    out = evaluate_decision_trigger(
+        thread=thread,
+        user_action="send_message",
+        user_message="Activate decision mode",
+        intent_label="decision_candidate",
+        intent_confidence=0.9,
+    )
+    assert out.effective_action == "send_message"
+    assert out.should_offer_suggestion is True
+    assert out.auto_triggered is False
+    assert thread["decision_trigger_state"]["pending_confirmation"] is True
+
+
 def test_dismiss_enters_cooldown_and_suppresses_soft_suggestion() -> None:
     thread: dict = {}
     evaluate_decision_trigger(

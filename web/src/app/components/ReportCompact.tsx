@@ -24,8 +24,8 @@ import { TradeoffsRadarChart } from './TradeoffsRadarChart';
 import { TypewriterText } from './TypewriterText';
 import { cn } from './ui/utils';
 import { apiFetch } from '../../utils/apiFetch';
-import { ModelSelector } from '../../features/models/ModelSelector';
 import { useSlimeModelCatalog } from '../../features/models/useSlimeModelCatalog';
+import { OptionCoachPanel, type CoachOptionContext } from './report/OptionCoachPanel';
 import { fetchCalendarDraftFromReport } from '../../utils/calendarAgentApi';
 import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from '../../utils/executionStorageKeys';
 import type { TraceUserStateLite } from '../../utils/evidenceDetailFromTrace';
@@ -122,8 +122,6 @@ interface ReportCompactProps {
   shadowThreadId?: string | null;
 }
 
-type CoachMessage = { role: 'user' | 'assistant'; content: string };
-
 export function ReportCompact({
   report,
   fullTrace,
@@ -155,13 +153,12 @@ export function ReportCompact({
   const surface = report.reportSurface;
   const [resourceDrops, setResourceDrops] = useState<ResourceDrop[]>([]);
   const [resourceDropsLoading, setResourceDropsLoading] = useState(false);
-  const [coachOption, setCoachOption] = useState<{ id: string; name: string } | null>(null);
-  const [coachQuestion, setCoachQuestion] = useState('');
-  const [coachThreads, setCoachThreads] = useState<Record<string, CoachMessage[]>>({});
-  const [coachBusy, setCoachBusy] = useState(false);
-  const [coachError, setCoachError] = useState<string | null>(null);
+  const [coachOption, setCoachOption] = useState<CoachOptionContext | null>(null);
+  const tradeoffByOptionId = useMemo(
+    () => new Map((report.tradeoffs?.rows ?? []).map((r) => [r.optionId, r.scores])),
+    [report.tradeoffs?.rows],
+  );
   const [mcdaOptionId, setMcdaOptionId] = useState<string>(chosenOptionId || report.options[0]?.id || '');
-  const activeThread: CoachMessage[] = coachOption ? (coachThreads[coachOption.id] ?? []) : [];
   const selectedTradeoff = useMemo(
     () => report.tradeoffs?.rows.find((r) => r.optionId === mcdaOptionId) ?? report.tradeoffs?.rows[0],
     [mcdaOptionId, report.tradeoffs?.rows],
@@ -204,44 +201,6 @@ export function ReportCompact({
     () => !resourceDropsLoading && resourceDrops.some((d) => d.id === RESOURCE_DROP_CALENDAR_ID),
     [resourceDrops, resourceDropsLoading],
   );
-
-  const askOptionCoach = async () => {
-    if (!coachOption || !decisionId || !coachQuestion.trim() || coachBusy) return;
-    const optionId = coachOption.id;
-    const question = coachQuestion.trim();
-    const history = activeThread;
-    const nextThread = [...history, { role: 'user' as const, content: question }];
-    setCoachThreads((prev) => ({ ...prev, [optionId]: nextThread }));
-    setCoachQuestion('');
-    setCoachBusy(true);
-    setCoachError(null);
-    try {
-      const res = await apiFetch('/api/option-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          decision_id: decisionId,
-          option_id: optionId,
-          question,
-          chat_history: history,
-          ...(modelOptionId ? { model_option_id: modelOptionId } : {}),
-        }),
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-      const data = (await res.json()) as { answer?: string };
-      const ans = (data.answer ?? '').trim();
-      setCoachThreads((prev) => ({
-        ...prev,
-        [optionId]: [...(prev[optionId] ?? nextThread), { role: 'assistant', content: ans }],
-      }));
-    } catch (e) {
-      setCoachError(e instanceof Error ? e.message : 'Failed to get follow-up guidance');
-    } finally {
-      setCoachBusy(false);
-    }
-  };
 
   const tradeoffsPanel =
     report.tradeoffs && report.tradeoffs.rows.length > 0 ? (
@@ -363,10 +322,19 @@ export function ReportCompact({
             {!!decisionId && (
               <button
                 type="button"
-                onClick={() => {
-                  setCoachOption({ id: o.id, name: o.name });
-                  setCoachError(null);
-                }}
+                onClick={() =>
+                  setCoachOption({
+                    id: o.id,
+                    name: o.name,
+                    description: o.description,
+                    keyAssumptions: o.keyAssumptions,
+                    costOfReversal: o.costOfReversal,
+                    isRecommended: o.isRecommended,
+                    importanceRank: o.importanceRank,
+                    importanceTier: o.importanceTier,
+                    tradeoffScores: tradeoffByOptionId.get(o.id),
+                  })
+                }
                 className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border border-purple-200 bg-white/85 text-purple-800 hover:bg-purple-50"
               >
                 <MessageCircle className="w-3.5 h-3.5" aria-hidden />
@@ -612,72 +580,12 @@ export function ReportCompact({
         </>
       )}
 
-      {coachOption && (
-        <div className="fixed bottom-5 right-5 z-[75] w-[min(92vw,28rem)] rounded-2xl border border-purple-200/80 bg-white/95 shadow-2xl shadow-purple-500/20 backdrop-blur-sm">
-          <div className="px-4 py-3 border-b border-purple-100/80 flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-[11px] uppercase tracking-wide text-purple-800 font-bold">Option Coach</p>
-              <p className="text-sm text-gray-800 truncate">{coachOption.name}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setCoachOption(null)}
-              className="text-xs text-gray-500 hover:text-gray-800"
-            >
-              Close
-            </button>
-          </div>
-          <div className="p-4 space-y-3">
-            <div className="rounded-lg border border-gray-100 bg-white/80 px-2 py-2">
-              <ModelSelector
-                feature="shadow_chat"
-                selectedModelId={modelOptionId || slimeModels.defaultModel}
-                onChange={setModelOptionId}
-                models={slimeModels.models}
-                selectorEnabled={slimeModels.selectorEnabled}
-                showCostPreview={false}
-                variant="compact"
-                elevated={false}
-                label="Model (coach + resource links)"
-                hint="Option coach chat and resource fetches respect this tier."
-                disabled={coachBusy}
-              />
-            </div>
-            <div className="max-h-52 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-2 space-y-2">
-              {activeThread.length === 0 ? (
-                <p className="text-xs text-gray-500">
-                  Ask follow-up questions about this option. Context is retained in this thread.
-                </p>
-              ) : (
-                activeThread.map((m, i) => (
-                  <div key={`${m.role}-${i}`} className="space-y-1">
-                    <p className="text-[10px] uppercase tracking-wide text-gray-500 font-bold">
-                      {m.role === 'user' ? 'You' : 'Coach'}
-                    </p>
-                    <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{m.content}</p>
-                  </div>
-                ))
-              )}
-            </div>
-            <textarea
-              value={coachQuestion}
-              onChange={(e) => setCoachQuestion(e.target.value)}
-              placeholder="Ask specifics, e.g. exact message template, first 3 steps, what to say if they push back..."
-              rows={3}
-              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white"
-            />
-            <button
-              type="button"
-              onClick={() => void askOptionCoach()}
-              disabled={!coachQuestion.trim() || coachBusy}
-              className="px-4 py-2 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-semibold disabled:opacity-40"
-            >
-              {coachBusy ? 'Thinking…' : 'Ask'}
-            </button>
-            {coachError && <p className="text-xs text-red-700 whitespace-pre-wrap">{coachError}</p>}
-          </div>
-        </div>
-      )}
+      <OptionCoachPanel
+        open={Boolean(coachOption)}
+        option={coachOption}
+        decisionId={decisionId}
+        onClose={() => setCoachOption(null)}
+      />
     </div>
   );
 }

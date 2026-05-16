@@ -156,9 +156,8 @@ def _set_cooldown(state: dict[str, Any], *, now: datetime, hours: int = _DECISIO
 
 
 def preview_will_auto_start_decision(thread: dict[str, Any], message: str) -> bool:
+    """Only auto-start after the user confirmed a pending offer (e.g. replied yes)."""
     state = _ensure_state(thread)
-    if is_explicit_decision_mode_command(message):
-        return True
     if not bool(state.get("pending_confirmation")):
         return False
     return _classify_confirmation_reply(message) == "yes"
@@ -208,15 +207,15 @@ def evaluate_decision_trigger(
         return DecisionTriggerEvaluation(effective_action=action)
 
     if is_explicit_decision_mode_command(message):
-        state["pending_confirmation"] = False
-        state["pending_prompt"] = ""
+        state["pending_confirmation"] = True
+        state["pending_prompt"] = decision_prompt
+        state["pending_since"] = _to_iso(now)
         state["dismissed_until"] = ""
         state["soft_signal_count"] = 0
-        state["last_trigger_at"] = _to_iso(now)
         state["last_trigger_reason"] = "hard_command"
         return DecisionTriggerEvaluation(
-            effective_action="generate_decision_report",
-            auto_triggered=True,
+            effective_action="send_message",
+            should_offer_suggestion=True,
             decision_prompt=decision_prompt,
             reason="hard_command",
         )

@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { animate, motion, useMotionValue } from 'motion/react';
-import { Sparkles } from 'lucide-react';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
 import { TypewriterText } from '../../app/components/TypewriterText';
 import { cn } from '../../app/components/ui/utils';
@@ -132,7 +131,6 @@ export function SlimeCompanionStage({
   speechOutput,
   decisionSuggestion,
   onEvidenceOpen,
-  onDecisionStart,
   className,
 }: {
   profile: SlimeProfile;
@@ -140,7 +138,6 @@ export function SlimeCompanionStage({
   speechOutput?: SlimeSpeechOutput | null;
   decisionSuggestion?: SlimeDecisionSuggestion | null;
   onEvidenceOpen?: () => void;
-  onDecisionStart?: (prompt: string) => void;
   /** Merged onto the stage root (e.g. z-index vs voice UI layers). */
   className?: string;
 }) {
@@ -359,19 +356,9 @@ export function SlimeCompanionStage({
                   </div>
                 ) : null}
                 {decisionSuggestion?.should_show ? (
-                  <div className="mt-2 flex border-t border-fuchsia-100/80 pt-2">
-                    <button
-                      type="button"
-                      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-fuchsia-200/85 bg-gradient-to-r from-violet-50 to-fuchsia-50 px-2.5 py-1.5 text-[11px] font-semibold text-violet-900 shadow-sm transition hover:border-fuchsia-300 hover:bg-white"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDecisionStart?.(decisionSuggestion.decision_prompt || '');
-                      }}
-                    >
-                      <Sparkles className="h-3.5 w-3.5 shrink-0 text-fuchsia-500" aria-hidden />
-                      turn this into a decision
-                    </button>
-                  </div>
+                  <p className="mt-2 border-t border-fuchsia-100/80 pt-2 text-[11px] leading-snug text-violet-800/90">
+                    Decision report ready — confirm below when you want the full report.
+                  </p>
                 ) : null}
               </motion.div>
             ) : null}

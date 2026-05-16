@@ -115,6 +115,7 @@ from foresight_x.chat import (
     save_thread,
 )
 from foresight_x.chat.decision_trigger import evaluate_decision_trigger, preview_will_auto_start_decision
+from foresight_x.chat.option_coach import build_option_chat_prompt
 from foresight_x.chat.thread_store import append_clarification_event
 from foresight_x.auth import (
     decode_supabase_access_token,
@@ -1958,6 +1959,10 @@ class OptionChatRequest(BaseModel):
     question: str = Field(min_length=1)
     chat_history: list[dict[str, str]] = Field(default_factory=list)
     model_option_id: str | None = Field(default=None, max_length=64)
+    option_context: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional client snapshot (description, scores) for the selected option card.",
+    )
 
 
 class OptionChatReply(BaseModel):
@@ -3448,42 +3453,12 @@ def option_chat(body: OptionChatRequest, request: Request):
     if option is None:
         raise HTTPException(status_code=404, detail="option_not_found")
 
-    futures = [f for f in trace.futures if f.option_id == option.option_id]
-    future_bits: list[str] = []
-    for f in futures[:2]:
-        lines = [f"- horizon: {f.time_horizon}"]
-        for s in f.scenarios[:4]:
-            pct = int(round(float(s.probability) * 100))
-            lines.append(f"  - {s.label} ({pct}%): {s.trajectory}")
-        future_bits.append("\n".join(lines))
-    future_block = "\n\n".join(future_bits) if future_bits else "(no scenario rows)"
-    history_lines: list[str] = []
-    for m in body.chat_history[-12:]:
-        role = str(m.get("role", "")).strip().lower()
-        content = str(m.get("content", "")).strip()
-        if role not in {"user", "assistant"} or not content:
-            continue
-        label = "User" if role == "user" else "Coach"
-        history_lines.append(f"{label}: {content}")
-    history_block = "\n".join(history_lines) if history_lines else "(none)"
-
-    prompt = (
-        "You are an implementation copilot for a decision support app.\n"
-        "Answer the user's follow-up about ONE selected option, grounded in this trace only.\n"
-        "Output practical, specific guidance (steps, wording templates, sequencing, caveats).\n"
-        "Do not re-rank all options unless asked; focus on helping execute this option well.\n"
-        "Keep it concise (4-10 sentences). Use bullet points only if the user asks for a checklist.\n\n"
-        f"Decision situation:\n{trace.user_state.raw_input}\n\n"
-        f"Selected option ({option.option_id}):\n"
-        f"- name: {option.name}\n"
-        f"- description: {option.description}\n"
-        f"- key assumptions: {option.key_assumptions}\n"
-        f"- cost_of_reversal: {option.cost_of_reversal}\n\n"
-        f"Recommendation rationale:\n{trace.recommendation.reasoning}\n\n"
-        f"Simulated futures for this option:\n{future_block}\n\n"
-        f"Follow-up chat history for this option:\n{history_block}\n\n"
-        f"User follow-up question:\n{body.question.strip()}\n\n"
-        "Return JSON with one field: answer."
+    prompt = build_option_chat_prompt(
+        trace,
+        option,
+        question=body.question.strip(),
+        chat_history=body.chat_history,
+        client_context=body.option_context,
     )
     rid = _credit_header_request_id(request) or f"option_chat:{trace.decision_id}:{uuid.uuid4().hex}"
     prof = load_user_profile(settings)
