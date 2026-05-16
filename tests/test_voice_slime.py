@@ -131,8 +131,21 @@ def test_voice_pipeline_deletes_temp_file(monkeypatch, tmp_path: Path) -> None:
     assert not created[0].exists()
 
 
-def test_voice_command_http_mocked(monkeypatch) -> None:
+def test_voice_command_http_mocked(monkeypatch, tmp_path: Path) -> None:
     import foresight_x.ui.api_server as api_server
+
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("FORESIGHT_USER_ID", "demo_user")
+    (tmp_path / "personas_registry.json").write_text(
+        json.dumps(
+            {
+                "current_user_id": "demo_user",
+                "users": [{"user_id": "demo_user", "created_at": "2026-01-01T00:00:00Z"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api_server, "get_supabase_user_for_request", lambda: None)
 
     def fake_pipeline(*_a, **_k):
         return {
@@ -149,7 +162,6 @@ def test_voice_command_http_mocked(monkeypatch) -> None:
             "voice_ui": {"intent": "unknown", "memory_phases": [], "evidence_items": [], "should_show_evidence_drawer": False},
         }
 
-    monkeypatch.setenv("FORESIGHT_USER_ID", "demo_user")
     with patch.object(api_server, "_run_slime_voice_pipeline", side_effect=fake_pipeline):
         client = TestClient(api_server.app)
         files = {"audio": ("v.webm", io.BytesIO(b"abc"), "audio/webm")}
@@ -160,8 +172,21 @@ def test_voice_command_http_mocked(monkeypatch) -> None:
     assert body["asr_provider"] == "faster_whisper"
 
 
-def test_voice_command_stream_http_mocked(monkeypatch) -> None:
+def test_voice_command_stream_http_mocked(monkeypatch, tmp_path: Path) -> None:
     import foresight_x.ui.api_server as api_server
+
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("FORESIGHT_USER_ID", "demo_user")
+    (tmp_path / "personas_registry.json").write_text(
+        json.dumps(
+            {
+                "current_user_id": "demo_user",
+                "users": [{"user_id": "demo_user", "created_at": "2026-01-01T00:00:00Z"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api_server, "get_supabase_user_for_request", lambda: None)
 
     def fake_pipeline(*_a, **_k):
         return {
@@ -179,7 +204,6 @@ def test_voice_command_stream_http_mocked(monkeypatch) -> None:
             "voice_ui": {"intent": "general_chat", "memory_phases": [], "evidence_items": [], "should_show_evidence_drawer": False},
         }
 
-    monkeypatch.setenv("FORESIGHT_USER_ID", "demo_user")
     with patch.object(api_server, "_run_slime_voice_pipeline", side_effect=fake_pipeline):
         client = TestClient(api_server.app)
         files = {"audio": ("v.webm", io.BytesIO(b"abc"), "audio/webm")}
