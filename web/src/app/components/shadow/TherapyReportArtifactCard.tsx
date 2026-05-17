@@ -6,6 +6,7 @@ import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 import { getSlimeIdentity } from '../../../features/slime/slimeIdentity';
 import { SLIME_CTA_BTN_CLASS, slimeCtaButtonStyle } from '../../../features/slime/slimeCtaButton';
 import type { ArtifactStatus } from './DecisionReportArtifactCard';
+import { MarkdownContent } from '../MarkdownContent';
 
 export function TherapyReportArtifactCard({
   title,
@@ -57,9 +58,10 @@ export function TherapyReportArtifactCard({
             </p>
             {pill}
           </div>
-          <p className="mt-1 text-xs text-gray-600 leading-relaxed">
-            {summary || 'Generated from this therapy session.'}
-          </p>
+          <MarkdownContent
+            content={summary || 'Generated from this therapy session.'}
+            className="mt-1 text-xs leading-relaxed text-gray-600 [&_p]:text-xs [&_p]:text-gray-600"
+          />
           {createdAt ? <p className="mt-1 text-[10px] text-gray-400">{createdAt}</p> : null}
           <div className="mt-1.5">
             <SlimeAdvisor

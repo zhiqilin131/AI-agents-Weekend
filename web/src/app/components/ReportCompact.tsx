@@ -21,6 +21,7 @@ import {
 } from './ui/accordion';
 import { SimulatedFuturesPanel } from './SimulatedFuturesPanel';
 import { TradeoffsRadarChart } from './TradeoffsRadarChart';
+import { MarkdownContent } from './MarkdownContent';
 import { TypewriterText } from './TypewriterText';
 import { cn } from './ui/utils';
 import { apiFetch } from '../../utils/apiFetch';
@@ -439,7 +440,10 @@ export function ReportCompact({
                 Show scoring details
               </AccordionTrigger>
               <AccordionContent className="space-y-4">
-                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{report.situation || '…'}</p>
+                <MarkdownContent
+                  content={report.situation || '…'}
+                  className="text-sm leading-relaxed text-gray-700 [&_p]:text-sm [&_p]:text-gray-700"
+                />
                 <ReflectionBlock report={report} />
                 {futures.length === 0 ? (
                   <p className="text-sm text-gray-500">No per-option simulations in this run.</p>
@@ -527,7 +531,10 @@ export function ReportCompact({
             Situation & goals
           </AccordionTrigger>
           <AccordionContent>
-            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{report.situation || '…'}</p>
+            <MarkdownContent
+              content={report.situation || '…'}
+              className="text-sm leading-relaxed text-gray-700 [&_p]:text-sm [&_p]:text-gray-700"
+            />
           </AccordionContent>
         </AccordionItem>
 
@@ -834,9 +841,10 @@ function EvidenceBlock({
           <p className="text-[10px] text-violet-900 uppercase mb-1" style={{ fontWeight: 700 }}>
             Prior outcomes summary (memory)
           </p>
-          <p className="text-xs text-gray-800 leading-relaxed whitespace-pre-wrap">
-            {memoryTrace?.prior_outcomes_summary}
-          </p>
+          <MarkdownContent
+            content={memoryTrace?.prior_outcomes_summary ?? ''}
+            className="text-xs leading-relaxed text-gray-800 [&_p]:text-xs [&_p]:text-gray-800"
+          />
         </div>
       )}
 

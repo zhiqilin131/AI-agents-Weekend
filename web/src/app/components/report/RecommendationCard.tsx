@@ -3,6 +3,7 @@ import type { NavigateFunction } from 'react-router';
 import { CheckCircle2 } from 'lucide-react';
 import type { DecisionReport, ResourceDrop } from '../../model';
 import { RESOURCE_DROP_CALENDAR_ID } from '../../model';
+import { MarkdownContent } from '../MarkdownContent';
 import { TypewriterText } from '../TypewriterText';
 import { conciseReasoningPreview, isLongReasoning } from '../../../utils/recommendationNarration';
 import { SlimeAdvisor, type SlimeAdvisorState } from './SlimeAdvisor';
@@ -327,7 +328,10 @@ export function RecommendationCard({
             </p>
             {hasRec ? (
               isStreaming ? (
-                <p className="whitespace-pre-wrap text-sm font-normal leading-relaxed text-gray-800">{reasoning}</p>
+                <MarkdownContent
+                  content={reasoning}
+                  className="text-sm font-normal leading-relaxed text-gray-800 [&_p]:text-sm [&_p]:text-gray-800"
+                />
               ) : showCollapsedReasoning ? (
                 <TypewriterText
                   text={preview}
@@ -337,7 +341,10 @@ export function RecommendationCard({
                   onComplete={() => setReasoningTypewriterDone(true)}
                 />
               ) : longBody ? (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">{reasoning}</p>
+                <MarkdownContent
+                  content={reasoning}
+                  className="text-sm leading-relaxed text-gray-800 [&_p]:text-sm [&_p]:text-gray-800"
+                />
               ) : (
                 <TypewriterText
                   text={reasoning}

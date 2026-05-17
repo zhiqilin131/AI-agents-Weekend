@@ -9,6 +9,8 @@ import { scheduleTextOnExecutionCalendar } from '../../utils/calendarAgentApi';
 import { useExecutionStorageUserKey } from '../../hooks/useExecutionStorageUserKey';
 import { SLIME_VOICE_CALENDAR_RESOLVED_KEY } from '../../utils/executionStorageKeys';
 import { BuddyTooltip } from './BuddyTooltip';
+import { MarkdownContent } from '../../app/components/MarkdownContent';
+import { renderChatMarkdownInline } from '../../utils/chatMarkdown';
 
 type AddedCalendarEntry = {
   eventTitle: string;
@@ -160,12 +162,18 @@ export function TherapyReportPanel({ open, report, onClose }: Props) {
 
             <section className="mt-5 rounded-2xl border border-rose-100 bg-rose-50/50 p-4">
               <h3 className="text-sm font-semibold text-rose-950">Summary</h3>
-              <p className="mt-2 text-sm leading-relaxed text-rose-950/90">{report.executive_summary}</p>
+              <MarkdownContent
+                content={report.executive_summary}
+                className="mt-2 text-sm leading-relaxed text-rose-950/90 [&_strong]:text-rose-950 [&_em]:text-rose-900/90"
+              />
             </section>
 
             <section className="mt-4">
               <h3 className="text-sm font-semibold text-gray-900">What we explored</h3>
-              <p className="mt-2 text-sm leading-relaxed text-gray-700">{report.session_summary}</p>
+              <MarkdownContent
+                content={report.session_summary}
+                className="mt-2 text-sm leading-relaxed text-gray-700 [&_strong]:text-gray-900"
+              />
             </section>
 
             {report.themes_observed?.length ? (
@@ -173,7 +181,7 @@ export function TherapyReportPanel({ open, report, onClose }: Props) {
                 <h3 className="text-sm font-semibold text-gray-900">Themes</h3>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
                   {report.themes_observed.map((t) => (
-                    <li key={t}>{t}</li>
+                    <li key={t}>{renderChatMarkdownInline(t, `theme-${t}`)}</li>
                   ))}
                 </ul>
               </section>
@@ -184,7 +192,7 @@ export function TherapyReportPanel({ open, report, onClose }: Props) {
                 <h3 className="text-sm font-semibold text-gray-900">Strengths noticed</h3>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
                   {report.strengths_noticed.map((t) => (
-                    <li key={t}>{t}</li>
+                    <li key={t}>{renderChatMarkdownInline(t, `strength-${t}`)}</li>
                   ))}
                 </ul>
               </section>
@@ -203,8 +211,8 @@ export function TherapyReportPanel({ open, report, onClose }: Props) {
                       key={a.title}
                       className="rounded-xl border border-rose-100 bg-white px-3 py-3 text-sm"
                     >
-                      <p className="font-medium text-rose-950">{a.title}</p>
-                      <p className="mt-1 text-gray-600">{a.rationale}</p>
+                      <p className="font-medium text-rose-950">{renderChatMarkdownInline(a.title, `act-title-${a.title}`)}</p>
+                      <MarkdownContent content={a.rationale} className="mt-1 text-gray-600 [&_p]:text-gray-600" />
                       <motion.div
                         layout
                         className="mt-2 flex flex-wrap items-center gap-2"
@@ -256,7 +264,7 @@ export function TherapyReportPanel({ open, report, onClose }: Props) {
                 <h3 className="text-sm font-semibold text-gray-900">Reflection prompts</h3>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-600">
                   {report.reflective_prompts.map((t) => (
-                    <li key={t}>{t}</li>
+                    <li key={t}>{renderChatMarkdownInline(t, `prompt-${t}`)}</li>
                   ))}
                 </ul>
               </section>

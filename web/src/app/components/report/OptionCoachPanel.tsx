@@ -5,6 +5,7 @@ import { VoiceRecorderTranscribeButton } from '../VoiceRecorderTranscribeButton'
 import { ModelSelector } from '../../../features/models/ModelSelector';
 import { useSlimeModelCatalog } from '../../../features/models/useSlimeModelCatalog';
 import { apiFetch } from '../../../utils/apiFetch';
+import { MarkdownContent } from '../MarkdownContent';
 import { cn } from '../ui/utils';
 
 export type CoachMessage = { role: 'user' | 'assistant'; content: string };
@@ -273,7 +274,14 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
                         <p className="mb-1 text-[9px] font-bold uppercase tracking-wider opacity-70">
                           {m.role === 'user' ? 'You' : 'Coach'}
                         </p>
-                        <p className="whitespace-pre-wrap">{m.content}</p>
+                        {m.role === 'user' ? (
+                          <p className="whitespace-pre-wrap">{m.content}</p>
+                        ) : (
+                          <MarkdownContent
+                            content={m.content}
+                            className="text-[13px] [&_p]:text-[13px] [&_p]:text-slate-800"
+                          />
+                        )}
                       </div>
                     </div>
                   ))

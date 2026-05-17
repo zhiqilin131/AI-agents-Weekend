@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { animate, motion, useMotionValue } from 'motion/react';
+import { MarkdownContent } from '../../app/components/MarkdownContent';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
 import type { SlimeType } from './slimeIdentity';
 import { cn } from '../../app/components/ui/utils';
@@ -365,9 +366,10 @@ export function SlimeCompanionStage({
                   speechOutput.source === 'system' && 'slime-comic-bubble-system',
                 )}
               >
-                <p className="whitespace-pre-wrap break-words text-[15px] font-medium leading-relaxed text-slate-800">
-                  {speechOutput.text}
-                </p>
+                <MarkdownContent
+                  content={speechOutput.text}
+                  className="break-words text-[15px] font-medium leading-relaxed text-slate-800 [&_p]:text-[15px] [&_p]:font-medium [&_p]:text-slate-800"
+                />
                 {speechOutput.evidenceItems?.length ? (
                   <div className="mt-3 flex max-w-full flex-wrap gap-1.5 border-t border-violet-100/80 pt-2">
                     {speechOutput.evidenceItems.slice(0, 3).map((item) => (

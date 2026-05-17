@@ -47,6 +47,37 @@ function stripBlockquotePrefix(line: string): string {
   return line.replace(/^\s*>\s?/, '');
 }
 
+function isListBlock(block: string): boolean {
+  const lines = block.split('\n').filter((l) => l.trim().length > 0);
+  return lines.length > 0 && lines.every((l) => /^\s*[-*]\s+/.test(l));
+}
+
+function stripListMarker(line: string): string {
+  return line.replace(/^\s*[-*]\s+/, '');
+}
+
+function isHeadingBlock(block: string): boolean {
+  const t = block.trim();
+  return /^#{1,4}\s+\S/.test(t) && !/\n/.test(t);
+}
+
+function headingLevel(block: string): 3 | 4 {
+  const m = block.trim().match(/^(#{1,4})\s+/);
+  const n = m?.[1].length ?? 4;
+  return n <= 3 ? 3 : 4;
+}
+
+function stripHeadingPrefix(block: string): string {
+  return block.trim().replace(/^#{1,4}\s+/, '');
+}
+
+/** Single-line inline markdown (**bold**, *italic*, `code`). */
+export function renderChatMarkdownInline(text: string, keyPrefix = 'inline'): ReactNode {
+  const t = text.trim();
+  if (!t) return null;
+  return <>{renderInline(t, keyPrefix)}</>;
+}
+
 /** Lightweight markdown for assistant chat bubbles (**bold**, *italic*, `code`, `>` quotes). */
 export function renderChatMarkdown(content: string): ReactNode {
   const trimmed = content.trim();
@@ -55,6 +86,32 @@ export function renderChatMarkdown(content: string): ReactNode {
   const blocks = trimmed.split(/\n\n+/);
   return blocks.map((block, blockIdx) => {
     const key = `b${blockIdx}`;
+    if (isHeadingBlock(block)) {
+      const level = headingLevel(block);
+      const text = stripHeadingPrefix(block);
+      const className =
+        level === 3
+          ? 'm-0 text-base font-semibold text-gray-900'
+          : 'm-0 text-sm font-semibold text-gray-900';
+      const Tag = level === 3 ? 'h3' : 'h4';
+      return (
+        <Tag key={key} className={className}>
+          {renderInline(text, key)}
+        </Tag>
+      );
+    }
+    if (isListBlock(block)) {
+      const lines = block.split('\n').filter((l) => l.trim().length > 0);
+      return (
+        <ul key={key} className="m-0 list-disc space-y-1.5 pl-5">
+          {lines.map((line, lineIdx) => (
+            <li key={`${key}-li${lineIdx}`} className="leading-relaxed">
+              {renderInline(stripListMarker(line), `${key}-li${lineIdx}`)}
+            </li>
+          ))}
+        </ul>
+      );
+    }
     if (isBlockquoteBlock(block)) {
       const quoteText = block
         .split('\n')
