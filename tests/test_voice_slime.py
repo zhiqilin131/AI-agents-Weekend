@@ -793,8 +793,10 @@ def test_profile_update_requires_confirmation() -> None:
         arguments={"patch": {"name": "Mochi2"}},
         requires_confirmation=True,
     )
-    _tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="rename")
-    assert fe.get("type") == "confirm"
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="rename")
+    assert tr.get("ok") is False
+    assert tr.get("error") == "personalization_disabled"
+    assert fe.get("type") == "none"
 
 
 def test_route_slime_voice_your_name_is_without_openai_key() -> None:
@@ -983,16 +985,15 @@ def test_profile_update_voice_only_merges_partial(tmp_path: Path) -> None:
         requires_confirmation=False,
     )
     tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="speak slower")
-    assert tr.get("ok") is True
-    assert fe.get("type") == "slime_profile_refresh"
+    assert tr.get("ok") is False
+    assert tr.get("error") == "personalization_disabled"
+    assert fe.get("type") == "none"
     from foresight_x.profile.store import load_user_profile
 
     loaded = load_user_profile(settings)
     assert loaded.slime_profile is not None
     assert loaded.slime_profile.voice is not None
-    assert abs(loaded.slime_profile.voice.rate - 0.82) < 0.001
-    assert abs(loaded.slime_profile.voice.pitch - 1.15) < 0.001
-    assert loaded.slime_profile.voice.preferred_voice_name == "Alex"
+    assert abs(loaded.slime_profile.voice.rate - 1.0) < 0.001
 
 
 def test_profile_update_top_level_role_sets_role_identity(tmp_path: Path) -> None:
@@ -1058,8 +1059,9 @@ def test_profile_update_minor_shape_returns_slime_profile_refresh(tmp_path: Path
         requires_confirmation=False,
     )
     tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="be round")
-    assert tr.get("ok") is True
-    assert fe.get("type") == "slime_profile_refresh"
+    assert tr.get("ok") is False
+    assert tr.get("error") == "personalization_disabled"
+    assert fe.get("type") == "none"
 
 
 def test_profile_update_user_nickname_uses_persona_patch_requires_confirmation(tmp_path: Path) -> None:
