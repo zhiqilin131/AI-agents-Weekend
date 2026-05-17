@@ -35,6 +35,7 @@ import { calendarMutationKindFromTranscript } from './slimeVoiceIntentGuards';
 import {
   firstSpeakableSentence,
   normalizeSpeechText,
+  remainderAfterSpokenPrefix,
 } from './slimeTtsChunks';
 import { normalizeTtsVoiceName } from '../../utils/ttsVoices';
 import { getSlimeIdentity, slimeSupportsDecisionMode, ttsVoiceForSlimeType } from './slimeIdentity';
@@ -514,6 +515,12 @@ export function SlimeVoiceAgent({
     opts?: RunTtsOptions;
     displayText: string;
   } | null>(null);
+  /** Final voice payload — lets first-sentence TTS onComplete play the rest if playFinalVoiceText ran late. */
+  const pendingFinalVoiceRef = useRef<{
+    normalized: string;
+    displayText: string;
+    opts?: RunTtsOptions;
+  } | null>(null);
   const speechUtteranceRef = useRef(0);
   /** Prevents stream/TTS races from replacing a full bubble with a shorter streamed prefix. */
   const lastBubbleTextRef = useRef('');
@@ -916,42 +923,76 @@ export function SlimeVoiceAgent({
     [cancelBuddyAudio, isCalendarVariant, playTtsBlob, runTts, showSpeechOutput, ttsRequestKey],
   );
 
+  const playVoiceRemainder = useCallback(
+    (opts?: { skipCancel?: boolean }) => {
+      const pending = pendingFinalVoiceRef.current;
+      if (!pending) return false;
+      const played = normalizeSpeechText(streamTtsPlayedRef.current);
+      const rest = remainderAfterSpokenPrefix(pending.normalized, played);
+      if (!rest) {
+        pendingFinalVoiceRef.current = null;
+        return false;
+      }
+      pendingFinalVoiceRef.current = null;
+      pendingRestTtsRef.current = null;
+      runTts(rest, {
+        ...pending.opts,
+        ...opts,
+        displayText: pending.displayText,
+        skipCancel: opts?.skipCancel ?? true,
+      });
+      return true;
+    },
+    [runTts],
+  );
+
   const playFinalVoiceText = useCallback(
     (text: string, opts?: RunTtsOptions) => {
       const normalized = normalizeSpeechText(text);
       if (!normalized) {
+        pendingFinalVoiceRef.current = null;
         opts?.onComplete?.();
         return;
       }
       ttsPrefetchRef.current = null;
       const displayText = opts?.displayText || normalized;
+      const buddyUnifiedReveal = !isCalendarVariant;
+      pendingFinalVoiceRef.current = { normalized, displayText, opts };
+
+      if (displayText.trim()) {
+        showSpeechOutput(displayText, {
+          speaking: buddyAudioPlaying || buddyTtsLoadPendingRef.current,
+          source: opts?.source,
+          evidenceItems: opts?.evidenceItems,
+        });
+        if (buddyUnifiedReveal && (buddyAudioPlaying || buddyTtsLoadPendingRef.current)) {
+          setVoiceState('speaking');
+        }
+      }
+
       const played = normalizeSpeechText(streamTtsPlayedRef.current);
-      if (played && normalized.startsWith(played)) {
-        const rest = normalized.slice(played.length).trim();
-        if (!rest) {
-          if (displayText.trim()) {
-            showSpeechOutput(displayText, {
-              speaking: false,
-              source: opts?.source,
-              evidenceItems: opts?.evidenceItems,
-            });
-          }
+      const rest = remainderAfterSpokenPrefix(normalized, played);
+      if (!rest) {
+        if (!played) {
+          streamTtsPlayedRef.current = '';
+          pendingRestTtsRef.current = null;
+          pendingFinalVoiceRef.current = null;
+          runTts(normalized, { ...opts, displayText });
+        } else {
+          pendingFinalVoiceRef.current = null;
           setVoiceState('idle');
           opts?.onComplete?.();
-          return;
         }
-        if (buddyAudioPlaying || buddyTtsLoadPendingRef.current) {
-          pendingRestTtsRef.current = { rest, opts, displayText };
-          return;
-        }
-        runTts(rest, { ...opts, displayText, skipCancel: true });
         return;
       }
-      streamTtsPlayedRef.current = '';
-      pendingRestTtsRef.current = null;
-      runTts(normalized, { ...opts, displayText });
+      if (buddyAudioPlaying || buddyTtsLoadPendingRef.current) {
+        pendingRestTtsRef.current = { rest, opts, displayText };
+        return;
+      }
+      pendingFinalVoiceRef.current = null;
+      runTts(rest, { ...opts, displayText, skipCancel: !!played });
     },
-    [buddyAudioPlaying, runTts, showSpeechOutput],
+    [buddyAudioPlaying, isCalendarVariant, runTts, showSpeechOutput],
   );
 
   const maybeStartStreamSentenceTts = useCallback(
@@ -965,14 +1006,22 @@ export function SlimeVoiceAgent({
         force: true,
         suppressBubble: true,
         onComplete: () => {
-          const pending = pendingRestTtsRef.current;
-          if (!pending) return;
-          pendingRestTtsRef.current = null;
-          runTts(pending.rest, { ...pending.opts, displayText: pending.displayText });
+          const queued = pendingRestTtsRef.current;
+          if (queued) {
+            pendingRestTtsRef.current = null;
+            pendingFinalVoiceRef.current = null;
+            runTts(queued.rest, {
+              ...queued.opts,
+              displayText: queued.displayText,
+              skipCancel: true,
+            });
+            return;
+          }
+          playVoiceRemainder({ skipCancel: true });
         },
       });
     },
-    [decisionModeActive, isCalendarVariant, runTts],
+    [decisionModeActive, isCalendarVariant, playVoiceRemainder, runTts],
   );
 
   const runSpokenSequence = useCallback(
@@ -1330,11 +1379,39 @@ export function SlimeVoiceAgent({
           ? data.spoken_sequence.map((p) => p.trim()).filter(Boolean).join(' ')
           : toSpeak;
       if (speakBody) {
-        playFinalVoiceText(speakBody, {
-          ...ttsCommon,
-          displayText: assistant || speakBody,
-          source: 'assistant',
-        });
+        const seq =
+          convTurn && data.spoken_sequence && data.spoken_sequence.length > 1
+            ? data.spoken_sequence.map((p) => p.trim()).filter(Boolean)
+            : null;
+        if (seq && seq.length > 1) {
+          streamTtsPlayedRef.current = '';
+          pendingRestTtsRef.current = null;
+          pendingFinalVoiceRef.current = null;
+          cancelBuddyAudio();
+          const fullDisplay = assistant || speakBody;
+          showSpeechOutput(fullDisplay, {
+            speaking: true,
+            source: 'assistant',
+            evidenceItems,
+          });
+          runSpokenSequence(seq, {
+            ...ttsCommon,
+            onAllComplete: () => {
+              showSpeechOutput(fullDisplay, {
+                speaking: false,
+                source: 'assistant',
+                evidenceItems,
+              });
+              ttsCommon.onComplete?.();
+            },
+          });
+        } else {
+          playFinalVoiceText(speakBody, {
+            ...ttsCommon,
+            displayText: assistant || speakBody,
+            source: 'assistant',
+          });
+        }
       } else if (assistant) {
         showSpeechOutput(assistant, {
           speaking: false,
@@ -1385,6 +1462,8 @@ export function SlimeVoiceAgent({
       onDecisionSuggestion,
       cancelBuddyAudio,
       playFinalVoiceText,
+      playVoiceRemainder,
+      runSpokenSequence,
       showSpeechOutput,
       runTts,
       navigate,
@@ -1443,6 +1522,7 @@ export function SlimeVoiceAgent({
       lastBubbleTextRef.current = '';
       streamTtsPlayedRef.current = '';
       pendingRestTtsRef.current = null;
+      pendingFinalVoiceRef.current = null;
       ttsPrefetchRef.current = null;
       setVoiceState('thinking');
       if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);

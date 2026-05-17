@@ -24,6 +24,27 @@ export function firstSpeakableChunk(text: string): string {
   return t.slice(0, Math.min(56, t.length)).trim();
 }
 
+/** Text after the portion already spoken during stream (sentence 2+). */
+export function remainderAfterSpokenPrefix(full: string, spokenPrefix: string): string {
+  const fin = normalizeSpeechText(full);
+  const pre = normalizeSpeechText(spokenPrefix);
+  if (!fin) return '';
+  if (!pre) return fin;
+  if (fin.startsWith(pre)) return fin.slice(pre.length).trim();
+  const idx = fin.indexOf(pre);
+  if (idx === 0) return fin.slice(pre.length).trim();
+  return fin;
+}
+
+/** Split assistant reply into speakable parts (one per sentence). */
+export function splitSpeakableParts(text: string, maxParts = 4): string[] {
+  const t = normalizeSpeechText(text);
+  if (!t) return [];
+  const parts = t.split(/(?<=[.!?。！？])\s+/).map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) return [t];
+  return parts.slice(0, maxParts);
+}
+
 export function ttsPrefetchMatchesFinal(prefetched: string, finalText: string): boolean {
   const pf = normalizeSpeechText(prefetched);
   const fin = normalizeSpeechText(finalText);

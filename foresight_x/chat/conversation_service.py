@@ -7,6 +7,7 @@ with `stream_shadow_chat_message` without duplicating the full SSE clarification
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
@@ -42,6 +43,17 @@ from foresight_x.slime.turn_params import (
 from foresight_x.slime.wellbeing_router import build_safety_escalation_reply
 
 _log = logging.getLogger(__name__)
+
+
+def _split_spoken_sequence(text: str, *, max_parts: int = 4) -> list[str]:
+    """One sentence per part so voice UI can TTS each without dropping the tail."""
+    t = (text or "").strip()
+    if not t:
+        return []
+    parts = [p.strip() for p in re.split(r"(?<=[.!?。！？])\s+", t) if p.strip()]
+    if not parts:
+        return [t]
+    return parts[:max_parts]
 
 
 def _try_refine_thread_title(
@@ -639,7 +651,7 @@ def process_conversation_turn(
                 },
             }
     # The UI now shows Decision Mode as a bubble action chip; keep voice focused on the answer.
-    spoken_sequence: list[str] = [text]
+    spoken_sequence: list[str] = _split_spoken_sequence(text)
     evidence_items = build_turn_memory_evidence(
         retrieved_facts=getattr(out, "retrieved_memory_facts", None) or [],
         used_text_facts=out.used_memory_facts or [],
