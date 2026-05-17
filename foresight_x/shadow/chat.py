@@ -195,6 +195,14 @@ class ShadowTurnOutput:
     retrieved_memory_facts: list[ProfileMemoryFact] = field(default_factory=list)
 
 
+_BUDDY_MEMORY_FACTS_DESC = (
+    "0–6 concrete profile rows when the human user shares new autobiographical facts about themselves, "
+    "or explicit remember / real-name corrections. Never store the assistant reply as user biography. "
+    "subject_ref slime_companion only when the user asks to remember something about the slime character. "
+    "Skip duplicates of stable memory in the prompt; skip empty meta-summaries."
+)
+
+
 class ShadowChatTurn(BaseModel):
     reply_to_user: str = Field(
         description=(
@@ -220,6 +228,60 @@ class ShadowChatTurn(BaseModel):
             "Skip duplicates of facts already in stable memory in the prompt; skip empty meta-summaries."
         ),
     )
+
+
+class SlimeBuddyChatTurn(BaseModel):
+    """Structured output for Mochi / generalized slime buddy (not inner-shadow voice)."""
+
+    reply_to_user: str = Field(
+        description=(
+            "Reply as the slime companion in first person (I/me for the slime). You are NOT the user. "
+            "Address the human as you. Give a direct, helpful answer — do not parrot their message verbatim. "
+            "Not their inner shadow, not a therapist."
+        )
+    )
+    suggest_decision_navigation: bool = Field(
+        description=(
+            "True only if the user clearly asks for a concrete decision, which option to pick, "
+            "or to run Foresight / decision analysis."
+        )
+    )
+    memory_facts: list[ShadowMemoryFactDraft] = Field(
+        default_factory=list,
+        description=_BUDDY_MEMORY_FACTS_DESC,
+    )
+
+
+class WellbeingBuddyChatTurn(BaseModel):
+    """Structured output for Rimumu (wellbeing slime) — must not use shadow-mirror schema."""
+
+    reply_to_user: str = Field(
+        description=(
+            "Rimumu's supportive reply. First person (I/me) only for Rimumu's companion role "
+            "(e.g. «I'm here with you»). Reflect the USER in second person (you/your) or gentle paraphrase — "
+            "never echo or parrot their sentence, and never restate their distress in first person as if it were yours. "
+            "Warm, one collaborative step or one question when appropriate. Not a therapist."
+        )
+    )
+    suggest_decision_navigation: bool = Field(
+        default=False,
+        description="Always false for wellbeing slime — decision reports are Mochi-only.",
+    )
+    memory_facts: list[ShadowMemoryFactDraft] = Field(
+        default_factory=list,
+        description=_BUDDY_MEMORY_FACTS_DESC,
+    )
+
+
+def _structured_turn_schema(
+    synthesis_frame: Literal["shadow", "slime_buddy"],
+    slime_type: SlimeType | None,
+) -> type[BaseModel]:
+    if synthesis_frame != "slime_buddy":
+        return ShadowChatTurn
+    if normalize_slime_type(slime_type) == "wellbeing":
+        return WellbeingBuddyChatTurn
+    return SlimeBuddyChatTurn
 
 
 def _stream_reply_text(llm: Any, prompt: str, on_delta: Callable[[str], None] | None = None) -> str:
@@ -890,7 +952,8 @@ def run_shadow_turn(
         flag = False
         memory_drafts: list[ShadowMemoryFactDraft] = []
     else:
-        turn = structured_predict(llm, ShadowChatTurn, prompt)
+        turn_schema = _structured_turn_schema(synthesis_frame, st)
+        turn = structured_predict(llm, turn_schema, prompt)
         reply = turn.reply_to_user.strip()
         flag = bool(turn.suggest_decision_navigation)
         memory_drafts = list(turn.memory_facts)

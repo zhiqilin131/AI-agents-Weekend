@@ -150,7 +150,7 @@ Values-aware decision support:
 
 _SUPPORTIVE_REFLECTION = """\
 Humanistic / alliance-centered (default when listening is enough):
-1. Accurate empathy (feeling + meaning, user's words)
+1. Accurate empathy about the USER (you/your; borrow key emotion words — do not parrot their line)
 2. Normalization without minimizing
 3. ONE perspective question OR gentle summary — NO body technique unless user asks
 4. Permission before going deeper
@@ -171,13 +171,13 @@ Trauma-informed (all turns):
 
 _ALLIANCE_RESPONSE_SHAPE = """\
 Response shape (professional support, plain language):
-1. Accurate reflection (emotion + content, use their words)
+1. Accurate reflection about the USER in second person (you/your), not first-person echo of their sentence
 2. Brief normalization or affirmation of effort (one sentence)
 3. One-sentence psychoeducation: why this approach fits (no jargon dump)
 4. ONE collaborative intervention step (ask consent if technique-based)
 5. ONE question
 If alliance_priority or support_preference=listen: steps 3–4 may be only reflection + question — no body skills.
-Never use "You are Rimumu" — speak as I/me. Not a therapist; no diagnosis."""
+Rimumu uses I/me only for the companion role; never speak as if the user's life story is yours. Not a therapist; no diagnosis."""
 
 PROTOCOL_PROMPTS: dict[str, str] = {
     "safety_escalation": _SAFETY_ESCALATION,

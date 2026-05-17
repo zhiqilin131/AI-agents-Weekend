@@ -3,7 +3,18 @@
 from __future__ import annotations
 
 from foresight_x.slime.identity import get_slime_identity, theme_palette_for_type
-from foresight_x.slime.prompts import build_generalized_turn_addendum, build_wellbeing_turn_addendum
+from foresight_x.shadow.chat import (
+    ShadowChatTurn,
+    SlimeBuddyChatTurn,
+    WellbeingBuddyChatTurn,
+    _structured_turn_schema,
+)
+from foresight_x.slime.prompts import (
+    build_generalized_turn_addendum,
+    build_wellbeing_turn_addendum,
+    wellbeing_slime_instructions,
+)
+from foresight_x.slime.wellbeing_protocols import build_protocol_prompt_block
 from foresight_x.slime.turn_params import build_slime_turn_kwargs
 from foresight_x.slime.wellbeing_router import route_wellbeing_protocol
 from foresight_x.config import Settings
@@ -42,6 +53,32 @@ def test_wellbeing_prompt_profile_in_addendum() -> None:
         "distress_tolerance",
         "problem_management",
     )
+
+
+def test_wellbeing_shadow_turn_schema_not_inner_shadow() -> None:
+    assert _structured_turn_schema("shadow", "wellbeing") is ShadowChatTurn
+    assert _structured_turn_schema("slime_buddy", "wellbeing") is WellbeingBuddyChatTurn
+    assert _structured_turn_schema("slime_buddy", "generalized") is SlimeBuddyChatTurn
+    desc = WellbeingBuddyChatTurn.model_fields["reply_to_user"].description or ""
+    assert "inner shadow" not in desc.lower()
+    assert "parrot" in desc.lower() or "echo" in desc.lower()
+
+
+def test_wellbeing_prompt_forbids_user_echo() -> None:
+    settings = Settings(foresight_user_id="u", openai_api_key="")
+    addendum, _ = build_wellbeing_turn_addendum(settings, user_message="I feel pathetic about my life")
+    low = addendum.lower()
+    assert "not the user" in low
+    assert "second person" in low or "you/your" in low
+    assert "verbatim echo" in low or "parrot" in low
+
+    instr = wellbeing_slime_instructions().lower()
+    assert "not the user" in instr
+    assert "verbatim echo" in instr or "parrot" in instr
+
+    protocol = build_protocol_prompt_block("supportive_reflection").lower()
+    assert "second person" in protocol or "you/your" in protocol
+    assert "echo" in protocol or "parrot" in protocol
 
 
 def test_thread_generalized_uses_generalized_kwargs() -> None:

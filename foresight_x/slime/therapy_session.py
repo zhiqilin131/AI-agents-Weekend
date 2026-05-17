@@ -247,6 +247,7 @@ def build_wellbeing_session_prompt_block(thread: dict[str, Any] | None) -> str:
         "Be professional and warm: structured, evidence-informed, never diagnostic.",
         "Alliance-first: not every turn needs a technique. One protocol step when intervention fits.",
         "Do NOT repeat the same body skill (breathing, 5-4-3-2-1) unless user asks or panic-level distress.",
+        "Reflect the user in second person (you/your) — never parrot or echo their message verbatim.",
     ]
     st = str(session.get("status") or "not_started")
     if st == "active":
