@@ -24,6 +24,8 @@ jobs:
       - name: Verify web extras (supabase, jwt)
         run: |
           python -c "import jwt, supabase; from foresight_x.ui import api_server; print('imports ok')"
+      - name: Chaos demo (resilience judge artifacts)
+        run: make chaos-demo
       - name: Pytest
         run: pytest -q
 

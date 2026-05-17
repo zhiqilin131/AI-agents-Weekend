@@ -1,0 +1,487 @@
+{
+  "generated_at": "2026-05-17T00:15:45Z",
+  "fast_mode": true,
+  "fx_chaos": true,
+  "legs": [
+    {
+      "leg": "healthy",
+      "started_at": "2026-05-17T00:15:45Z",
+      "elapsed_ms": 19,
+      "pass": true,
+      "errors": [],
+      "profiles": {},
+      "degradations": [
+        {
+          "at": "2026-05-17T00:15:45Z",
+          "component": "pipeline",
+          "stage": "finalize",
+          "reason": "resuming run from stage finalize",
+          "retryable": true,
+          "error_kind": "stage_resume",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:45Z",
+          "component": "none",
+          "stage": "recommend",
+          "reason": "LLM unavailable; MCDA composite-score recommendation",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "mcda_composite_argmax"
+        },
+        {
+          "at": "2026-05-17T00:15:45Z",
+          "component": "none",
+          "stage": "reflect",
+          "reason": "LLM unavailable or degraded run; templated reflection",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "template_reflection"
+        }
+      ],
+      "degraded_sse_count": 1,
+      "decision_id": "2a7aeb60-1beb-4398-95f3-2a26ee087b7f",
+      "health": {
+        "status": "ok",
+        "generated_at": "2026-05-17T00:15:45Z",
+        "providers": {
+          "linear_mcp": {
+            "calls_total": 1.0,
+            "ok_total": 1.0,
+            "error_total": 0.0,
+            "brownout_total": 0.0,
+            "last_latency_ms": 1.0
+          }
+        },
+        "circuit_breakers": {
+          "mcp.linear": {
+            "name": "mcp.linear",
+            "state": "closed",
+            "consecutive_failures": 0,
+            "open_until_epoch": 0.0,
+            "degraded": false,
+            "window_samples": 0,
+            "p95_latency_ms": 0.0,
+            "rate_limit_hits": 0
+          }
+        },
+        "chaos_modes": {
+          "openai": "",
+          "tavily": "",
+          "linear_mcp": ""
+        }
+      }
+    },
+    {
+      "leg": "primary_5xx",
+      "started_at": "2026-05-17T00:15:45Z",
+      "elapsed_ms": 24,
+      "pass": true,
+      "errors": [],
+      "profiles": {
+        "llm.primary": "outage"
+      },
+      "degradations": [
+        {
+          "at": "2026-05-17T00:15:45Z",
+          "component": "openai",
+          "stage": "infra_probe",
+          "reason": "chaos injection enabled (outage)",
+          "retryable": true,
+          "error_kind": "outage",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:45Z",
+          "component": "pipeline",
+          "stage": "finalize",
+          "reason": "resuming run from stage finalize",
+          "retryable": true,
+          "error_kind": "stage_resume",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:45Z",
+          "component": "none",
+          "stage": "recommend",
+          "reason": "LLM unavailable; MCDA composite-score recommendation",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "mcda_composite_argmax"
+        },
+        {
+          "at": "2026-05-17T00:15:45Z",
+          "component": "none",
+          "stage": "reflect",
+          "reason": "LLM unavailable or degraded run; templated reflection",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "template_reflection"
+        }
+      ],
+      "degraded_sse_count": 1,
+      "decision_id": "b664be3f-c7ce-442f-873e-d49deced27c1",
+      "health": {
+        "status": "ok",
+        "generated_at": "2026-05-17T00:15:45Z",
+        "providers": {
+          "linear_mcp": {
+            "calls_total": 1.0,
+            "ok_total": 1.0,
+            "error_total": 0.0,
+            "brownout_total": 0.0,
+            "last_latency_ms": 1.0
+          }
+        },
+        "circuit_breakers": {
+          "mcp.linear": {
+            "name": "mcp.linear",
+            "state": "closed",
+            "consecutive_failures": 0,
+            "open_until_epoch": 0.0,
+            "degraded": false,
+            "window_samples": 0,
+            "p95_latency_ms": 0.0,
+            "rate_limit_hits": 0
+          }
+        },
+        "chaos_modes": {
+          "openai": "outage",
+          "tavily": "",
+          "linear_mcp": ""
+        }
+      }
+    },
+    {
+      "leg": "primary_429",
+      "started_at": "2026-05-17T00:15:46Z",
+      "elapsed_ms": 24,
+      "pass": true,
+      "errors": [],
+      "profiles": {
+        "llm.primary": "429"
+      },
+      "degradations": [
+        {
+          "at": "2026-05-17T00:15:46Z",
+          "component": "openai",
+          "stage": "infra_probe",
+          "reason": "chaos injection enabled (429)",
+          "retryable": true,
+          "error_kind": "429",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:46Z",
+          "component": "pipeline",
+          "stage": "finalize",
+          "reason": "resuming run from stage finalize",
+          "retryable": true,
+          "error_kind": "stage_resume",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:46Z",
+          "component": "none",
+          "stage": "recommend",
+          "reason": "LLM unavailable; MCDA composite-score recommendation",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "mcda_composite_argmax"
+        },
+        {
+          "at": "2026-05-17T00:15:46Z",
+          "component": "none",
+          "stage": "reflect",
+          "reason": "LLM unavailable or degraded run; templated reflection",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "template_reflection"
+        }
+      ],
+      "degraded_sse_count": 1,
+      "decision_id": "d6e1f953-bb89-4c97-8cb8-2bb535066396",
+      "health": {
+        "status": "ok",
+        "generated_at": "2026-05-17T00:15:46Z",
+        "providers": {
+          "linear_mcp": {
+            "calls_total": 1.0,
+            "ok_total": 1.0,
+            "error_total": 0.0,
+            "brownout_total": 0.0,
+            "last_latency_ms": 1.0
+          }
+        },
+        "circuit_breakers": {
+          "mcp.linear": {
+            "name": "mcp.linear",
+            "state": "closed",
+            "consecutive_failures": 0,
+            "open_until_epoch": 0.0,
+            "degraded": false,
+            "window_samples": 0,
+            "p95_latency_ms": 0.0,
+            "rate_limit_hits": 0
+          }
+        },
+        "chaos_modes": {
+          "openai": "429",
+          "tavily": "",
+          "linear_mcp": ""
+        }
+      }
+    },
+    {
+      "leg": "tavily_outage",
+      "started_at": "2026-05-17T00:15:46Z",
+      "elapsed_ms": 17,
+      "pass": true,
+      "errors": [],
+      "profiles": {
+        "tavily": "outage"
+      },
+      "degradations": [
+        {
+          "at": "2026-05-17T00:15:46Z",
+          "component": "tavily",
+          "stage": "infra_probe",
+          "reason": "chaos injection enabled (outage)",
+          "retryable": true,
+          "error_kind": "outage",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:46Z",
+          "component": "pipeline",
+          "stage": "finalize",
+          "reason": "resuming run from stage finalize",
+          "retryable": true,
+          "error_kind": "stage_resume",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:46Z",
+          "component": "none",
+          "stage": "recommend",
+          "reason": "LLM unavailable; MCDA composite-score recommendation",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "mcda_composite_argmax"
+        },
+        {
+          "at": "2026-05-17T00:15:46Z",
+          "component": "none",
+          "stage": "reflect",
+          "reason": "LLM unavailable or degraded run; templated reflection",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "template_reflection"
+        }
+      ],
+      "degraded_sse_count": 1,
+      "decision_id": "4de9b968-7bdc-44e7-b3fb-89a0b4065e67",
+      "health": {
+        "status": "ok",
+        "generated_at": "2026-05-17T00:15:46Z",
+        "providers": {
+          "linear_mcp": {
+            "calls_total": 1.0,
+            "ok_total": 1.0,
+            "error_total": 0.0,
+            "brownout_total": 0.0,
+            "last_latency_ms": 1.0
+          }
+        },
+        "circuit_breakers": {
+          "mcp.linear": {
+            "name": "mcp.linear",
+            "state": "closed",
+            "consecutive_failures": 0,
+            "open_until_epoch": 0.0,
+            "degraded": false,
+            "window_samples": 0,
+            "p95_latency_ms": 0.0,
+            "rate_limit_hits": 0
+          }
+        },
+        "chaos_modes": {
+          "openai": "",
+          "tavily": "outage",
+          "linear_mcp": ""
+        }
+      }
+    },
+    {
+      "leg": "linear_mcp_outage",
+      "started_at": "2026-05-17T00:15:46Z",
+      "elapsed_ms": 27,
+      "pass": true,
+      "errors": [],
+      "profiles": {
+        "mcp.linear": "outage"
+      },
+      "degradations": [
+        {
+          "at": "2026-05-17T00:15:47Z",
+          "component": "linear_mcp",
+          "stage": "infra_probe",
+          "reason": "Linear MCP unavailable; continuing without MCP assist",
+          "retryable": true,
+          "error_kind": "outage",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:47Z",
+          "component": "pipeline",
+          "stage": "finalize",
+          "reason": "resuming run from stage finalize",
+          "retryable": true,
+          "error_kind": "stage_resume",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:47Z",
+          "component": "none",
+          "stage": "recommend",
+          "reason": "LLM unavailable; MCDA composite-score recommendation",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "mcda_composite_argmax"
+        },
+        {
+          "at": "2026-05-17T00:15:47Z",
+          "component": "none",
+          "stage": "reflect",
+          "reason": "LLM unavailable or degraded run; templated reflection",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "template_reflection"
+        }
+      ],
+      "degraded_sse_count": 1,
+      "decision_id": "8226e561-f769-4907-880a-1a53dddd5335",
+      "health": {
+        "status": "ok",
+        "generated_at": "2026-05-17T00:15:47Z",
+        "providers": {
+          "linear_mcp": {
+            "calls_total": 1.0,
+            "ok_total": 0.0,
+            "error_total": 1.0,
+            "brownout_total": 0.0,
+            "last_latency_ms": 0.0
+          }
+        },
+        "circuit_breakers": {
+          "mcp.linear": {
+            "name": "mcp.linear",
+            "state": "closed",
+            "consecutive_failures": 0,
+            "open_until_epoch": 0.0,
+            "degraded": false,
+            "window_samples": 0,
+            "p95_latency_ms": 0.0,
+            "rate_limit_hits": 0
+          }
+        },
+        "chaos_modes": {
+          "openai": "",
+          "tavily": "",
+          "linear_mcp": "outage"
+        }
+      }
+    },
+    {
+      "leg": "recovery",
+      "started_at": "2026-05-17T00:15:47Z",
+      "elapsed_ms": 26,
+      "pass": true,
+      "errors": [],
+      "profiles": {},
+      "degradations": [
+        {
+          "at": "2026-05-17T00:15:47Z",
+          "component": "pipeline",
+          "stage": "finalize",
+          "reason": "resuming run from stage finalize",
+          "retryable": true,
+          "error_kind": "stage_resume",
+          "provider": "",
+          "fallback_path": ""
+        },
+        {
+          "at": "2026-05-17T00:15:47Z",
+          "component": "none",
+          "stage": "recommend",
+          "reason": "LLM unavailable; MCDA composite-score recommendation",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "mcda_composite_argmax"
+        },
+        {
+          "at": "2026-05-17T00:15:47Z",
+          "component": "none",
+          "stage": "reflect",
+          "reason": "LLM unavailable or degraded run; templated reflection",
+          "retryable": true,
+          "error_kind": "llm_unavailable",
+          "provider": "none",
+          "fallback_path": "template_reflection"
+        }
+      ],
+      "degraded_sse_count": 1,
+      "decision_id": "83b38292-d32f-49ee-961c-3d72c0ffb2e3",
+      "health": {
+        "status": "ok",
+        "generated_at": "2026-05-17T00:15:47Z",
+        "providers": {
+          "linear_mcp": {
+            "calls_total": 1.0,
+            "ok_total": 1.0,
+            "error_total": 0.0,
+            "brownout_total": 0.0,
+            "last_latency_ms": 1.0
+          }
+        },
+        "circuit_breakers": {
+          "mcp.linear": {
+            "name": "mcp.linear",
+            "state": "closed",
+            "consecutive_failures": 0,
+            "open_until_epoch": 0.0,
+            "degraded": false,
+            "window_samples": 0,
+            "p95_latency_ms": 0.0,
+            "rate_limit_hits": 0
+          }
+        },
+        "chaos_modes": {
+          "openai": "",
+          "tavily": "",
+          "linear_mcp": ""
+        }
+      }
+    }
+  ]
+}

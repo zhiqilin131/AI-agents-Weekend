@@ -29,6 +29,10 @@ RUN pip install --upgrade pip setuptools wheel
 COPY . .
 RUN pip install -e ".[dev,web,decision,deploy]"
 
+# Bake resilience judge proof into the image (/resilience reads artifacts/chaos_timeline.json).
+# FX_CHAOS only for this build step — not set at container runtime.
+RUN FX_CHAOS=1 python scripts/chaos_demo.py
+
 # Railway (or any host): attach a persistent volume mounted at /data so profile/, chat_threads/, chroma/, etc. survive redeploys.
 RUN mkdir -p /data/chroma
 
