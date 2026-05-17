@@ -16,6 +16,28 @@ import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionR
 import type { ShadowSuggestion } from '../app/components/shadow/types';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
 import { BuddyRecentChatPanel } from '../features/slime/BuddyRecentChatPanel';
+import { BuddyRecentTherapyPanel } from '../features/slime/BuddyRecentTherapyPanel';
+import { TherapyReportPanel } from '../features/slime/TherapyReportPanel';
+import { RimumuWellbeingIntakeDialog } from '../features/slime/RimumuWellbeingIntakeDialog';
+import {
+  RimumuIntroductionDialog,
+  RimumuIntroductionTrigger,
+} from '../features/slime/RimumuIntroductionDialog';
+import type { TherapyReport } from '../features/slime/therapySession';
+import {
+  canUseWellbeingBuddyVoice,
+  therapyReportFromMessages,
+  therapyStatusFromThread,
+  wellbeingBuddyGateHint,
+} from '../features/slime/therapySession';
+import { postTherapyStart } from '../features/slime/therapySessionApi';
+import { TherapyBuddyTopRail } from '../features/slime/TherapyBuddyTopRail';
+import type { WellbeingMemorySavedPayload } from '../features/slime/RimumuWellbeingIntakeDialog';
+import {
+  ProfileMemoryToastStack,
+  type ProfileMemoryToast,
+} from '../app/components/shadow/ProfileMemoryToastStack';
+import type { ShadowThread } from '../app/components/shadow/types';
 import { SlimeCompanionStage } from '../features/slime/SlimeCompanionStage';
 import { SlimePersonalizationForm } from '../features/slime/SlimePersonalizationForm';
 import type { SlimeDecisionSuggestion, SlimeSpeechOutput } from '../features/slime/SlimeVoiceAgent';
@@ -29,14 +51,55 @@ import { useDecisionReportStream } from '../hooks/useDecisionReportStream';
 import { apiFetch } from '../utils/apiFetch';
 import { SLIME_CALENDAR_BRIEF_CONTEXT_KEY } from '../utils/executionStorageKeys';
 import { unlockSlimeAudioContext } from '../utils/slimeAudioContext';
+import {
+  getSlimeIdentity,
+  nextSlimeType,
+  normalizeSlimeType,
+  slimeSupportsDecisionMode,
+  type SlimeType,
+} from '../features/slime/slimeIdentity';
+import { slimeTypeFromThread } from '../utils/patchThreadSlimeType';
 
 /** Legacy single-key storage; per-user keys are ``${prefix}:${supabaseUserId}``. */
 const BUDDY_THREAD_STORAGE_PREFIX = 'slimeBuddyShadowThreadId';
+const BUDDY_THERAPY_THREAD_STORAGE_PREFIX = 'slimeBuddyTherapyThreadId';
+const BUDDY_COMPANION_PREF_PREFIX = 'slimeBuddyActiveCompanion';
 
-function buddyThreadStorageKey(userId: string | null | undefined): string | null {
+function buddyCompanionPrefKey(userId: string | null | undefined): string | null {
   const u = userId?.trim();
   if (!u) return null;
-  return `${BUDDY_THREAD_STORAGE_PREFIX}:${u}`;
+  return `${BUDDY_COMPANION_PREF_PREFIX}:${u}`;
+}
+
+function readBuddyCompanionPref(userId: string | null | undefined): SlimeType {
+  const k = buddyCompanionPrefKey(userId);
+  if (!k) return 'generalized';
+  try {
+    return normalizeSlimeType(localStorage.getItem(k)) ?? 'generalized';
+  } catch {
+    return 'generalized';
+  }
+}
+
+function writeBuddyCompanionPref(userId: string | null | undefined, slimeType: SlimeType): void {
+  const k = buddyCompanionPrefKey(userId);
+  if (!k) return;
+  try {
+    localStorage.setItem(k, slimeType);
+  } catch {
+    /* ignore */
+  }
+}
+
+function buddyThreadStorageKey(
+  userId: string | null | undefined,
+  slimeType: SlimeType = 'generalized',
+): string | null {
+  const u = userId?.trim();
+  if (!u) return null;
+  const prefix =
+    slimeType === 'wellbeing' ? BUDDY_THERAPY_THREAD_STORAGE_PREFIX : BUDDY_THREAD_STORAGE_PREFIX;
+  return `${prefix}:${u}`;
 }
 
 type BuddyCornerToast = {
@@ -61,7 +124,18 @@ export default function SlimeCompanionPage() {
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false);
   const [flaggedEvidenceIds, setFlaggedEvidenceIds] = useState<Set<string>>(() => new Set());
   const [buddyThreadId, setBuddyThreadId] = useState<string | null>(null);
+  const [buddyActiveThread, setBuddyActiveThread] = useState<ShadowThread | null>(null);
+  const [buddySlimeType, setBuddySlimeType] = useState<SlimeType>(() =>
+    readBuddyCompanionPref(authUserId),
+  );
+  const [wellbeingIntakeOpen, setWellbeingIntakeOpen] = useState(false);
+  const [rimumuIntroOpen, setRimumuIntroOpen] = useState(false);
+  const [therapyReportOpen, setTherapyReportOpen] = useState(false);
+  const [therapyReport, setTherapyReport] = useState<TherapyReport | null>(null);
+  const intakePromptThreadRef = useRef<string | null>(null);
   const [buddyRecapRefresh, setBuddyRecapRefresh] = useState(0);
+  const [profileMemoryToasts, setProfileMemoryToasts] = useState<ProfileMemoryToast[]>([]);
+  const profileMemoryToastTimersRef = useRef<Map<string, number>>(new Map());
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
   const [buddyPendingAction, setBuddyPendingAction] = useState<PendingAction | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
@@ -69,46 +143,182 @@ export default function SlimeCompanionPage() {
   const reportStream = useDecisionReportStream();
 
   const persistThreadId = useCallback(
-    (id: string) => {
+    (id: string, slimeType: SlimeType = buddySlimeType) => {
       setBuddyThreadId(id);
       setBuddyRecapRefresh((n) => n + 1);
-      const k = buddyThreadStorageKey(authUserId);
+      const k = buddyThreadStorageKey(authUserId, slimeType);
       if (!k) return;
       try {
         localStorage.setItem(k, id);
-        localStorage.removeItem(BUDDY_THREAD_STORAGE_PREFIX);
       } catch {
         /* ignore */
       }
     },
-    [authUserId],
+    [authUserId, buddySlimeType],
   );
+
+  const loadBuddyThreadMeta = useCallback(
+    async (tid: string, options?: { syncCompanionFromThread?: boolean }) => {
+    try {
+      const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(tid)}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { thread?: ShadowThread };
+      if (!data.thread) return;
+      const threadType = slimeTypeFromThread(data.thread);
+      if (options?.syncCompanionFromThread) {
+        setBuddySlimeType(threadType);
+        writeBuddyCompanionPref(authUserId, threadType);
+      } else if (threadType !== buddySlimeType) {
+        return;
+      }
+      setBuddyActiveThread(data.thread);
+      const rep =
+        (data.thread.therapy_session?.report as TherapyReport | undefined) ??
+        therapyReportFromMessages(data.thread.messages);
+      if (rep) setTherapyReport(rep);
+    } catch {
+      /* ignore */
+    }
+  },
+    [authUserId, buddySlimeType],
+  );
+
+  const startNewTherapy = useCallback(async () => {
+    const res = await apiFetch('/api/shadow-chat/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slime_type: 'wellbeing', title: 'Therapy session' }),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { thread?: ShadowThread };
+    const tid = data.thread?.thread_id;
+    if (!tid) return;
+    writeBuddyCompanionPref(authUserId, 'wellbeing');
+    setBuddySlimeType('wellbeing');
+    persistThreadId(tid, 'wellbeing');
+    await loadBuddyThreadMeta(tid, { syncCompanionFromThread: true });
+    setWellbeingIntakeOpen(true);
+  }, [authUserId, loadBuddyThreadMeta, persistThreadId]);
+
+  const startNewBuddyChat = useCallback(async () => {
+    const res = await apiFetch('/api/shadow-chat/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slime_type: 'generalized', title: 'New chat' }),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { thread?: ShadowThread };
+    const tid = data.thread?.thread_id;
+    if (!tid) return;
+    writeBuddyCompanionPref(authUserId, 'generalized');
+    setBuddySlimeType('generalized');
+    persistThreadId(tid, 'generalized');
+    await loadBuddyThreadMeta(tid, { syncCompanionFromThread: true });
+  }, [authUserId, loadBuddyThreadMeta, persistThreadId]);
 
   const openBuddyChat = useCallback(() => {
     const tid = buddyThreadId?.trim();
+    const slimeQ = buddySlimeType === 'wellbeing' ? '&slime=wellbeing' : '';
     if (tid) {
-      navigate(`/chat?thread=${encodeURIComponent(tid)}`);
+      navigate(`/chat?thread=${encodeURIComponent(tid)}${slimeQ}`);
       return;
     }
-    navigate('/chat');
-  }, [buddyThreadId, navigate]);
+    navigate(buddySlimeType === 'wellbeing' ? '/chat?slime=wellbeing' : '/chat');
+  }, [buddyThreadId, buddySlimeType, navigate]);
 
-  const onBuddyConversationUpdated = useCallback(() => {
+  const onBuddyConversationUpdated = useCallback((updatedThreadId?: string) => {
     setBuddyRecapRefresh((n) => n + 1);
+    const tid = updatedThreadId?.trim() || buddyThreadId?.trim();
+    if (tid) void loadBuddyThreadMeta(tid);
+  }, [buddyThreadId, loadBuddyThreadMeta]);
+
+  const onBuddyThreadTitleUpdated = useCallback(
+    (title: string, threadId: string) => {
+      setBuddyActiveThread((prev) =>
+        prev && prev.thread_id === threadId ? { ...prev, title } : prev,
+      );
+      setBuddyRecapRefresh((n) => n + 1);
+    },
+    [],
+  );
+
+  const dismissProfileMemoryToast = useCallback((id: string) => {
+    const t = profileMemoryToastTimersRef.current.get(id);
+    if (t != null) window.clearTimeout(t);
+    profileMemoryToastTimersRef.current.delete(id);
+    setProfileMemoryToasts((prev) => prev.filter((x) => x.id !== id));
   }, []);
 
+  const scheduleProfileMemoryToast = useCallback(
+    (payload: WellbeingMemorySavedPayload | { message: string; items: string[]; details?: ProfileMemoryToast['details']; at?: string }) => {
+      const id = `pm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const at = (payload.at || new Date().toISOString()).trim();
+      const items = payload.items?.length ? payload.items : [payload.message || 'Memory saved'];
+      const details =
+        payload.details?.length ?
+          payload.details
+        : items.map((text) => ({ text, category: 'wellbeing', action: 'new' as const }));
+      setProfileMemoryToasts((prev) => [...prev.slice(-4), { id, items, at, details }]);
+      const timer = window.setTimeout(() => dismissProfileMemoryToast(id), 6200);
+      profileMemoryToastTimersRef.current.set(id, timer);
+    },
+    [dismissProfileMemoryToast],
+  );
+
+  const beginBuddyTherapyAfterIntake = useCallback(
+    async (tid: string) => {
+      const result = await postTherapyStart(tid);
+      if (!result.ok) {
+        if (result.needsIntake) setWellbeingIntakeOpen(true);
+        return;
+      }
+      setBuddyActiveThread(result.thread);
+      setBuddyRecapRefresh((n) => n + 1);
+    },
+    [],
+  );
+
+  const wellbeingVoiceGateHint =
+    buddySlimeType === 'wellbeing'
+      ? wellbeingBuddyGateHint(Boolean(buddyThreadId), buddyActiveThread)
+      : null;
+  const wellbeingVoiceGated =
+    buddySlimeType === 'wellbeing' && !canUseWellbeingBuddyVoice(buddyActiveThread);
+
   useEffect(() => {
-    const k = buddyThreadStorageKey(authUserId);
+    if (buddySlimeType !== 'wellbeing' || !buddyActiveThread?.thread_id) return;
+    const tid = buddyActiveThread.thread_id.trim();
+    if (!tid || buddyThreadId?.trim() !== tid) return;
+    if (slimeTypeFromThread(buddyActiveThread) !== 'wellbeing') return;
+    const intakeDone =
+      buddyActiveThread.therapy_session?.intake_complete ??
+      buddyActiveThread.wellbeing_session?.intake_complete;
+    const status = therapyStatusFromThread(buddyActiveThread);
+    if (intakeDone || status === 'ended') return;
+    if (intakePromptThreadRef.current === tid) return;
+    intakePromptThreadRef.current = tid;
+    setWellbeingIntakeOpen(true);
+  }, [buddyActiveThread, buddySlimeType, buddyThreadId]);
+
+  useEffect(() => {
+    setWellbeingIntakeOpen(false);
+    intakePromptThreadRef.current = null;
+    setBuddyActiveThread(null);
+
+    const k = buddyThreadStorageKey(authUserId, buddySlimeType);
     if (!k) {
       setBuddyThreadId(null);
       return;
     }
     try {
-      setBuddyThreadId(localStorage.getItem(k));
+      const tid = localStorage.getItem(k);
+      setBuddyThreadId(tid);
+      if (tid) void loadBuddyThreadMeta(tid);
+      else setTherapyReport(null);
     } catch {
       setBuddyThreadId(null);
     }
-  }, [authUserId]);
+  }, [authUserId, buddySlimeType, loadBuddyThreadMeta]);
 
   const flashBuddyCornerToast = useCallback((
     message: string,
@@ -125,6 +335,28 @@ export default function SlimeCompanionPage() {
       buddyCornerToastTimerRef.current = null;
     }, 3800);
   }, []);
+
+  const applyBuddyCompanionSwitch = useCallback(
+    (next: SlimeType) => {
+      if (next === buddySlimeType) return;
+      writeBuddyCompanionPref(authUserId, next);
+      setBuddySlimeType(next);
+      setWellbeingIntakeOpen(false);
+      intakePromptThreadRef.current = null;
+      setBuddyActiveThread(null);
+      setSpeechOutput(null);
+      setPendingDecision(null);
+      setDecisionModeManual(false);
+      setBuddyPendingAction(null);
+      setReportOpen(false);
+      flashBuddyCornerToast(`Switched to ${getSlimeIdentity(next).displayName}`, 'neutral');
+    },
+    [authUserId, buddySlimeType, flashBuddyCornerToast],
+  );
+
+  const toggleBuddyCompanion = useCallback(() => {
+    applyBuddyCompanionSwitch(nextSlimeType(buddySlimeType));
+  }, [applyBuddyCompanionSwitch, buddySlimeType]);
 
   const deleteMemoryFromBuddyToast = useCallback(async (factId: string) => {
     if (!factId.trim()) return;
@@ -205,17 +437,18 @@ export default function SlimeCompanionPage() {
     };
   }, [buddyThreadId, buddyRecapRefresh]);
 
-  const buddyDecisionSuggestion: ShadowSuggestion | null =
-    pendingActionToSuggestion(buddyPendingAction) ??
-    (pendingDecision?.should_show
-      ? {
-          type: 'decision_report',
-          title: pendingDecision.display_text?.trim() || 'Turn this into a decision report?',
-          message:
-            pendingDecision.description?.trim() ||
-            'I can structure this into options, trade-offs, risks, consequences, and an action plan.',
-        }
-      : null);
+  const buddyDecisionSuggestion: ShadowSuggestion | null = slimeSupportsDecisionMode(buddySlimeType)
+    ? pendingActionToSuggestion(buddyPendingAction) ??
+      (pendingDecision?.should_show
+        ? {
+            type: 'decision_report',
+            title: pendingDecision.display_text?.trim() || 'Turn this into a decision report?',
+            message:
+              pendingDecision.description?.trim() ||
+              'I can structure this into options, trade-offs, risks, consequences, and an action plan.',
+          }
+        : null)
+    : null;
 
   const dismissBuddyDecisionSuggestion = useCallback(async () => {
     setPendingDecision(null);
@@ -291,6 +524,17 @@ export default function SlimeCompanionPage() {
   }, [panelOpen, slimeProfile]);
 
   useEffect(() => {
+    if (searchParams.get('slime') === 'wellbeing') {
+      writeBuddyCompanionPref(authUserId, 'wellbeing');
+      setBuddySlimeType('wellbeing');
+    }
+  }, [authUserId, searchParams]);
+
+  useEffect(() => {
+    setBuddySlimeType(readBuddyCompanionPref(authUserId));
+  }, [authUserId]);
+
+  useEffect(() => {
     if (searchParams.get('personalize') !== '1') return;
     setPanelOpen(true);
     setSearchParams({}, { replace: true });
@@ -337,15 +581,22 @@ export default function SlimeCompanionPage() {
     }
   };
 
+  const buddyIntakeBlockingUi =
+    wellbeingIntakeOpen && buddySlimeType === 'wellbeing' && Boolean(buddyThreadId?.trim());
+
+  const buddyFlowModalOpen =
+    buddyIntakeBlockingUi || rimumuIntroOpen || therapyReportOpen;
+
   return (
-    <div className="relative min-h-[100dvh] overflow-hidden bg-[radial-gradient(circle_at_50%_18%,rgba(255,255,255,0.9),transparent_25%),linear-gradient(135deg,#fff5fb_0%,#f7f2ff_46%,#e8f4ff_100%)]">
+    <motion.div className="relative min-h-[100dvh] min-w-0 overflow-x-clip bg-[radial-gradient(circle_at_50%_18%,rgba(255,255,255,0.9),transparent_25%),linear-gradient(135deg,#fff5fb_0%,#f7f2ff_46%,#e8f4ff_100%)]">
       <div className="pointer-events-none absolute inset-0 opacity-[0.58] bg-[radial-gradient(ellipse_at_50%_38%,rgba(139,92,246,0.18),transparent_58%),radial-gradient(circle_at_18%_72%,rgba(34,211,238,0.12),transparent_30%),radial-gradient(circle_at_82%_70%,rgba(244,114,182,0.10),transparent_32%)]" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-white/55 to-transparent" />
 
-      <div
+      <header
         data-slime-avoid
-        className="absolute left-3 top-3 z-[60] flex flex-wrap items-center gap-2 sm:left-4 sm:top-4"
+        className="absolute inset-x-0 top-0 z-[62] flex items-start justify-between gap-3 px-3 py-3 sm:px-4 sm:py-4"
       >
+        <nav className="flex flex-wrap items-center gap-2">
         <BuddyTooltip content="Go to the Foresight-X home screen and decision workspace.">
           <button
             type="button"
@@ -365,42 +616,105 @@ export default function SlimeCompanionPage() {
             Profile
           </button>
         </BuddyTooltip>
-      </div>
+        </nav>
 
-      <BuddyTooltip
-        side="bottom"
-        content={
-          panelOpen
-            ? 'Close Slime studio. Save from inside the panel if you want to keep changes.'
-            : 'Open Slime studio to edit colors, voice, persona, and how your buddy talks.'
-        }
-      >
-        <button
-          type="button"
-          data-slime-avoid
-          onClick={() => setPanelOpen((open) => !open)}
-          className="absolute right-3 top-3 z-[60] inline-flex items-center gap-2 rounded-full border border-violet-200/70 bg-white/85 px-4 py-2 text-sm font-semibold text-violet-950 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:-translate-y-0.5 hover:border-violet-400 sm:right-4 sm:top-4"
-          aria-expanded={panelOpen}
-          aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
+        <BuddyTooltip
+          side="bottom"
+          content={
+            panelOpen
+              ? 'Close Slime studio. Save from inside the panel if you want to keep changes.'
+              : `About ${getSlimeIdentity(buddySlimeType).displayName} — or double-click the slime to switch companion.`
+          }
         >
-          <Ghost className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
-          {panelOpen ? 'Close' : 'Personalize'}
-        </button>
-      </BuddyTooltip>
+          <button
+            type="button"
+            onClick={() => setPanelOpen((open) => !open)}
+            className="inline-flex items-center gap-2 rounded-full border border-violet-200/70 bg-white/85 px-4 py-2 text-sm font-semibold text-violet-950 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:-translate-y-0.5 hover:border-violet-400"
+            aria-expanded={panelOpen}
+            aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
+          >
+            <Ghost className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
+            {panelOpen ? 'Close' : 'About'}
+          </button>
+        </BuddyTooltip>
+      </header>
 
-      <BuddyRecentChatPanel
-        threadId={buddyThreadId}
-        refreshToken={buddyRecapRefresh}
-        slimeName={slimeDraft.name}
-        storageUserId={authUserId}
-        onOpenFullChat={openBuddyChat}
-      />
+      {buddySlimeType === 'wellbeing' ? (
+        <aside
+          data-slime-avoid
+          className={cn(
+            'pointer-events-none fixed z-[48] hidden sm:block',
+            'right-[max(0.75rem,env(safe-area-inset-right,0px))]',
+            'top-[max(5.75rem,calc(env(safe-area-inset-top,0px)+4.75rem))]',
+            'w-[min(17rem,calc(100vw-1.5rem-env(safe-area-inset-right,0px)))]',
+            buddyFlowModalOpen && 'pointer-events-none opacity-40',
+          )}
+          style={{
+            maxHeight:
+              'calc(100dvh - max(5.75rem, calc(env(safe-area-inset-top, 0px) + 4.75rem)) - env(safe-area-inset-bottom, 0px))',
+          }}
+        >
+          <div className="pointer-events-auto max-h-[inherit] overflow-y-auto overscroll-contain">
+            <TherapyBuddyTopRail
+              gateHint={wellbeingVoiceGateHint}
+              threadId={buddyThreadId}
+              thread={buddyActiveThread}
+              disabled={reportStream.isStreaming}
+              onRequestNewSession={() => void startNewTherapy()}
+              onThreadUpdated={(t) => {
+                setBuddyActiveThread(t);
+                void loadBuddyThreadMeta(t.thread_id);
+              }}
+              onOpenReport={(r) => {
+                setTherapyReport(r);
+                setTherapyReportOpen(true);
+              }}
+              onOpenCheckIn={() => setWellbeingIntakeOpen(true)}
+              onTherapyEnded={(r) => setTherapyReport(r)}
+            />
+          </div>
+        </aside>
+      ) : null}
 
-      {/* Bottom-left: link to full Chat UI; logo below — stays clear of center mic column */}
+      {buddySlimeType === 'wellbeing' ? (
+        <BuddyRecentTherapyPanel
+          className={cn(
+            'z-[58]',
+            buddyFlowModalOpen && 'z-[40] opacity-40 pointer-events-none',
+          )}
+          activeThreadId={buddyThreadId}
+          storageUserId={authUserId}
+          refreshKey={buddyRecapRefresh}
+          onSelectThread={(id) => {
+            persistThreadId(id, 'wellbeing');
+            void loadBuddyThreadMeta(id, { syncCompanionFromThread: true });
+          }}
+          onStartNewTherapy={() => void startNewTherapy()}
+          onOpenFullChat={openBuddyChat}
+        />
+      ) : (
+        <BuddyRecentChatPanel
+          activeThreadId={buddyThreadId}
+          storageUserId={authUserId}
+          refreshKey={buddyRecapRefresh}
+          onSelectThread={(id) => {
+            persistThreadId(id, 'generalized');
+            void loadBuddyThreadMeta(id, { syncCompanionFromThread: true });
+          }}
+          onStartNewChat={() => void startNewBuddyChat()}
+          onOpenFullChat={openBuddyChat}
+        />
+      )}
+
+      {/* Bottom-left quick actions — below recent panel, clear of mic */}
       <div
         data-slime-avoid
-        className="absolute bottom-6 left-4 z-[65] flex max-w-[min(280px,calc(100vw-6rem))] flex-col items-start gap-3 sm:bottom-8 sm:left-6"
+        className={cn(
+          'absolute bottom-6 left-4 z-[56] flex flex-col items-stretch gap-2 sm:bottom-8 sm:left-6',
+          buddyFlowModalOpen && 'pointer-events-none opacity-40',
+        )}
       >
+        <motion.div className="flex flex-col gap-2 rounded-2xl border border-white/70 bg-white/75 p-2 shadow-sm backdrop-blur-md">
         <BuddyTooltip content="Opens the full Chat workspace — a classic scrolling thread with richer tools than quick voice here.">
           <button
             type="button"
@@ -417,30 +731,43 @@ export default function SlimeCompanionPage() {
             Chat
           </button>
         </BuddyTooltip>
-        <img
-          src="/ForesightXLogo.svg"
-          alt=""
-          className="pointer-events-none h-8 w-auto max-w-[min(100vw-5rem,240px)] opacity-90 drop-shadow-sm sm:h-9"
-          decoding="async"
-          aria-hidden
-        />
+        {buddySlimeType === 'wellbeing' ? (
+          <BuddyTooltip content="How Rimumu works — evidence-informed psychology, session flow, and what she can help with.">
+            <RimumuIntroductionTrigger
+              className="w-full max-w-none justify-center"
+              onClick={() => setRimumuIntroOpen(true)}
+            />
+          </BuddyTooltip>
+        ) : null}
+        </motion.div>
       </div>
 
-      <div className="relative flex min-h-[100dvh] w-full flex-col items-center px-4 pb-16 pt-16 sm:pb-20 sm:pt-20">
-        <div data-slime-avoid className="relative z-30 mb-2 text-center sm:mb-0">
+      <motion.div className="relative flex min-h-[100dvh] w-full flex-col items-center px-4 pb-16 pt-16 sm:pb-20 sm:pt-20">
+        <motion.div className="flex w-full max-w-5xl flex-col items-center">
+        <div data-slime-avoid className="relative z-30 mb-2 w-full text-center sm:mb-0">
           <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-violet-500/80">Slime Chat</p>
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
-            Talk with {slimeDraft.name?.trim() || 'your Slime'}
+            Talk with {getSlimeIdentity(buddySlimeType).displayName}
           </h1>
         </div>
-        <div className="relative z-40 h-[min(72vh,680px)] w-full max-w-5xl shrink-0 rounded-[32px]">
+        <motion.div
+          className={cn(
+            'relative h-[min(72vh,680px)] w-full max-w-5xl shrink-0 rounded-[32px]',
+            speechOutput?.text ? 'z-[78]' : 'z-[70]',
+            buddyIntakeBlockingUi && 'pointer-events-none invisible',
+          )}
+          aria-hidden={buddyIntakeBlockingUi}
+        >
           {/*
             Voice UI is split z-index inside SlimeVoiceAgent (panels z-32, mic z-52).
-            Stage z-44 paints above bubbles/transcript so the buddy stays visible; mic stays on top for taps.
+            Stage z-[70] keeps slime + speech bubble above the right session rail (z-52).
           */}
           <SlimeVoiceAgent
             slimeProfile={slimeDraft}
+            slimeType={buddySlimeType}
             currentRoute="/buddy"
+            voiceGateDisabled={wellbeingVoiceGated}
+            voiceGateMessage={wellbeingVoiceGateHint}
             threadId={buddyThreadId ?? undefined}
             onThreadId={persistThreadId}
             onDecisionSuggestion={setPendingDecision}
@@ -451,9 +778,21 @@ export default function SlimeCompanionPage() {
               setFlaggedEvidenceIds(new Set());
               if (!items.length) setEvidenceDrawerOpen(false);
             }}
-            onProfileMemorySaved={(payload) =>
-              flashBuddyCornerToast(payload.message, 'memory_saved', payload.details || [])
-            }
+            onProfileMemorySaved={(payload) => {
+              if (buddySlimeType === 'wellbeing') {
+                scheduleProfileMemoryToast({
+                  message: payload.message,
+                  items: payload.items,
+                  at: new Date().toISOString(),
+                  details: (payload.details || []).map((d) => ({
+                    ...d,
+                    category: d.category || 'wellbeing',
+                  })),
+                });
+                return;
+              }
+              flashBuddyCornerToast(payload.message, 'memory_saved', payload.details || []);
+            }}
             onMemoryEvidenceRetrieved={(count) =>
               flashBuddyCornerToast(
                 count === 1 ? 'Retrieved 1 related memory' : `Retrieved ${count} related memories`,
@@ -465,21 +804,34 @@ export default function SlimeCompanionPage() {
               setSlimeDraft(next);
             }}
             onConversationUpdated={onBuddyConversationUpdated}
-            decisionModeActive={decisionModeManual}
-            onToggleDecisionMode={() => setDecisionModeManual((v) => !v)}
+            onThreadTitleUpdated={onBuddyThreadTitleUpdated}
+            decisionModeActive={slimeSupportsDecisionMode(buddySlimeType) && decisionModeManual}
+            onToggleDecisionMode={
+              slimeSupportsDecisionMode(buddySlimeType)
+                ? () => setDecisionModeManual((v) => !v)
+                : undefined
+            }
             decisionModeToggleDisabled={reportStream.isStreaming}
           />
           <SlimeCompanionStage
-            className="relative z-[44]"
+            className="relative"
             profile={slimeDraft}
+            slimeType={buddySlimeType}
             advisorState={advisorState}
             speechOutput={speechOutput}
             decisionSuggestion={
-              reportOpen || reportStream.isStreaming || reportStream.finalTrace ? null : pendingDecision
+              slimeSupportsDecisionMode(buddySlimeType) &&
+              !reportOpen &&
+              !reportStream.isStreaming &&
+              !reportStream.finalTrace
+                ? pendingDecision
+                : null
             }
             onEvidenceOpen={() => setEvidenceDrawerOpen(true)}
+            onDoubleClickToggleCompanion={toggleBuddyCompanion}
           />
-        </div>
+        </motion.div>
+        </motion.div>
 
         {(() => {
           const buddyDockPending: PendingAction | null =
@@ -495,6 +847,7 @@ export default function SlimeCompanionPage() {
                 }
               : null);
           const showBuddyDock =
+            slimeSupportsDecisionMode(buddySlimeType) &&
             buddyDockPending &&
             (buddyDockPending.type === 'clarification' ||
               buddyDockPending.type === 'role_mode' ||
@@ -507,7 +860,7 @@ export default function SlimeCompanionPage() {
           return (
             <motion.div
               data-slime-avoid
-              className="relative z-[48] mx-auto mt-3 w-full max-w-lg px-1 sm:mt-4"
+              className="relative z-[66] mx-auto mt-3 w-full max-w-lg px-1 sm:mt-4"
             >
               <ThreadActionDock
                 pendingAction={buddyDockPending}
@@ -526,7 +879,7 @@ export default function SlimeCompanionPage() {
             </motion.div>
           );
         })()}
-      </div>
+      </motion.div>
 
       <DecisionReportStreamingPanel
         open={reportOpen}
@@ -663,7 +1016,9 @@ export default function SlimeCompanionPage() {
           className="w-full overflow-y-auto border-l border-white/45 bg-white/70 shadow-[0_0_40px_rgba(99,102,241,0.12)] backdrop-blur-2xl sm:max-w-md"
         >
           <SheetHeader className="flex flex-row items-center justify-between gap-3 border-b border-white/50 pb-3 pt-1">
-            <SheetTitle className="text-left text-violet-950">Slime studio</SheetTitle>
+            <SheetTitle className="text-left text-violet-950">
+              {getSlimeIdentity(buddySlimeType).displayName}
+            </SheetTitle>
             <BuddyTooltip content="Close Slime studio. Use Save slime inside the panel to persist changes.">
               <button
                 type="button"
@@ -676,19 +1031,43 @@ export default function SlimeCompanionPage() {
           </SheetHeader>
           <div className="px-4 pb-8 pt-2">
             <SlimePersonalizationForm
-              slimeDraft={slimeDraft}
-              setSlimeDraft={setSlimeDraft}
-              onSave={async () => {
-                await saveSlime();
-              }}
-              onReset={async () => {
-                await resetSlime();
-              }}
-              idPrefix="buddy"
+              slimeType={buddySlimeType}
+              onSlimeTypeChange={applyBuddyCompanionSwitch}
             />
           </div>
         </SheetContent>
       </Sheet>
-    </div>
+
+      {buddyThreadId ? (
+        <RimumuWellbeingIntakeDialog
+          open={buddyIntakeBlockingUi}
+          threadId={buddyThreadId}
+          onClose={() => setWellbeingIntakeOpen(false)}
+          onComplete={(memorySaved) => {
+            void (async () => {
+              await loadBuddyThreadMeta(buddyThreadId);
+              await beginBuddyTherapyAfterIntake(buddyThreadId);
+              if (memorySaved) {
+                scheduleProfileMemoryToast(memorySaved);
+              }
+            })();
+          }}
+        />
+      ) : null}
+      {buddySlimeType === 'wellbeing' ? (
+        <RimumuIntroductionDialog open={rimumuIntroOpen} onOpenChange={setRimumuIntroOpen} />
+      ) : null}
+      <TherapyReportPanel
+        open={therapyReportOpen}
+        report={therapyReport}
+        onClose={() => setTherapyReportOpen(false)}
+      />
+      <ProfileMemoryToastStack
+        toasts={profileMemoryToasts}
+        onDismiss={dismissProfileMemoryToast}
+        headerTitle={buddySlimeType === 'wellbeing' ? 'Wellbeing memory saved' : 'Profile memory updated'}
+        tone={buddySlimeType === 'wellbeing' ? 'rose' : 'emerald'}
+      />
+    </motion.div>
   );
 }

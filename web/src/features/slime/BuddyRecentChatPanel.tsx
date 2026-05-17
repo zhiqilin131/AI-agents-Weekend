@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ChevronLeft, ChevronRight, MessageSquare, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MessageSquare, Plus } from 'lucide-react';
 import { cn } from '../../app/components/ui/utils';
 import { apiFetch } from '../../utils/apiFetch';
-import type { ShadowMessage } from '../../app/components/shadow/types';
-import { recapLines } from './BuddyThreadRecap';
+import { getSlimeIdentity, normalizeSlimeType } from './slimeIdentity';
 import { BuddyTooltip } from './BuddyTooltip';
+import { sortThreadsByRecent } from './buddyThreadSort';
 
 const COLLAPSED_STORAGE_PREFIX = 'slimeBuddyRecentChatCollapsed';
 
@@ -37,25 +37,52 @@ function writeCollapsedPreference(userId: string | null | undefined, collapsed: 
   }
 }
 
+export type ChatThreadSummary = {
+  thread_id: string;
+  title?: string;
+  updated_at?: string;
+  message_count?: number;
+  slime_type?: string;
+};
+
 export type BuddyRecentChatPanelProps = {
-  threadId: string | null;
-  refreshToken?: number;
-  slimeName?: string;
+  activeThreadId: string | null;
   storageUserId?: string | null;
+  refreshKey?: number;
+  onSelectThread: (threadId: string) => void;
+  onStartNewChat: () => void;
   onOpenFullChat: () => void;
   className?: string;
 };
 
+function formatUpdatedAt(iso?: string): string | null {
+  if (!iso?.trim()) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMins = Math.floor(diffMs / 60_000);
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 export function BuddyRecentChatPanel({
-  threadId,
-  refreshToken = 0,
-  slimeName = 'Slime',
+  activeThreadId,
   storageUserId = null,
+  refreshKey = 0,
+  onSelectThread,
+  onStartNewChat,
   onOpenFullChat,
   className,
 }: BuddyRecentChatPanelProps) {
+  const ident = getSlimeIdentity('generalized');
   const [collapsed, setCollapsed] = useState(() => readCollapsedPreference(storageUserId));
-  const [lines, setLines] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  const [threads, setThreads] = useState<ChatThreadSummary[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -63,30 +90,30 @@ export function BuddyRecentChatPanel({
   }, [storageUserId]);
 
   const load = useCallback(async () => {
-    const tid = threadId?.trim();
-    if (!tid) {
-      setLines([]);
-      return;
-    }
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(tid)}`);
+      const res = await apiFetch('/api/shadow-chat/threads');
       if (!res.ok) {
-        setLines([]);
+        setThreads([]);
         return;
       }
-      const data = (await res.json()) as { thread?: { messages?: ShadowMessage[] } };
-      setLines(recapLines(data.thread?.messages ?? [], 8));
+      const data = (await res.json()) as { threads?: ChatThreadSummary[] };
+      const list = sortThreadsByRecent(
+        (data.threads ?? []).filter(
+          (t) => (normalizeSlimeType(t.slime_type) ?? 'generalized') === 'generalized',
+        ),
+      );
+      setThreads(list.slice(0, 12));
     } catch {
-      setLines([]);
+      setThreads([]);
     } finally {
       setLoading(false);
     }
-  }, [threadId]);
+  }, []);
 
   useEffect(() => {
     void load();
-  }, [load, refreshToken]);
+  }, [load, activeThreadId, refreshKey]);
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -96,29 +123,30 @@ export function BuddyRecentChatPanel({
     });
   };
 
-  const petName = slimeName?.trim() || 'Slime';
-  const hasThread = Boolean(threadId?.trim());
-  const messageCount = lines.length;
+  const chatCount = threads.length;
+  const petName = ident.displayName;
 
   return (
     <aside
       data-slime-avoid
       data-testid="buddy-recent-chat-panel"
       className={cn(
-        'pointer-events-auto fixed z-[55] flex flex-col transition-[width] duration-300 ease-out',
+        'pointer-events-auto fixed z-[72] flex flex-col transition-[width] duration-300 ease-out',
         'left-3 top-[4.25rem] max-h-[calc(100dvh-5.5rem)] sm:left-4 sm:top-[4.5rem]',
         collapsed ? 'w-11' : 'w-[min(17.5rem,calc(100vw-2rem))] sm:w-72',
         className,
       )}
     >
-      <div
+      <motion.div
+        layout
+        transition={{ type: 'spring', stiffness: 380, damping: 32 }}
         className={cn(
           'flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-white/80 bg-white/72 shadow-[0_14px_48px_rgba(79,70,229,0.12)] backdrop-blur-xl',
           collapsed && 'items-center rounded-full border-violet-200/70 py-2',
         )}
       >
         {collapsed ? (
-          <div className="flex flex-col items-center gap-2 px-1 py-1">
+          <motion.div layout className="flex flex-col items-center gap-2 px-1 py-1">
             <BuddyTooltip side="right" content="Expand recent chat">
               <button
                 type="button"
@@ -131,12 +159,12 @@ export function BuddyRecentChatPanel({
               </button>
             </BuddyTooltip>
             <MessageSquare className="h-4 w-4 text-violet-500/80" aria-hidden />
-            {messageCount > 0 ? (
+            {chatCount > 0 ? (
               <span className="rounded-full bg-violet-600 px-1.5 py-0.5 text-[9px] font-bold text-white">
-                {messageCount}
+                {chatCount}
               </span>
             ) : null}
-          </div>
+          </motion.div>
         ) : (
           <>
             <div className="flex shrink-0 items-start justify-between gap-2 border-b border-violet-100/80 bg-gradient-to-r from-violet-50/90 to-fuchsia-50/50 px-3 py-2.5">
@@ -149,7 +177,7 @@ export function BuddyRecentChatPanel({
                   Recent chat
                 </p>
                 <p className="mt-0.5 truncate text-xs font-medium text-slate-700">
-                  {hasThread ? `Thread with ${petName}` : 'No thread yet'}
+                  {activeThreadId ? `Chats with ${petName}` : 'Pick a conversation'}
                 </p>
               </motion.div>
               <BuddyTooltip content="Collapse panel">
@@ -165,15 +193,19 @@ export function BuddyRecentChatPanel({
               </BuddyTooltip>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 py-2">
-              {!hasThread ? (
-                <div className="rounded-xl border border-dashed border-violet-200/90 bg-violet-50/40 px-3 py-4 text-center">
-                  <Sparkles className="mx-auto h-5 w-5 text-violet-400" aria-hidden />
-                  <p className="mt-2 text-[11px] leading-relaxed text-slate-600">
-                    Hold the mic and say hello — your conversation will show up here.
-                  </p>
-                </div>
-              ) : loading && lines.length === 0 ? (
+            <motion.div layout className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 py-2">
+              <BuddyTooltip content="Start a fresh chat with Mochi on the buddy page.">
+                <button
+                  type="button"
+                  onClick={onStartNewChat}
+                  className="mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:brightness-105"
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden />
+                  New chat
+                </button>
+              </BuddyTooltip>
+
+              {loading && threads.length === 0 ? (
                 <ul className="space-y-2" aria-busy="true">
                   {[0, 1, 2].map((i) => (
                     <li
@@ -182,72 +214,85 @@ export function BuddyRecentChatPanel({
                     />
                   ))}
                 </ul>
-              ) : lines.length === 0 ? (
-                <p className="px-1 py-2 text-center text-[11px] text-slate-500">No messages in this thread yet.</p>
+              ) : threads.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-violet-200/90 bg-violet-50/40 px-3 py-4 text-center">
+                  <MessageSquare className="mx-auto h-5 w-5 text-violet-400" aria-hidden />
+                  <p className="mt-2 text-[11px] leading-relaxed text-slate-600">
+                    No chats yet. Tap New chat, or hold the mic and say hello.
+                  </p>
+                </div>
               ) : (
                 <ul className="space-y-2">
                   <AnimatePresence initial={false}>
-                    {lines.map((row, i) => (
-                      <motion.li
-                        key={`${row.role}:${i}:${row.text.slice(0, 20)}`}
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.03 }}
-                        className={cn(
-                          'rounded-xl border px-2.5 py-2 text-[11px] leading-snug shadow-sm',
-                          row.role === 'user'
-                            ? 'ml-2 border-violet-200/70 bg-white/85 text-slate-800'
-                            : 'mr-2 border-fuchsia-200/60 bg-gradient-to-br from-fuchsia-50/95 to-violet-50/80 text-slate-800',
-                        )}
-                      >
-                        <div className="mb-1 flex items-center gap-1.5">
-                          <span
-                            className={cn(
-                              'inline-flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-bold uppercase',
-                              row.role === 'user'
-                                ? 'bg-violet-600 text-white'
-                                : 'bg-fuchsia-500 text-white',
-                            )}
-                          >
-                            {row.role === 'user' ? 'Y' : 'S'}
-                          </span>
-                          <span className="font-semibold text-violet-900/90">
-                            {row.role === 'user' ? 'You' : petName}
-                          </span>
-                        </div>
-                        <p className="text-slate-700">{row.text}</p>
-                      </motion.li>
-                    ))}
+                    {threads.map((t, i) => {
+                      const active = t.thread_id === activeThreadId;
+                      const when = formatUpdatedAt(t.updated_at);
+                      const count = t.message_count ?? 0;
+                      const subtitle =
+                        count > 0 ? `${count} message${count === 1 ? '' : 's'}` : 'No messages yet';
+                      return (
+                        <motion.li
+                          key={t.thread_id}
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: i * 0.03 }}
+                        >
+                          <BuddyTooltip content="Continue this conversation on the buddy page">
+                            <button
+                              type="button"
+                              onClick={() => onSelectThread(t.thread_id)}
+                              className={cn(
+                                'w-full rounded-xl border px-2.5 py-2 text-left text-[11px] transition',
+                                active
+                                  ? 'border-violet-300 bg-violet-100/90 shadow-sm'
+                                  : 'border-violet-100/90 bg-white/85 hover:border-violet-200',
+                              )}
+                            >
+                              <motion.div layout className="flex items-center justify-between gap-1">
+                                <span className="truncate font-medium text-slate-800">
+                                  {t.title || 'Chat'}
+                                </span>
+                                {when ? (
+                                  <span className="shrink-0 text-[9px] text-violet-600/80">{when}</span>
+                                ) : null}
+                              </motion.div>
+                              <p className="mt-0.5 truncate text-[10px] text-slate-500">{subtitle}</p>
+                            </button>
+                          </BuddyTooltip>
+                        </motion.li>
+                      );
+                    })}
                   </AnimatePresence>
                 </ul>
               )}
-            </div>
+            </motion.div>
 
             <motion.div
+              layout
               className="shrink-0 border-t border-violet-100/80 bg-white/50 p-2.5"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
             >
-              <BuddyTooltip content="Open the full Chat workspace with this thread">
+              <BuddyTooltip content="Open the full Chat workspace for the selected thread">
                 <button
                   type="button"
                   onClick={onOpenFullChat}
-                  disabled={!hasThread}
+                  disabled={!activeThreadId}
                   className={cn(
                     'inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition',
-                    hasThread
+                    activeThreadId
                       ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-md hover:brightness-105'
                       : 'cursor-not-allowed border border-violet-100 bg-violet-50/60 text-violet-400',
                   )}
                 >
                   <MessageSquare className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  {hasThread ? 'Continue in Chat' : 'Chat (after first message)'}
+                  {activeThreadId ? 'Continue in Chat' : 'Chat (pick a conversation)'}
                 </button>
               </BuddyTooltip>
             </motion.div>
           </>
         )}
-      </div>
+      </motion.div>
     </aside>
   );
 }

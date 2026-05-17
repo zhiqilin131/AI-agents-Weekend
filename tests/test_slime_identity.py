@@ -1,4 +1,4 @@
-"""Slime Buddy identity: saved name, profile store, voice + chat short-circuit."""
+"""Slime Buddy identity: fixed names per type, profile store, voice + chat short-circuit."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def test_not_identity_when_user_names_self() -> None:
     assert not is_slime_identity_question("What is my name?")
 
 
-def test_effective_persona_reads_saved_slime_name(monkeypatch, tmp_path: Path) -> None:
+def test_effective_persona_ignores_legacy_custom_name(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     uid = "u_eff"
     prof = UserProfile(
@@ -65,7 +65,7 @@ def test_effective_persona_reads_saved_slime_name(monkeypatch, tmp_path: Path) -
         chroma_persist_dir=tmp_path / "chroma",
     )
     eff = get_effective_slime_persona(settings)
-    assert eff.name == "SirBlob"
+    assert eff.name == "Mochi"
     assert eff.profile_saved is True
 
 
@@ -84,11 +84,12 @@ def test_effective_persona_when_slime_profile_none(monkeypatch, tmp_path: Path) 
     )
     eff = get_effective_slime_persona(settings)
     assert eff.profile_saved is False
+    assert eff.name == "Mochi"
     txt = format_slime_identity_reply(eff)
-    assert "don’t have" in txt.lower() or "don't have" in txt.lower() or "do not have" in txt.lower()
+    assert "Mochi" in txt
 
 
-def test_conversation_turn_identity_contains_saved_name(monkeypatch, tmp_path: Path) -> None:
+def test_conversation_turn_identity_uses_fixed_mochi_name(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     uid = "u_conv_id"
     prof = UserProfile(
@@ -120,7 +121,8 @@ def test_conversation_turn_identity_contains_saved_name(monkeypatch, tmp_path: P
                 modality="voice",
             )
     rs.assert_not_called()
-    assert "Zephyr" in out["assistant_text"]
+    assert "Mochi" in out["assistant_text"]
+    assert "Zephyr" not in out["assistant_text"]
     assert out["intent"] == "slime_self_question"
 
 
@@ -163,7 +165,8 @@ def test_voice_pipeline_identity_skips_router(monkeypatch, tmp_path: Path) -> No
                 settings,
             )
     route.assert_not_called()
-    assert "Nova" in body["assistant_text"]
+    assert "Mochi" in body["assistant_text"]
+    assert "Nova" not in body["assistant_text"]
     assert body["tool_call"]["name"] == "slime_self_question"
 
 
@@ -220,13 +223,14 @@ def test_apply_voice_template_playful_navigate() -> None:
         persona=p,
         user_nickname_for_address="My master",
         profile_saved=True,
+        slime_type="generalized",
     )
     out = apply_voice_persona_template("Opening execution_calendar.", tool_name="navigate", eff=eff)
     assert "My master" in out
     assert "opening" in out.lower()
 
 
-def test_save_name_reload_effective(monkeypatch, tmp_path: Path) -> None:
+def test_legacy_profile_name_not_used_for_effective(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     uid = "u_save"
     (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
@@ -249,4 +253,4 @@ def test_save_name_reload_effective(monkeypatch, tmp_path: Path) -> None:
     )
     save_user_profile(loaded.model_copy(update={"slime_profile": merged}), settings=settings)
     eff = get_effective_slime_persona(settings)
-    assert eff.name == "MochiTwo"
+    assert eff.name == "Mochi"

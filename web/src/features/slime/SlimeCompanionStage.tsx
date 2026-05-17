@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { animate, motion, useMotionValue } from 'motion/react';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
+import type { SlimeType } from './slimeIdentity';
 import { cn } from '../../app/components/ui/utils';
 import type { SlimeProfile } from '../../app/model';
 import type { MemoryEvidenceItem } from '../../app/components/profile/memoryEvidenceTypes';
@@ -126,17 +127,22 @@ function memoryChipLabel(item: MemoryEvidenceItem): string {
  */
 export function SlimeCompanionStage({
   profile,
+  slimeType = 'generalized',
   advisorState = 'idle',
   speechOutput,
   decisionSuggestion,
   onEvidenceOpen,
+  onDoubleClickToggleCompanion,
   className,
 }: {
   profile: SlimeProfile;
+  slimeType?: SlimeType;
   advisorState?: SlimeAdvisorState;
   speechOutput?: SlimeSpeechOutput | null;
   decisionSuggestion?: SlimeDecisionSuggestion | null;
   onEvidenceOpen?: () => void;
+  /** Double-click slime to cycle Mochi ↔ Rimumu (Buddy page). */
+  onDoubleClickToggleCompanion?: () => void;
   /** Merged onto the stage root (e.g. z-index vs voice UI layers). */
   className?: string;
 }) {
@@ -151,6 +157,7 @@ export function SlimeCompanionStage({
   const [playBurst, setPlayBurst] = useState(0);
   const draggingRef = useRef(false);
   const cancelledRef = useRef(false);
+  const singleTapTimerRef = useRef<number | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [dragLim, setDragLim] = useState({ left: -175, right: 175, top: -175, bottom: 175 });
 
@@ -162,7 +169,7 @@ export function SlimeCompanionStage({
     roamY.set(cl.y);
   };
 
-  /** Every visit to Slime Buddy: start at stage center (no carry-over offset), then roam kicks in after the usual delay. */
+  /** Start at stage center on mount and when switching Mochi ↔ Rimumu (no carry-over offset). */
   useLayoutEffect(() => {
     roamX.set(0);
     roamY.set(0);
@@ -170,7 +177,16 @@ export function SlimeCompanionStage({
     dragY.set(0);
     fade.set(1);
     squish.set(1);
-  }, []);
+  }, [slimeType, dragX, dragY, fade, roamX, roamY, squish]);
+
+  useEffect(
+    () => () => {
+      if (singleTapTimerRef.current != null) {
+        window.clearTimeout(singleTapTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const el = stageRef.current;
@@ -244,7 +260,8 @@ export function SlimeCompanionStage({
     <div
       ref={stageRef}
       className={cn(
-        'pointer-events-none relative h-full min-h-[280px] w-full overflow-visible',
+        'pointer-events-none relative isolate h-full min-h-[280px] w-full overflow-visible',
+        speechOutput?.text && 'z-[100]',
         className,
       )}
     >
@@ -267,6 +284,7 @@ export function SlimeCompanionStage({
           dragElastic={0.06}
           dragConstraints={dragLim}
           whileDrag={{ cursor: 'grabbing' }}
+          onPointerDown={(e) => e.stopPropagation()}
           onDragStart={() => {
             draggingRef.current = true;
             setDragLim(computeDragLimits(stageRef.current, roamX.get(), roamY.get()));
@@ -281,7 +299,35 @@ export function SlimeCompanionStage({
             dragY.set(0);
             draggingRef.current = false;
           }}
-          onTap={() => setWiggle((n) => n + 1)}
+          title={
+            onDoubleClickToggleCompanion
+              ? 'Drag to move · Double-click to switch between Mochi and Rimumu'
+              : 'Drag to move'
+          }
+          onTap={() => {
+            if (!onDoubleClickToggleCompanion) {
+              setWiggle((n) => n + 1);
+              return;
+            }
+            if (singleTapTimerRef.current != null) {
+              window.clearTimeout(singleTapTimerRef.current);
+            }
+            singleTapTimerRef.current = window.setTimeout(() => {
+              setWiggle((n) => n + 1);
+              singleTapTimerRef.current = null;
+            }, 280);
+          }}
+          onDoubleClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (singleTapTimerRef.current != null) {
+              window.clearTimeout(singleTapTimerRef.current);
+              singleTapTimerRef.current = null;
+            }
+            if (!onDoubleClickToggleCompanion) return;
+            setPlayBurst((n) => n + 1);
+            onDoubleClickToggleCompanion();
+          }}
         >
           <motion.div
             key={playBurst}
@@ -300,7 +346,7 @@ export function SlimeCompanionStage({
               animate={wiggle > 0 ? { x: [0, -9, 9, -6, 6, 0], scale: [1, 1.06, 1.04, 1] } : { x: 0, scale: 1 }}
               transition={{ duration: wiggle > 0 ? 0.48 : 0 }}
             >
-              <SlimeAdvisor state={advisorState} size="lg" profile={profile} companionMode />
+              <SlimeAdvisor state={advisorState} size="lg" profile={profile} slimeType={slimeType} companionMode />
             </motion.div>
             {speechOutput?.text ? (
               <motion.div
@@ -310,7 +356,11 @@ export function SlimeCompanionStage({
                 exit={{ opacity: 0, y: 6, scale: 0.96 }}
                 transition={{ type: 'spring', stiffness: 420, damping: 26 }}
                 className={cn(
-                  'slime-comic-bubble pointer-events-auto absolute left-[72%] top-[-18%] z-20 max-w-[min(78vw,34rem)]',
+                  'slime-comic-bubble pointer-events-auto absolute z-[110]',
+                  /* Tail on bubble left edge (::before) points back toward slime — anchor on slime’s right */
+                  'left-[68%] top-[-16%] max-w-[min(78vw,34rem)]',
+                  slimeType === 'wellbeing' &&
+                    'sm:max-w-[min(28rem,calc(100vw-22rem))]',
                   speechOutput.source === 'error' && 'slime-comic-bubble-error',
                   speechOutput.source === 'system' && 'slime-comic-bubble-system',
                 )}
@@ -347,11 +397,6 @@ export function SlimeCompanionStage({
                       </button>
                     ) : null}
                   </div>
-                ) : null}
-                {decisionSuggestion?.should_show ? (
-                  <p className="mt-2 border-t border-fuchsia-100/80 pt-2 text-[11px] leading-snug text-violet-800/90">
-                    Decision report ready — confirm below when you want the full report.
-                  </p>
                 ) : null}
               </motion.div>
             ) : null}

@@ -7,6 +7,7 @@ from foresight_x.chat.thread_store import (
     append_message,
     create_thread,
     delete_thread,
+    list_threads,
     load_thread,
 )
 
@@ -84,6 +85,16 @@ def test_thread_persists_messages_across_mode_changes() -> None:
     assert len(loaded["messages"]) == 2
     assert loaded["messages"][0]["content"] == "hi"
     assert loaded["messages"][1]["content"] == "hello"
+
+
+def test_local_thread_list_uses_subsecond_creation_order() -> None:
+    a = create_thread(user_id="demo_user", title="Greeting")
+    b = create_thread(user_id="demo_user", title="German Kababs")
+    c = create_thread(user_id="demo_user", title="New chat")
+
+    listed = [t for t in list_threads(user_id="demo_user") if t["thread_id"] in {a["thread_id"], b["thread_id"], c["thread_id"]}]
+
+    assert [t["thread_id"] for t in listed[:3]] == [c["thread_id"], b["thread_id"], a["thread_id"]]
 
 
 def test_load_thread_strict_missing_raises() -> None:

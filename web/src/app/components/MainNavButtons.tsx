@@ -145,7 +145,7 @@ export function MainNavButtons({
           Calendar
         </button>
       </BuddyTooltip>
-      <BuddyTooltip content="Voice-first Slime buddy — quick chat, personalization, and playful companion mode.">
+      <BuddyTooltip content="Voice-first Mochi — quick chat, tools, memory, and decisions. Switch to Rimumu in About.">
         <button type="button" onClick={() => navigate('/buddy')} className={btnClass} style={btnStyle}>
           <NavIconSlot Icon={Ghost} compact={compact} colorClass="text-fuchsia-600" />
           {compact ? 'Buddy' : 'Slime buddy'}

@@ -4,6 +4,7 @@ import { cn } from '../ui/utils';
 import type { SlimeProfile } from '../../model';
 import { DEFAULT_SLIME_PROFILE } from '../../../hooks/useSlimeProfile';
 import { slimeThemePalette } from '../../../features/slime/slimeThemePalette';
+import type { SlimeType } from '../../../features/slime/slimeIdentity';
 
 export type SlimeAdvisorState =
   | 'idle'
@@ -20,8 +21,11 @@ export type SlimeAdvisorProps = {
   size?: 'sm' | 'md' | 'lg';
   className?: string;
   profile?: SlimeProfile;
+  slimeType?: SlimeType;
   /** Stronger hover / float — for buddy home, not dense report rows. */
   companionMode?: boolean;
+  /** Embedded in chat studio — centered, softer colors, less horizontal drift. */
+  studioScene?: boolean;
 };
 
 const sizeMap = { sm: 56, md: 76, lg: 104 } as const;
@@ -29,9 +33,18 @@ const sizeMap = { sm: 56, md: 76, lg: 104 } as const;
 /** Buddy-only expression cycle (2D — no 3D spin). */
 const BUDDY_MOOD_CYCLE_MS = 4200;
 
-export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, companionMode = false }: SlimeAdvisorProps) {
+export function SlimeAdvisor({
+  state = 'idle',
+  size = 'md',
+  className,
+  profile,
+  slimeType = 'generalized',
+  companionMode = false,
+  studioScene = false,
+}: SlimeAdvisorProps) {
   const p = profile ?? DEFAULT_SLIME_PROFILE;
-  const t = slimeThemePalette(p);
+  const t = slimeThemePalette(p, slimeType);
+  const isWellbeing = slimeType === 'wellbeing';
   const uid = useId().replace(/:/g, '');
   const dim = sizeMap[size];
   const [buddyMood, setBuddyMood] = useState(0);
@@ -64,7 +77,13 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
   if (p.personality === 'cautious') blinkDuration += 0.55;
   if (p.personality === 'playful') blinkDuration -= 0.45;
   const mouthSpeed = p.motion === 'expressive' ? 0.3 : 0.38;
-  const spread = dim * 2.45;
+  const spread = studioScene ? dim * 2.05 : dim * 2.45;
+  const bodyOpacity = isWellbeing ? 0.98 : 0.8;
+  const coreOpacity = isWellbeing ? 0.94 : 0.66;
+  const shouldShowProfileGlasses = p.accessory === 'glasses' && !isWellbeing && slimeType !== 'generalized';
+  const leftEyeX = 39.5;
+  const rightEyeX = 60.5;
+  const eyeStroke = isWellbeing ? 'rgba(180,104,121,0.72)' : 'rgba(59,130,246,0.76)';
 
   const shape =
     p.shape === 'orb'
@@ -99,7 +118,7 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
           {[0, 1, 2].map((i) => (
             <motion.div
               key={`listen-${i}`}
-              className="absolute rounded-full border-2 border-cyan-400/55"
+              className="absolute rounded-full border-2"
               style={{
                 width: dim * 0.55,
                 height: dim * 0.55,
@@ -107,7 +126,8 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
                 top: '50%',
                 marginLeft: -(dim * 0.275),
                 marginTop: -(dim * 0.275),
-                boxShadow: '0 0 18px rgba(34,211,238,0.35)',
+                borderColor: isWellbeing ? 'rgba(232,160,176,0.65)' : 'rgba(96,165,250,0.55)',
+                boxShadow: isWellbeing ? '0 0 18px rgba(232,160,176,0.35)' : '0 0 18px rgba(96,165,250,0.35)',
               }}
               initial={false}
               animate={{ scale: [0.95, 2.1], opacity: [0.45, 0] }}
@@ -122,8 +142,15 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
           {[0, 1, 2].map((i) => (
             <motion.span
               key={`mem-${i}`}
-              className="absolute h-2 w-2 rounded-full bg-cyan-300/80 shadow-[0_0_14px_rgba(34,211,238,0.45)]"
-              style={{ left: '50%', top: '50%', marginLeft: -4, marginTop: -4 }}
+              className="absolute h-2 w-2 rounded-full"
+              style={{
+                left: '50%',
+                top: '50%',
+                marginLeft: -4,
+                marginTop: -4,
+                backgroundColor: isWellbeing ? 'rgba(240,184,196,0.9)' : 'rgba(147,197,253,0.9)',
+                boxShadow: isWellbeing ? '0 0 14px rgba(232,160,176,0.45)' : '0 0 14px rgba(96,165,250,0.45)',
+              }}
               animate={{
                 x: [0, Math.cos((i / 3) * Math.PI * 2) * dim * 0.62, 0],
                 y: [0, Math.sin((i / 3) * Math.PI * 2) * dim * 0.44, 0],
@@ -152,8 +179,15 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
 
       <motion.div
         aria-hidden
-        className={cn('pointer-events-none absolute rounded-full blur-md', isCautious || p.personality === 'cautious' ? 'bg-amber-400/35' : 'bg-violet-400/30')}
-        style={{ width: dim * 1.35, height: dim * 1.35 }}
+        className={cn(
+          'pointer-events-none absolute rounded-full blur-md',
+          isCautious || p.personality === 'cautious' ? 'bg-amber-400/35' : undefined,
+        )}
+        style={{
+          width: dim * 1.35,
+          height: dim * 1.35,
+          background: `radial-gradient(circle, color-mix(in srgb, ${t.b} 42%, transparent) 0%, transparent 72%)`,
+        }}
         animate={
           isListening
             ? { opacity: [0.5, 0.95, 0.5], scale: [1, 1.08, 1] }
@@ -179,13 +213,25 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
             animate={
               companionMode
                 ? isListening
-                  ? { y: [0, -5, 0, -4, 0], x: [0, 2, -2, 0], rotateZ: [0, -2, 2, 0], scale: [1, 1.04, 1, 1.02, 1] }
-                  : {
-                      y: [0, -16, 0, -28, 0, -12, 0, -22, 0],
-                      x: [0, 7, -7, 0, -6, 6, 0],
-                      rotateZ: [0, -5, 5, -3.5, 3.5, 0],
-                      scale: [1, 1.03, 0.99, 1.02, 1],
+                  ? {
+                      y: [0, -5, 0, -4, 0],
+                      x: studioScene ? [0, 1, -1, 0] : [0, 2, -2, 0],
+                      rotateZ: [0, -2, 2, 0],
+                      scale: [1, 1.04, 1, 1.02, 1],
                     }
+                  : studioScene
+                    ? {
+                        y: [0, -10, 0, -14, 0],
+                        x: [0, 2, -2, 0],
+                        rotateZ: [0, -2.5, 2.5, 0],
+                        scale: [1, 1.02, 0.99, 1.01, 1],
+                      }
+                    : {
+                        y: [0, -16, 0, -28, 0, -12, 0, -22, 0],
+                        x: [0, 7, -7, 0, -6, 6, 0],
+                        rotateZ: [0, -5, 5, -3.5, 3.5, 0],
+                        scale: [1, 1.03, 0.99, 1.02, 1],
+                      }
                 : {
                     y: [0, -floatAmp, 0],
                     rotateX: [9, 11.2, 9],
@@ -202,25 +248,36 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
               width={dim}
               height={dim}
               viewBox="0 0 100 100"
-              className="block overflow-visible drop-shadow-[0_6px_14px_rgba(15,23,42,0.14)] drop-shadow-[0_18px_32px_rgba(79,70,229,0.18)]"
+              className={cn(
+                'block overflow-visible',
+                isWellbeing
+                  ? 'drop-shadow-[0_6px_14px_rgba(232,160,176,0.22)] drop-shadow-[0_16px_28px_rgba(240,184,196,0.28)]'
+                  : 'drop-shadow-[0_6px_14px_rgba(37,99,235,0.12)] drop-shadow-[0_16px_28px_rgba(96,165,250,0.22)]',
+              )}
               style={companionMode ? undefined : { transform: 'translateZ(12px)' }}
             >
           <defs>
             {/* Volume: radial + core tint for a soft "blob in space" read */}
-            <radialGradient id={gBody} cx="38%" cy="32%" r="72%" fx="32%" fy="26%">
-              <stop offset="0%" stopColor={t.b} stopOpacity="1" />
-              <stop offset="42%" stopColor={t.a} />
-              <stop offset="100%" stopColor={t.c} stopOpacity="1" />
+            <radialGradient id={gBody} cx="38%" cy="28%" r="78%" fx="34%" fy="22%">
+              <stop offset="0%" stopColor={t.c} stopOpacity="0.95" />
+              <stop offset="28%" stopColor={t.b} stopOpacity="1" />
+              <stop offset="58%" stopColor={t.a} stopOpacity="1" />
+              <stop offset="100%" stopColor={t.deep} stopOpacity="1" />
             </radialGradient>
             <radialGradient id={gBodyCore} cx="50%" cy="62%" r="58%">
-              <stop offset="0%" stopColor={t.a} stopOpacity="0.15" />
-              <stop offset="55%" stopColor={t.c} stopOpacity="0.55" />
-              <stop offset="100%" stopColor="#0f172a" stopOpacity="0.35" />
+              <stop offset="0%" stopColor={t.b} stopOpacity={isWellbeing ? '0.35' : '0.15'} />
+              <stop offset="55%" stopColor={t.c} stopOpacity={isWellbeing ? '0.5' : '0.55'} />
+              <stop offset="100%" stopColor={t.a} stopOpacity={isWellbeing ? '0.22' : '0.35'} />
             </radialGradient>
-            <radialGradient id={gSpecular} cx="40%" cy="30%" r="45%">
-              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.72" />
-              <stop offset="35%" stopColor="#ffffff" stopOpacity="0.22" />
+            <radialGradient id={gSpecular} cx="36%" cy="26%" r="48%">
+              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.88" />
+              <stop offset="28%" stopColor="#ffffff" stopOpacity="0.35" />
               <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+            </radialGradient>
+            <radialGradient id={`rim-${uid}`} cx="72%" cy="68%" r="42%">
+              <stop offset="0%" stopColor={t.b} stopOpacity={isWellbeing ? '0.32' : '0.38'} />
+              <stop offset="72%" stopColor={t.c} stopOpacity={isWellbeing ? '0.16' : '0.2'} />
+              <stop offset="100%" stopColor={t.a} stopOpacity="0" />
             </radialGradient>
             <linearGradient id={gGlass} x1="22%" y1="0%" x2="55%" y2="85%">
               <stop offset="0%" stopColor="white" stopOpacity="0.62" />
@@ -237,6 +294,17 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
             <filter id={`ground-${uid}`} x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="2.2" />
             </filter>
+            <filter id={`premium-${uid}`} x="-25%" y="-25%" width="150%" height="150%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="2.8" result="blur" />
+              <feOffset in="blur" dx="0" dy="2" result="offsetBlur" />
+              <feComponentTransfer in="offsetBlur" result="shadow">
+                <feFuncA type="linear" slope="0.28" />
+              </feComponentTransfer>
+              <feMerge>
+                <feMergeNode in="shadow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
           </defs>
 
           <motion.g
@@ -252,11 +320,12 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
               cy={71}
               rx={shape.rx * 0.78}
               ry={shape.ry * 0.2}
-              fill="rgba(15,23,42,0.2)"
+              fill={isWellbeing ? 'rgba(232, 160, 176, 0.14)' : 'rgba(59, 130, 246, 0.12)'}
               filter={`url(#ground-${uid})`}
               opacity={0.85}
             />
             <motion.g
+              filter={`url(#premium-${uid})`}
               animate={isSpeaking ? { y: [0, 0.45, 0] } : { y: 0 }}
               transition={{ duration: bodySpeed * 2, repeat: Infinity, ease: 'easeInOut' }}
             >
@@ -267,8 +336,9 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
                 ry={shape.ry}
                 initial={{ rx: shape.rx, ry: shape.ry }}
                 fill={`url(#${gBody})`}
-                stroke="rgba(255,255,255,0.42)"
-                strokeWidth={1.35}
+                fillOpacity={bodyOpacity}
+                stroke="rgba(255,255,255,0.34)"
+                strokeWidth={0.9}
                 animate={
                   isSpeaking
                     ? { rx: [shape.rx - 2, shape.rx + 2, shape.rx - 1], ry: [shape.ry - 2, shape.ry + 2, shape.ry - 1] }
@@ -285,18 +355,75 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
               <ellipse
                 cx={50}
                 cy={54}
-                rx={shape.rx * 0.98}
-                ry={shape.ry * 0.98}
+                rx={shape.rx * 0.96}
+                ry={shape.ry * 0.95}
                 fill={`url(#${gBodyCore})`}
-                style={{ mixBlendMode: 'multiply' }}
+                opacity={coreOpacity}
+                style={{ mixBlendMode: isWellbeing ? 'soft-light' : 'multiply' }}
                 pointerEvents="none"
               />
               <ellipse
+                cx={50}
+                cy={54}
+                rx={shape.rx * 0.88}
+                ry={shape.ry * 0.84}
+                fill="rgba(255,255,255,0.12)"
+                style={{ mixBlendMode: 'screen' }}
+                pointerEvents="none"
+              />
+              {isWellbeing ? (
+                <motion.g
+                  pointerEvents="none"
+                  animate={{
+                    rotate: [-1.8, 2.2, -1.2],
+                    x: [-0.8, 0.9, -0.4],
+                    y: [0.4, -0.7, 0.4],
+                  }}
+                  transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
+                  style={{ transformOrigin: '50px 25px' }}
+                >
+                  <ellipse
+                    cx={50}
+                    cy={24}
+                    rx={16}
+                    ry={5.1}
+                    fill="none"
+                    stroke="rgba(255, 218, 112, 0.72)"
+                    strokeWidth={1.55}
+                  />
+                  <ellipse
+                    cx={50}
+                    cy={24}
+                    rx={12.5}
+                    ry={3.4}
+                    fill="rgba(255, 246, 197, 0.16)"
+                  />
+                </motion.g>
+              ) : null}
+              <ellipse
                 cx={44}
                 cy={42}
-                rx={shape.rx * 0.52}
-                ry={shape.ry * 0.38}
+                rx={shape.rx * 0.56}
+                ry={shape.ry * 0.42}
                 fill={`url(#${gSpecular})`}
+                style={{ mixBlendMode: 'soft-light' }}
+                pointerEvents="none"
+              />
+              <path
+                d="M25 50 C30 29, 48 18, 66 27"
+                fill="none"
+                stroke="rgba(255,255,255,0.22)"
+                strokeWidth={3.8}
+                strokeLinecap="round"
+                opacity={isWellbeing ? 0.55 : 0.42}
+                pointerEvents="none"
+              />
+              <ellipse
+                cx={62}
+                cy={58}
+                rx={shape.rx * 0.42}
+                ry={shape.ry * 0.32}
+                fill={`url(#rim-${uid})`}
                 style={{ mixBlendMode: 'soft-light' }}
                 pointerEvents="none"
               />
@@ -316,35 +443,35 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
               >
                 {companionMode && !isSpeaking && buddyMood === 3 ? (
                   <>
-                    <ellipse cx={38} cy={shape.eyeY} rx={3.7} ry={1.05} className="fill-white" stroke="rgba(129,140,248,0.9)" strokeWidth={0.6} />
-                    <ellipse cx={62} cy={shape.eyeY} rx={3.7} ry={1.05} className="fill-white" stroke="rgba(129,140,248,0.9)" strokeWidth={0.6} />
+                    <ellipse cx={leftEyeX} cy={shape.eyeY} rx={4.65} ry={1.35} className="fill-white" stroke={eyeStroke} strokeWidth={0.65} />
+                    <ellipse cx={rightEyeX} cy={shape.eyeY} rx={4.65} ry={1.35} className="fill-white" stroke={eyeStroke} strokeWidth={0.65} />
                   </>
                 ) : (
                   <>
                     <circle
-                      cx={38}
+                      cx={leftEyeX}
                       cy={shape.eyeY + (companionMode && !isSpeaking && buddyMood === 1 ? -0.6 : 0)}
-                      r={companionMode && !isSpeaking ? (buddyMood === 2 ? 4.4 : buddyMood === 1 ? 2.75 : 3.2) : 3.2}
+                      r={companionMode && !isSpeaking ? (buddyMood === 2 ? 5.25 : buddyMood === 1 ? 3.55 : 4.05) : 4.05}
                       className={cn('fill-white', isCautious ? 'opacity-95' : 'opacity-100')}
-                      stroke="rgba(129,140,248,0.9)"
-                      strokeWidth={0.6}
+                      stroke={eyeStroke}
+                      strokeWidth={0.65}
                     />
                     <circle
-                      cx={62}
+                      cx={rightEyeX}
                       cy={shape.eyeY + (companionMode && !isSpeaking && buddyMood === 1 ? -0.6 : 0)}
-                      r={companionMode && !isSpeaking ? (buddyMood === 2 ? 4.4 : buddyMood === 1 ? 2.75 : 3.2) : 3.2}
+                      r={companionMode && !isSpeaking ? (buddyMood === 2 ? 5.25 : buddyMood === 1 ? 3.55 : 4.05) : 4.05}
                       className="fill-white"
-                      stroke="rgba(129,140,248,0.9)"
-                      strokeWidth={0.6}
+                      stroke={eyeStroke}
+                      strokeWidth={0.65}
                     />
                   </>
                 )}
               </motion.g>
-              {p.accessory === 'glasses' ? (
-                <g stroke="rgba(30,41,59,0.65)" fill="none" strokeWidth={1.2}>
-                  <circle cx={38} cy={shape.eyeY} r={5.3} />
-                  <circle cx={62} cy={shape.eyeY} r={5.3} />
-                  <path d="M43 40 L57 40" />
+              {shouldShowProfileGlasses ? (
+                <g stroke={isWellbeing ? 'rgba(201,123,139,0.55)' : 'rgba(59,130,246,0.5)'} fill="none" strokeWidth={1.2}>
+                  <circle cx={leftEyeX} cy={shape.eyeY} r={5.6} />
+                  <circle cx={rightEyeX} cy={shape.eyeY} r={5.6} />
+                  <path d={`M46.5 ${shape.eyeY} L53.5 ${shape.eyeY}`} />
                 </g>
               ) : null}
               {p.accessory === 'antenna' ? (
@@ -353,7 +480,9 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
                   <circle cx={50} cy={11} r={1.8} fill="rgba(56,189,248,0.95)" />
                 </g>
               ) : null}
-              {p.accessory === 'halo' ? <ellipse cx={50} cy={20} rx={13} ry={4} fill="none" stroke="rgba(250,204,21,0.7)" strokeWidth={1.2} /> : null}
+              {p.accessory === 'halo' && !isWellbeing ? (
+                <ellipse cx={50} cy={20} rx={13} ry={4} fill="none" stroke="rgba(250,204,21,0.7)" strokeWidth={1.2} />
+              ) : null}
               {p.accessory === 'scarf' ? <path d="M35 66 Q50 72 65 66" fill="none" stroke="rgba(244,114,182,0.82)" strokeWidth={2.2} /> : null}
             </motion.g>
           </g>
@@ -361,28 +490,39 @@ export function SlimeAdvisor({ state = 'idle', size = 'md', className, profile, 
           <motion.ellipse
             cx={50}
             cy={shape.mouthY + (companionMode && !isSpeaking && buddyMood === 1 ? -1.2 : 0)}
-            rx={5.5}
-            ry={1.2}
-            fill="rgba(30,27,75,0.35)"
-            initial={{ rx: 5.5, ry: 1.2 }}
+            rx={6.3}
+            ry={1.55}
+            fill={isWellbeing ? 'rgba(145, 71, 86, 0.58)' : 'rgba(30, 64, 175, 0.48)'}
+            initial={{ rx: 6.3, ry: 1.55 }}
             animate={
               isSpeaking
-                ? { ry: [1.8, 4.2, 2.4, 3.8, 2], opacity: 0.85, rx: 5.5 }
+                ? { ry: [2.2, 4.8, 2.7, 4.3, 2.1], opacity: 0.92, rx: 6.4 }
                 : companionMode
                   ? buddyMood === 0
-                    ? { rx: 5.5, ry: 1.25, opacity: 0.38 }
+                    ? { rx: 6.3, ry: 1.55, opacity: 0.58 }
                     : buddyMood === 1
-                      ? { rx: 8.2, ry: 2.7, opacity: 0.48 }
+                      ? { rx: 8.8, ry: 3, opacity: 0.66 }
                       : buddyMood === 2
-                        ? { rx: 4.2, ry: 4.6, opacity: 0.52 }
-                        : { rx: 6.5, ry: 1, opacity: 0.3 }
-                  : { ry: 1.2, opacity: 0.35, rx: 5.5 }
+                        ? { rx: 4.7, ry: 5, opacity: 0.7 }
+                        : { rx: 7, ry: 1.25, opacity: 0.48 }
+                  : { ry: 1.55, opacity: 0.56, rx: 6.3 }
             }
             transition={
               isSpeaking ? { duration: mouthSpeed, repeat: Infinity, ease: 'easeInOut' } : companionMode ? { duration: 0.4, ease: 'easeOut' } : { duration: 0.25 }
             }
             data-testid="slime-mouth"
           />
+          {isWellbeing && !isSpeaking ? (
+            <motion.path
+              d={`M43 ${shape.mouthY - 0.6} Q50 ${shape.mouthY + 4.8} 57 ${shape.mouthY - 0.6}`}
+              fill="none"
+              stroke="rgba(145, 71, 86, 0.58)"
+              strokeWidth={2}
+              strokeLinecap="round"
+              animate={companionMode ? { opacity: [0.68, 0.92, 0.68] } : { opacity: 0.82 }}
+              transition={{ duration: 2.4, repeat: companionMode ? Infinity : 0, ease: 'easeInOut' }}
+            />
+          ) : null}
           {p.shape === 'ghost' ? <path d="M28 74 C34 70, 40 78, 46 74 C52 70, 58 78, 64 74 C68 72, 70 74, 72 76" fill="none" stroke="rgba(255,255,255,0.28)" strokeWidth={1.4} /> : null}
             </svg>
           </motion.div>

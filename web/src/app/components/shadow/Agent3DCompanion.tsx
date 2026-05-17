@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../report/SlimeAdvisor';
 import { useSlimeProfile } from '../../../hooks/useSlimeProfile';
 import { slimeThemePalette } from '../../../features/slime/slimeThemePalette';
+import { getSlimeIdentity, studioBackgroundStyle, type SlimeType } from '../../../features/slime/slimeIdentity';
 import type { AgentStatus } from './types';
 
 export type AgentMode =
@@ -128,24 +129,46 @@ function QuestionMarks({ show }: { show: boolean }) {
   );
 }
 
-function StudioScene({ mood }: { mood: StudioMood }) {
+function StudioScene({ mood, slimeType }: { mood: StudioMood; slimeType: SlimeType }) {
   const { slimeProfile } = useSlimeProfile();
-  const t = slimeThemePalette(slimeProfile);
+  const t = slimeThemePalette(slimeProfile, slimeType);
+  const ident = getSlimeIdentity(slimeType);
   const cssVars = {
-    '--slime-studio-accent': mood.accent,
-    '--slime-studio-glow': mood.glow,
+    '--slime-studio-accent': ident.theme.accent,
+    '--slime-studio-glow': t.glow,
     '--slime-studio-desk': mood.desk,
     '--slime-studio-profile-a': t.a,
     '--slime-studio-profile-b': t.b,
     '--slime-studio-profile-c': t.c,
+    '--slime-studio-deep': t.deep,
   } as CSSProperties;
 
   return (
-    <div className="slime-studio-frame" style={cssVars}>
-      <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[#fff7fd] via-[#f6f3ff] to-[#eff9ff]" />
-      <div className="absolute left-6 top-6 h-12 w-12 rounded-full bg-white/45" aria-hidden="true" />
-      <div className="absolute right-10 top-8 h-5 w-5 rounded-full bg-white/45 blur-[1px]" aria-hidden="true" />
-      <div className="absolute right-16 top-12 h-2.5 w-2.5 rounded-full bg-violet-200/55" aria-hidden="true" />
+    <div className="slime-studio-frame" data-slime-type={slimeType} style={cssVars}>
+      <div
+        className="absolute inset-0 rounded-2xl"
+        style={{
+          background:
+            slimeType === 'wellbeing'
+              ? 'transparent'
+              : studioBackgroundStyle(slimeType),
+        }}
+      />
+      <div
+        className="absolute left-6 top-6 h-12 w-12 rounded-full"
+        style={{ backgroundColor: ident.theme.highlight }}
+        aria-hidden="true"
+      />
+      <div
+        className="absolute right-10 top-8 h-5 w-5 rounded-full blur-[1px]"
+        style={{ backgroundColor: ident.theme.secondary }}
+        aria-hidden="true"
+      />
+      <div
+        className="absolute right-16 top-12 h-2.5 w-2.5 rounded-full opacity-70"
+        style={{ backgroundColor: ident.theme.accent }}
+        aria-hidden="true"
+      />
       <div className={`slime-studio-aura slime-studio-aura-${mood.aura}`} aria-hidden="true" />
       <QuestionMarks show={mood.aura === 'questions'} />
       {mood.aura === 'rings' ? (
@@ -158,7 +181,14 @@ function StudioScene({ mood }: { mood: StudioMood }) {
       {mood.aura === 'error' ? <span className="slime-studio-error-streak" aria-hidden="true" /> : null}
 
       <div className="slime-studio-advisor-wrap" aria-label={mood.label}>
-        <SlimeAdvisor state={mood.advisorState} size="lg" profile={slimeProfile} companionMode />
+        <SlimeAdvisor
+          state={mood.advisorState}
+          size="lg"
+          profile={slimeProfile}
+          slimeType={slimeType}
+          companionMode
+          studioScene
+        />
       </div>
 
       <div className="slime-studio-desk" aria-hidden="true">
@@ -180,27 +210,60 @@ function StudioScene({ mood }: { mood: StudioMood }) {
 
 export function Agent3DCompanion({
   mode,
+  slimeType = 'generalized',
   onToggleTooltip,
+  disableSceneClick = false,
 }: {
   mode: AgentStatus;
+  slimeType?: SlimeType;
   onToggleTooltip?: () => void;
   forceFallback?: boolean;
+  /** When true, scene is not a button (rail handles tooltip). */
+  disableSceneClick?: boolean;
 }) {
   const mappedMode = (mode === 'report_open' ? 'report_open' : mode) as AgentMode;
-  const mood = MOODS[mappedMode] ?? MOODS.idle;
+  const baseMood = MOODS[mappedMode] ?? MOODS.idle;
+  const ident = getSlimeIdentity(slimeType);
+  const mood: StudioMood = {
+    ...baseMood,
+    accent: ident.theme.accent,
+    glow: ident.theme.glow,
+    desk: ident.theme.surface,
+  };
+
+  const scene = <StudioScene mood={mood} slimeType={slimeType} />;
+
+  if (disableSceneClick) {
+    return (
+      <div
+        className="h-[220px] w-full overflow-hidden rounded-2xl border shadow-sm"
+        style={{
+          borderColor: ident.theme.border,
+          background: studioBackgroundStyle(slimeType),
+        }}
+        aria-label={`${ident.shortName} companion`}
+      >
+        {scene}
+      </div>
+    );
+  }
 
   return (
     <div
-      className="h-[220px] w-full overflow-hidden rounded-2xl border border-white/85 bg-gradient-to-br from-[#fff7fd] via-[#f6f3ff] to-[#eff9ff]"
+      className="h-[220px] w-full overflow-hidden rounded-2xl border shadow-sm"
+      style={{
+        borderColor: ident.theme.border,
+        background: studioBackgroundStyle(slimeType),
+      }}
       onClick={onToggleTooltip}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onToggleTooltip?.();
       }}
-      aria-label="Interactive Shadow companion"
+      aria-label={`${ident.shortName} companion`}
     >
-      <StudioScene mood={mood} />
+      {scene}
     </div>
   );
 }

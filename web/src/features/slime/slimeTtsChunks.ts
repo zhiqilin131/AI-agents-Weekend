@@ -1,26 +1,27 @@
-/** Helpers to start Slime Buddy TTS earlier (smaller first chunk, fuzzy prefetch match). */
+/** Helpers to start Slime Buddy TTS earlier (first full sentence, then the rest). */
 
 export function normalizeSpeechText(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-/** First chunk worth sending to TTS — lower bar than a full sentence. */
-export function firstSpeakableChunk(text: string): string {
+/** First complete sentence — used for early stream playback. */
+export function firstSpeakableSentence(text: string): string {
   const t = normalizeSpeechText(text);
-  if (t.length < 10) return '';
-  const sentence = t.match(/^(.{10,200}?[.!?。！？])(\s|$)/);
-  if (sentence?.[1]) return sentence[1].trim();
-  if (t.length >= 28) {
-    const slice = t.slice(0, 80);
-    const lastSpace = slice.lastIndexOf(' ');
-    if (lastSpace >= 14) return slice.slice(0, lastSpace).trim();
-  }
-  return t.slice(0, Math.min(56, t.length)).trim();
+  if (t.length < 8) return '';
+  const sentence = t.match(/^(.{8,220}?[.!?。！？])(\s|$)/);
+  return sentence?.[1]?.trim() ?? '';
 }
 
-/** @deprecated Use firstSpeakableChunk — kept for tests migrating from old helper name. */
-export function firstSpeakableSentence(text: string): string {
-  return firstSpeakableChunk(text);
+/** Prefetch chunk — prefer a full sentence, else a short clause. */
+export function firstSpeakableChunk(text: string): string {
+  const sentence = firstSpeakableSentence(text);
+  if (sentence) return sentence;
+  const t = normalizeSpeechText(text);
+  if (t.length < 28) return '';
+  const slice = t.slice(0, 80);
+  const lastSpace = slice.lastIndexOf(' ');
+  if (lastSpace >= 14) return slice.slice(0, lastSpace).trim();
+  return t.slice(0, Math.min(56, t.length)).trim();
 }
 
 export function ttsPrefetchMatchesFinal(prefetched: string, finalText: string): boolean {

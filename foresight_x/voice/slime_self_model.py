@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from foresight_x.config import Settings
 from foresight_x.profile.store import load_user_profile
+from foresight_x.profile.user_address import resolve_user_preferred_name
 from foresight_x.schemas import SlimeSelfModel, SlimeProfile
+from foresight_x.slime.identity import SlimeType, get_slime_identity
 from foresight_x.voice.slime_persona_prompt import merge_slime_persona_defaults
-from foresight_x.voice.slime_text_safety import is_safe_slime_display_name
 
 
 _DEFAULT_ABILITIES = (
@@ -32,26 +33,39 @@ _DEFAULT_BOUNDARIES = (
 )
 
 
-def get_effective_slime_self_model(user_id: str, *, settings: Settings) -> SlimeSelfModel:
+def get_effective_slime_self_model(
+    user_id: str,
+    *,
+    settings: Settings,
+    slime_type: SlimeType = "generalized",
+) -> SlimeSelfModel:
     """
     Canonical slime self model for ``user_id``.
     ``settings.foresight_user_id`` should match ``user_id`` for authenticated requests.
+    Slime display name is fixed per ``slime_type`` (not user-customizable).
     """
     _ = (user_id or "").strip()  # reserved for multi-tenant checks
+    ident = get_slime_identity(slime_type)
     prof = load_user_profile(settings)
     sp = prof.slime_profile
     profile_saved = sp is not None
-    raw_name = str(sp.name if sp else "").strip()[:24] if sp else ""
-    stored = raw_name or "Mochi"
-    name_safe = is_safe_slime_display_name(stored)
-    spoken = stored if name_safe else "your Slime Buddy"
+    stored = ident.ui_spoken_name
+    spoken = ident.ui_spoken_name
 
-    persona = merge_slime_persona_defaults(sp.persona if sp else None)
+    persona = merge_slime_persona_defaults(ident.fixed_persona)
+    if sp and sp.persona:
+        stored_persona = merge_slime_persona_defaults(sp.persona)
+        if stored_persona.companion_relationship:
+            persona = persona.model_copy(
+                update={"companion_relationship": stored_persona.companion_relationship}
+            )
+    nick = resolve_user_preferred_name(prof)
+    if nick:
+        persona = persona.model_copy(update={"user_nickname": nick})
     preset = persona.personality_preset.value if hasattr(persona.personality_preset, "value") else str(persona.personality_preset)
     tone = persona.tone.value if hasattr(persona.tone, "value") else str(persona.tone)
 
     rel = persona.companion_relationship or "helper_pet_companion"
-    nick = (persona.user_nickname or "").strip() or None
 
     return SlimeSelfModel(
         name=stored,
@@ -69,16 +83,17 @@ def get_effective_slime_self_model(user_id: str, *, settings: Settings) -> Slime
         limitations=list(_DEFAULT_LIMITATIONS),
         boundaries=list(_DEFAULT_BOUNDARIES),
         profile_saved=profile_saved,
-        name_safe_for_ui=name_safe,
+        name_safe_for_ui=True,
         spoken_name=spoken,
     )
 
 
-def slime_profile_for_prompt(sp: SlimeProfile | None) -> tuple[str, bool]:
-    """Resolved slime name for prompts (never unsafe verbatim)."""
-    if not sp:
-        return "Mochi", True
-    raw = str(sp.name or "").strip()[:24] or "Mochi"
-    if is_safe_slime_display_name(raw):
-        return raw, True
-    return "your Slime Buddy", False
+def slime_profile_for_prompt(
+    sp: SlimeProfile | None,
+    *,
+    slime_type: SlimeType = "generalized",
+) -> tuple[str, bool]:
+    """Resolved slime name for prompts — fixed per Slime type."""
+    _ = sp
+    ident = get_slime_identity(slime_type)
+    return ident.ui_spoken_name, True

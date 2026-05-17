@@ -84,6 +84,13 @@ Assistant response / tool result summary:
 
 Return JSON matching ProactiveMemoryExtract."""
 
+_WELLBEING_CONSERVATIVE_ADDENDUM = """
+Wellbeing (Rimumu) mode — extract conservatively:
+- Prefer generalized coping preferences, values, patterns, support style, what helped.
+- Do NOT extract diagnoses, medications, trauma/self-harm/sexual detail, or raw venting.
+- If sensitive detail would help, use a generalized non-sensitive version only when clearly durable.
+"""
+
 
 def _coerce_category(raw: str) -> MemoryFactCategory:
     return {
@@ -92,6 +99,7 @@ def _coerce_category(raw: str) -> MemoryFactCategory:
         "behavior": MemoryFactCategory.BEHAVIOR,
         "goals": MemoryFactCategory.GOALS,
         "constraints": MemoryFactCategory.CONSTRAINTS,
+        "wellbeing": MemoryFactCategory.WELLBEING,
         "other": MemoryFactCategory.OTHER,
     }.get(str(raw or "").strip().lower(), MemoryFactCategory.OTHER)
 
@@ -133,6 +141,7 @@ def _drafts_with_llm(
     user_text: str,
     assistant_text: str,
     llm_model: str | None,
+    wellbeing_conservative: bool = False,
 ) -> list[ProactiveMemoryDraft]:
     if not (settings.openai_api_key or "").strip():
         return _heuristic_drafts(user_text)
@@ -142,12 +151,35 @@ def _drafts_with_llm(
         user_text=user_text.strip()[:3000],
         assistant_text=assistant_text.strip()[:1600],
     )
+    if wellbeing_conservative:
+        prompt += _WELLBEING_CONSERVATIVE_ADDENDUM
     try:
         ext = structured_predict(llm, ProactiveMemoryExtract, prompt)
     except Exception as exc:
         _log.debug("proactive memory extraction failed; using heuristic fallback: %s", exc)
         return _heuristic_drafts(user_text)
     return list(ext.memory_facts or [])[:8]
+
+
+def extract_memory_drafts_from_turn(
+    *,
+    settings: Settings,
+    user_text: str,
+    assistant_text: str = "",
+    llm_model: str | None = None,
+    wellbeing_conservative: bool = False,
+) -> list[ProactiveMemoryDraft]:
+    """Extract memory draft rows only (no persist). Used when the main turn omits memory_facts."""
+    user_text = (user_text or "").strip()
+    if len(user_text) < 8:
+        return []
+    return _drafts_with_llm(
+        settings=settings,
+        user_text=user_text,
+        assistant_text=assistant_text,
+        llm_model=llm_model,
+        wellbeing_conservative=wellbeing_conservative,
+    )
 
 
 def capture_turn_memory(
@@ -159,6 +191,7 @@ def capture_turn_memory(
     source_thread_id: str = "",
     source_message_id: str = "",
     llm_model: str | None = None,
+    wellbeing_mode: bool = False,
 ) -> ProactiveMemoryCaptureResult:
     """Extract, filter, merge, and persist durable memories from one conversation/tool turn."""
     user_text = (user_text or "").strip()
@@ -170,6 +203,7 @@ def capture_turn_memory(
         user_text=user_text,
         assistant_text=assistant_text,
         llm_model=llm_model,
+        wellbeing_conservative=wellbeing_mode,
     )
     if not drafts:
         return ProactiveMemoryCaptureResult(events=[], saved_texts=[])
@@ -220,15 +254,22 @@ def capture_turn_memory(
             importance=float(d.importance or 0.5),
             retrieval_tags=[str(x).strip() for x in (d.retrieval_tags or []) if str(x).strip()],
         )
-        records.append(
-            enrich_memory_fact(
-                rec,
-                source_chat=source_chat,
-                source_thread_id=source_thread_id,
-                source_message_id=source_message_id,
-                extra_text=user_text,
-            )
+        enriched = enrich_memory_fact(
+            rec,
+            source_chat=source_chat,
+            source_thread_id=source_thread_id,
+            source_message_id=source_message_id,
+            extra_text=user_text,
         )
+        if wellbeing_mode:
+            from foresight_x.profile.wellbeing_memory import tag_wellbeing_memory_fact
+
+            enriched = tag_wellbeing_memory_fact(
+                enriched,
+                record_type="session_insight",
+                thread_id=source_thread_id,
+            )
+        records.append(enriched)
 
     if not records:
         return ProactiveMemoryCaptureResult(events=[], saved_texts=[])

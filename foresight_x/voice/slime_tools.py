@@ -726,6 +726,54 @@ def tool_open_shadow_chat(args: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     }
 
 
+_PERSONALIZATION_KEYS = frozenset(
+    {
+        "color_theme",
+        "custom_colors",
+        "personality",
+        "shape",
+        "accessory",
+        "motion",
+        "voice",
+    }
+)
+
+
+def _reject_slime_personalization_patch(raw_patch: dict[str, Any]) -> str | None:
+    """Slime appearance, voice, speaking style, and display name are fixed per Slime type."""
+    if "name" in raw_patch:
+        return (
+            "Slime names are fixed — switch between Mochi (everyday companion) and Rimumu (wellbeing) "
+            "in Slime Chat / About instead of renaming."
+        )
+    if any(k in raw_patch for k in _PERSONALIZATION_KEYS):
+        return (
+            "Slime color, shape, voice, and speaking style are fixed now — "
+            "use Generalized Slime or Wellbeing Slime instead of customizing."
+        )
+    persona = raw_patch.get("persona")
+    if isinstance(persona, dict):
+        blocked = {
+            "tone",
+            "warmth",
+            "humor",
+            "directness",
+            "reply_length",
+            "personality_preset",
+            "personalityPreset",
+            "role_identity",
+            "roleIdentity",
+            "catchphrases",
+            "donts",
+        }
+        if any(k in persona for k in blocked):
+            return (
+                "Speaking style and persona sliders are fixed per Slime type — "
+                "switch to Wellbeing Slime for structured emotional support."
+            )
+    return None
+
+
 def tool_update_slime_profile(
     args: dict[str, Any],
     *,
@@ -736,62 +784,16 @@ def tool_update_slime_profile(
     if not isinstance(raw_patch, dict):
         return {"ok": False, "error": "invalid_patch"}, {"type": "none"}
 
+    blocked = _reject_slime_personalization_patch(raw_patch)
+    if blocked:
+        return {"ok": False, "error": "personalization_disabled", "message": blocked}, {"type": "none"}
+
     existing = load_user_profile(settings)
     base_prof = existing.slime_profile or SlimeProfile(name="Mochi", updated_at="")
 
     # Build validated partial patch
     patch_in: dict[str, Any] = {}
     nickname_patch_requested = False
-    if "name" in raw_patch:
-        name = str(raw_patch.get("name") or "").strip()
-        if name:
-            patch_in["name"] = name[:24]
-    if "color_theme" in raw_patch and raw_patch["color_theme"] is not None:
-        try:
-            patch_in["color_theme"] = SlimeColorTheme(str(raw_patch["color_theme"]).strip().lower())
-        except ValueError:
-            return {"ok": False, "error": "invalid_color_theme"}, {"type": "none"}
-    if raw_patch.get("custom_colors") is not None:
-        cc = raw_patch.get("custom_colors")
-        if isinstance(cc, dict):
-            try:
-                patch_in["custom_colors"] = SlimeCustomColors.model_validate(cc)
-            except ValidationError:
-                return {"ok": False, "error": "invalid_custom_colors"}, {"type": "none"}
-    for key, enum_cls in (
-        ("personality", SlimePersonality),
-        ("shape", SlimeShape),
-        ("accessory", SlimeAccessory),
-        ("motion", SlimeMotion),
-    ):
-        if key in raw_patch and raw_patch[key] is not None:
-            try:
-                patch_in[key] = enum_cls(str(raw_patch[key]).strip().lower())
-            except ValueError:
-                return {"ok": False, "error": f"invalid_{key}"}, {"type": "none"}
-
-    if raw_patch.get("voice") is not None:
-        vraw = raw_patch.get("voice")
-        if isinstance(vraw, dict):
-            v2 = dict(vraw)
-            if "preferredVoiceName" in v2 and "preferred_voice_name" not in v2:
-                v2["preferred_voice_name"] = v2.pop("preferredVoiceName")
-            base_voice = (base_prof.voice or SlimeVoicePreferences()).model_dump(mode="json")
-            overlay: dict[str, Any] = {}
-            if "enabled" in v2:
-                overlay["enabled"] = bool(v2["enabled"])
-            if "rate" in v2:
-                overlay["rate"] = v2["rate"]
-            if "pitch" in v2:
-                overlay["pitch"] = v2["pitch"]
-            if "preferred_voice_name" in v2:
-                overlay["preferred_voice_name"] = v2["preferred_voice_name"]
-            try:
-                merged_voice = {**base_voice, **overlay}
-                patch_in["voice"] = SlimeVoicePreferences.model_validate(merged_voice)
-            except ValidationError:
-                return {"ok": False, "error": "invalid_voice"}, {"type": "none"}
-
     persona_fragments: dict[str, Any] = (
         dict(raw_patch["persona"]) if isinstance(raw_patch.get("persona"), dict) else {}
     )
@@ -850,7 +852,15 @@ def tool_update_slime_profile(
     base = base_prof
     merged = base.model_copy(update=patch_in)
     merged.updated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    updated_profile = existing.model_copy(update={"slime_profile": merged})
+    profile_update: dict[str, Any] = {"slime_profile": merged}
+    new_nick = ""
+    if isinstance(patch_in.get("persona"), SlimePersona):
+        new_nick = (patch_in["persona"].user_nickname or "").strip()
+    elif isinstance(patch_in.get("persona"), dict):
+        new_nick = str(patch_in["persona"].get("user_nickname") or "").strip()
+    if new_nick:
+        profile_update["preferred_name"] = new_nick[:48]
+    updated_profile = existing.model_copy(update=profile_update)
     save_user_profile(updated_profile, settings=settings)
     return {"ok": True, "slime_profile": merged.model_dump(mode="json")}, {"type": "none", "payload": {}}
 

@@ -46,6 +46,8 @@ from foresight_x.shadow.thread_context import (
     is_local_context_question,
 )
 from foresight_x.shadow.store import ShadowSelfState, load_shadow_self, merge_observation, save_shadow_self
+from foresight_x.slime.identity import SlimeType, normalize_slime_type
+from foresight_x.slime.prompts import generalized_slime_instructions, wellbeing_slime_instructions
 from foresight_x.structured_predict import structured_predict
 
 _log = logging.getLogger(__name__)
@@ -264,6 +266,45 @@ def _thread_ctx_type(cls: MemoryDurabilityResult, fact: ProfileMemoryFact) -> st
     return "current_topic"
 
 
+def _shadow_drafts_from_proactive(drafts: list[Any]) -> list[ShadowMemoryFactDraft]:
+    """Map proactive extraction rows into the shadow turn memory_facts shape."""
+    out: list[ShadowMemoryFactDraft] = []
+    for d in drafts:
+        cat_raw = str(getattr(d, "category", "other") or "other")
+        out.append(
+            ShadowMemoryFactDraft(
+                category=cat_raw,
+                text=str(getattr(d, "text", "") or "")[:280],
+                subject_ref=str(getattr(d, "subject_ref", "user") or "user"),
+                predicate=str(getattr(d, "predicate", "") or "")[:200],
+                object_value=str(getattr(d, "object_value", "") or "")[:500],
+                evidence=str(getattr(d, "evidence", "") or "")[:220],
+            )
+        )
+    return out
+
+
+def _buddy_memory_drafts_fallback(
+    *,
+    settings: Settings,
+    last_user_text: str,
+    reply: str,
+    slime_type: SlimeType | None,
+    llm_model: str | None,
+) -> list[ShadowMemoryFactDraft]:
+    """When Slime Buddy skips structured memory_facts (voice stream or model omission)."""
+    from foresight_x.profile.proactive_memory import extract_memory_drafts_from_turn
+
+    proactive = extract_memory_drafts_from_turn(
+        settings=settings,
+        user_text=last_user_text,
+        assistant_text=reply,
+        llm_model=llm_model,
+        wellbeing_conservative=normalize_slime_type(slime_type) == "wellbeing" if slime_type else False,
+    )
+    return _shadow_drafts_from_proactive(proactive)
+
+
 def _coerce_atomic_claims_to_memory_drafts(
     claims: list[str],
     *,
@@ -303,6 +344,7 @@ def _coerce_category(raw: str) -> MemoryFactCategory:
         "behavior": MemoryFactCategory.BEHAVIOR,
         "goals": MemoryFactCategory.GOALS,
         "constraints": MemoryFactCategory.CONSTRAINTS,
+        "wellbeing": MemoryFactCategory.WELLBEING,
         "other": MemoryFactCategory.OTHER,
     }
     return m.get(str(raw).strip().lower(), MemoryFactCategory.OTHER)
@@ -424,6 +466,9 @@ def _format_profile_block(prof: Any) -> str:
         bits.append("Profile values: " + "; ".join(legacy_values[:20]))
     if (prof.about_me or "").strip():
         bits.append("About me: " + prof.about_me.strip()[:900])
+    pname = (getattr(prof, "preferred_name", None) or "").strip()
+    if pname:
+        bits.append(f"User's preferred name (address them as): {pname[:48]}")
     return "\n".join(bits) if bits else "(none yet.)"
 
 
@@ -660,6 +705,7 @@ def run_shadow_turn(
     temporary_context_prompt: str = "",
     slime_voice_style_addendum: str | None = None,
     synthesis_frame: Literal["shadow", "slime_buddy"] = "shadow",
+    slime_type: SlimeType | None = None,
     slime_intent_hint: str | None = None,
     llm_model: str | None = None,
     reply_delta_callback: Callable[[str], None] | None = None,
@@ -760,7 +806,15 @@ def run_shadow_turn(
             atomic_executor.shutdown(wait=False, cancel_futures=False)
         atomic_claims_block = _format_atomic_claims_block(atomic_claims)
 
-    tmpl = SLIME_BUDDY_INSTRUCTIONS if synthesis_frame == "slime_buddy" else SHADOW_INSTRUCTIONS
+    st = normalize_slime_type(slime_type) if slime_type else None
+    if synthesis_frame == "slime_buddy" and st == "wellbeing":
+        tmpl = wellbeing_slime_instructions()
+    elif synthesis_frame == "slime_buddy" and st == "generalized":
+        tmpl = generalized_slime_instructions()
+    elif synthesis_frame == "slime_buddy":
+        tmpl = SLIME_BUDDY_INSTRUCTIONS
+    else:
+        tmpl = SHADOW_INSTRUCTIONS
     prompt = tmpl.format(
         memory_block=memory_block,
         profile_block=profile_block,
@@ -843,6 +897,14 @@ def run_shadow_turn(
     memory_used: list[str] = []
     if not memory_drafts and atomic_claims and synthesis_frame != "slime_buddy":
         memory_drafts = _coerce_atomic_claims_to_memory_drafts(atomic_claims)
+    if not memory_drafts and synthesis_frame == "slime_buddy":
+        memory_drafts = _buddy_memory_drafts_fallback(
+            settings=s,
+            last_user_text=last_user_text,
+            reply=reply,
+            slime_type=st,
+            llm_model=llm_model,
+        )
 
     llm_cat = None
     if s.memory_fact_category_llm_refine and (s.openai_api_key or "").strip():
@@ -909,9 +971,10 @@ def run_shadow_turn(
         )
 
     if synthesis_frame == "slime_buddy":
-        slime_nm = str(prof.slime_profile.name).strip() if prof.slime_profile else "Mochi"
-        if not slime_nm:
-            slime_nm = "Mochi"
+        from foresight_x.slime.identity import get_slime_identity
+
+        st_buddy = st or "generalized"
+        slime_nm = get_slime_identity(st_buddy).ui_spoken_name
         draft_records = partition_slime_buddy_memory_candidates(
             draft_records,
             last_user_text=last_user_text,
@@ -980,15 +1043,24 @@ def run_shadow_turn(
     source_chat = "slime_voice" if synthesis_frame == "slime_buddy" else "shadow_chat"
     source_thread_id = (thread_id or "").strip()
     if profile_records:
-        profile_records = [
-            enrich_memory_fact(
+        enriched_rows: list[ProfileMemoryFact] = []
+        for r in profile_records:
+            row = enrich_memory_fact(
                 r,
                 source_chat=source_chat,
                 source_thread_id=source_thread_id,
                 extra_text=last_user_text,
             )
-            for r in profile_records
-        ]
+            if st == "wellbeing":
+                from foresight_x.profile.wellbeing_memory import tag_wellbeing_memory_fact
+
+                row = tag_wellbeing_memory_fact(
+                    row,
+                    record_type="session_insight",
+                    thread_id=source_thread_id,
+                )
+            enriched_rows.append(row)
+        profile_records = enriched_rows
 
     recorded_profile: list[str] | None = None
     memory_events: list[dict[str, Any]] = []

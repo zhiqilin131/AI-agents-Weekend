@@ -5,6 +5,8 @@ import { apiFetch } from '../../utils/apiFetch';
 import { unlockSlimeAudioContext } from '../../utils/slimeAudioContext';
 import { cn } from './ui/utils';
 import { BuddyTooltip } from '../../features/slime/BuddyTooltip';
+import { getSlimeIdentity, type SlimeType } from '../../features/slime/slimeIdentity';
+import { SLIME_CTA_BTN_CLASS, slimeCtaButtonStyle } from '../../features/slime/slimeCtaButton';
 
 type VoiceRecorderTranscribeButtonProps = {
   onTranscript: (text: string) => void;
@@ -12,6 +14,7 @@ type VoiceRecorderTranscribeButtonProps = {
   /** Smaller control for composer toolbars (Slime Buddy uses the large default on the buddy page). */
   compact?: boolean;
   className?: string;
+  slimeType?: SlimeType;
 };
 
 async function transcribeBlob(blob: Blob): Promise<string> {
@@ -38,6 +41,7 @@ export function VoiceRecorderTranscribeButton({
   disabled = false,
   compact = false,
   className,
+  slimeType = 'generalized',
 }: VoiceRecorderTranscribeButtonProps) {
   const { supported, recording, error: recorderError, setError, startRecording, stopRecording } = useVoiceRecorder();
   const [busy, setBusy] = useState(false);
@@ -85,6 +89,7 @@ export function VoiceRecorderTranscribeButton({
   ]);
 
   const showError = inlineError || recorderError;
+  const theme = getSlimeIdentity(slimeType).theme;
   /** Allow finishing a take even if the composer becomes disabled while recording. */
   const buttonDisabled = busy || (!recording && (!supported || disabled));
 
@@ -111,10 +116,13 @@ export function VoiceRecorderTranscribeButton({
             aria-label={recording ? 'Stop recording' : 'Start voice input'}
             aria-pressed={recording}
             className={cn(
-              'relative inline-flex items-center justify-center rounded-full border-2 border-white/90 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-md transition hover:scale-[1.03] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-40',
+              'relative inline-flex items-center justify-center rounded-full border-2',
+              SLIME_CTA_BTN_CLASS,
+              'hover:scale-[1.03] disabled:cursor-not-allowed',
               compact ? 'h-10 w-10' : 'h-14 w-14',
               recording && 'ring-4 ring-cyan-300/80',
             )}
+            style={slimeCtaButtonStyle(theme)}
           >
             {busy ? (
               <Loader2 className={cn('animate-spin', compact ? 'h-4 w-4' : 'h-6 w-6')} aria-hidden />
