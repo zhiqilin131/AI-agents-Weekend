@@ -21,7 +21,7 @@ import { ModelSelector } from '../features/models/ModelSelector';
 import { buildCheaperModelHint } from '../features/models/slimeModelsApi';
 import { useSlimeModelCatalog } from '../features/models/useSlimeModelCatalog';
 import { useSlimeProfile } from '../hooks/useSlimeProfile';
-import { nowIso, shouldShowOnboarding } from '../features/onboarding/onboarding';
+import { consumeOnboardingJustFinished, nowIso, shouldShowOnboarding } from '../features/onboarding/onboarding';
 import type { UserProfile } from '../features/onboarding/types';
 import { useAuth } from '../auth/AuthContext';
 import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
@@ -215,6 +215,11 @@ export default function HomePage() {
           }
           const profile = (await res.json()) as UserProfile;
           if (cancelled) return;
+          if (consumeOnboardingJustFinished()) {
+            onboardingNavigationDoneRef.current = true;
+            setOnboardingReminder(null);
+            return;
+          }
           const trigger = shouldShowOnboarding(profile);
           if (trigger === 'force_initial') {
             onboardingNavigationDoneRef.current = true;

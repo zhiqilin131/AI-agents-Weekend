@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
 import { apiFetch } from '../utils/apiFetch';
@@ -23,7 +23,9 @@ import {
   createEmptyOnboardingDraft,
   generateValuesNarrative,
   loadDraftFromStorage,
+  markOnboardingJustFinished,
   nowIso,
+  resolveOnboardingStep,
   saveDraftToStorage,
   type OnboardingDraft,
   type PriorityDomain,
@@ -32,6 +34,7 @@ import {
   withQuestionMarked,
 } from '../features/onboarding/onboarding';
 import type { UserProfile } from '../features/onboarding/types';
+import { useAuth } from '../auth/AuthContext';
 
 const DOMAIN_LABEL: Record<PriorityDomain, string> = {
   work: 'Work',
@@ -54,7 +57,9 @@ function clampStep(v: number): number {
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
+  const { session } = useAuth();
   const [searchParams] = useSearchParams();
+  const storageUserId = session?.user?.id ?? null;
   const mode = searchParams.get('mode') || '';
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -63,8 +68,10 @@ export default function OnboardingPage() {
   const [draft, setDraft] = useState<OnboardingDraft>(() => createEmptyOnboardingDraft());
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [step3SavingDone, setStep3SavingDone] = useState(false);
+  const initialLoadHandledRef = useRef(false);
 
   const currentStep = clampStep(draft.step);
+  const onboardingCompleted = Boolean(profile?.personal_profile?.onboardingStatus?.completed);
   const progressValue = ((currentStep + 1) / 5) * 100;
 
   const hydrateDraftFromProfile = useCallback((payload: UserProfile): OnboardingDraft => {
@@ -85,17 +92,24 @@ export default function OnboardingPage() {
         draftFromProfile.prioritySelections[item.domain] = item.sourceChoice || 'custom';
       }
     }
-    const local = loadDraftFromStorage();
+    const completed = Boolean(existing?.onboardingStatus?.completed);
+    if (completed) {
+      clearDraftFromStorage(storageUserId);
+      if (!draftFromProfile.valuesNarrative.trim()) {
+        draftFromProfile.valuesNarrative = generateValuesNarrative(draftFromProfile.pvqResponses);
+      }
+      return { ...draftFromProfile, step: 4 };
+    }
+    const local = loadDraftFromStorage(storageUserId);
     if (!local) {
       if (!draftFromProfile.valuesNarrative.trim()) {
         draftFromProfile.valuesNarrative = generateValuesNarrative(draftFromProfile.pvqResponses);
       }
-      return draftFromProfile;
+      return { ...draftFromProfile, step: 0 };
     }
     const merged: OnboardingDraft = {
       ...draftFromProfile,
       ...local,
-      step: clampStep(local.step ?? draftFromProfile.step),
       priorities: Array.isArray(local.priorities) ? local.priorities : draftFromProfile.priorities,
       pvqResponses:
         Array.isArray(local.pvqResponses) && local.pvqResponses.length === 8
@@ -103,9 +117,14 @@ export default function OnboardingPage() {
           : draftFromProfile.pvqResponses,
       skippedQuestions: Array.isArray(local.skippedQuestions) ? local.skippedQuestions : draftFromProfile.skippedQuestions,
     };
+    merged.step = resolveOnboardingStep({
+      serverCompleted: false,
+      localStep: clampStep(local.step ?? 0),
+      draftFromProfile: merged,
+    });
     if (!merged.valuesNarrative.trim()) merged.valuesNarrative = generateValuesNarrative(merged.pvqResponses);
     return merged;
-  }, []);
+  }, [storageUserId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,12 +145,26 @@ export default function OnboardingPage() {
     return () => {
       cancelled = true;
     };
-  }, [hydrateDraftFromProfile]);
+  }, [hydrateDraftFromProfile, storageUserId]);
 
   useEffect(() => {
     if (loading) return;
-    saveDraftToStorage(draft);
-  }, [draft, loading]);
+    if (onboardingCompleted) {
+      clearDraftFromStorage(storageUserId);
+      return;
+    }
+    saveDraftToStorage(draft, storageUserId);
+  }, [draft, loading, onboardingCompleted, storageUserId]);
+
+  /** Re-login with completed profile: skip the stuck completion screen and go home. */
+  useEffect(() => {
+    if (loading || !profile || initialLoadHandledRef.current) return;
+    initialLoadHandledRef.current = true;
+    if (onboardingCompleted && currentStep >= 4 && mode !== 'resume') {
+      markOnboardingJustFinished();
+      navigate('/', { replace: true });
+    }
+  }, [loading, profile, onboardingCompleted, currentStep, mode, navigate]);
 
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -234,14 +267,32 @@ export default function OnboardingPage() {
     try {
       await persistProfile({ completed: true, incrementPrompt: false });
       setStep3SavingDone(true);
-      clearDraftFromStorage();
+      clearDraftFromStorage(storageUserId);
       setDraft((prev) => ({ ...prev, step: 4 }));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save onboarding');
     } finally {
       setSaving(false);
     }
-  }, [persistProfile]);
+  }, [persistProfile, storageUserId]);
+
+  const finishOnboardingAndNavigate = useCallback(
+    async (to: string) => {
+      setSaving(true);
+      setError(null);
+      try {
+        await persistProfile({ completed: true, incrementPrompt: false });
+        clearDraftFromStorage(storageUserId);
+        markOnboardingJustFinished();
+        navigate(to, { replace: true });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Could not finish setup');
+      } finally {
+        setSaving(false);
+      }
+    },
+    [navigate, persistProfile, storageUserId],
+  );
 
   const saveAndExit = useCallback(async () => {
     setSaving(true);
@@ -629,11 +680,12 @@ export default function OnboardingPage() {
             <div className="flex flex-col items-center gap-2 pt-2">
               <Button
                 className="rounded-full bg-gradient-to-r from-purple-600 to-blue-600 px-5 text-white"
-                onClick={() => navigate('/', { replace: true })}
+                disabled={saving}
+                onClick={() => void finishOnboardingAndNavigate('/chat')}
               >
-                Start my first Decision Session →
+                {saving ? 'Opening…' : 'Start my first Decision Session →'}
               </Button>
-              <Button variant="ghost" onClick={() => navigate('/', { replace: true })}>
+              <Button variant="ghost" disabled={saving} onClick={() => void finishOnboardingAndNavigate('/')}>
                 Back to Home
               </Button>
             </div>
