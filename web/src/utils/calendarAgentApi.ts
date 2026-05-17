@@ -1,5 +1,11 @@
 import { apiFetch } from './apiFetch';
-import { dispatchExecutionCalendarLocalBump, executionStorageKeys } from './executionStorageKeys';
+import { mapAgentEventsToPlanner } from './calendarAgentApply';
+import type { CalendarEvent } from './executionScheduler';
+import {
+  dispatchExecutionCalendarLocalBump,
+  EXECUTION_CALENDAR_FOCUS_WEEK_KEY,
+  executionStorageKeys,
+} from './executionStorageKeys';
 
 export type CalendarAgentDraft = {
   draft_id: string;
@@ -47,28 +53,42 @@ export async function confirmCalendarDraft(
 export function mergeExecutionCalendarEvents(
   storageUserKey: string,
   events: Array<Record<string, unknown>>,
-): void {
-  if (!storageUserKey?.trim() || !events.length) return;
+): CalendarEvent[] {
+  const incoming = mapAgentEventsToPlanner(events);
+  if (!storageUserKey?.trim() || !incoming.length) return incoming;
   try {
     const k = executionStorageKeys(storageUserKey).events;
     const raw = localStorage.getItem(k);
-    let arr: unknown[] = [];
+    let existing: CalendarEvent[] = [];
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as unknown;
-        if (Array.isArray(parsed)) arr = parsed;
+        if (Array.isArray(parsed)) {
+          existing = mapAgentEventsToPlanner(parsed.filter((x) => x && typeof x === 'object') as Array<Record<string, unknown>>);
+        }
       } catch {
-        arr = [];
+        existing = [];
       }
     }
-    for (const ev of events) {
-      if (ev && typeof ev === 'object') arr.push(ev);
+    const ids = new Set(existing.map((e) => e.id));
+    const merged = [...existing];
+    let focusStart: string | undefined;
+    for (const ev of incoming) {
+      if (!ids.has(ev.id)) {
+        merged.push(ev);
+        ids.add(ev.id);
+        focusStart ??= ev.start;
+      }
     }
-    localStorage.setItem(k, JSON.stringify(arr));
+    localStorage.setItem(k, JSON.stringify(merged));
     dispatchExecutionCalendarLocalBump();
+    if (focusStart && typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(EXECUTION_CALENDAR_FOCUS_WEEK_KEY, focusStart);
+    }
   } catch {
     /* ignore */
   }
+  return incoming;
 }
 
 /**

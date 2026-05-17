@@ -37,6 +37,7 @@ import {
 import { parseIcsToCalendarEvents, exportEventsToIcs } from '../utils/ics';
 import { mapRecommendationActionsToTasks } from '../utils/executionTasks';
 import {
+  EXECUTION_CALENDAR_FOCUS_WEEK_KEY,
   EXECUTION_CALENDAR_LOCAL_BUMP_EVENT,
   EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY,
   executionStorageKeys,
@@ -238,6 +239,7 @@ export default function ExecutionPlannerPage() {
     end: string;
   } | null>(null);
   const plannerHydratedRef = useRef(false);
+  const [localStoreReady, setLocalStoreReady] = useState(false);
   const reportCalendarAppliedRef = useRef<string | null>(null);
   const serverSyncSkipUntilRef = useRef<number>(0);
   const dragStateRef = useRef<{
@@ -510,8 +512,21 @@ export default function ExecutionPlannerPage() {
     }
   }, [storageReady]);
 
+  const applyFocusWeekFromSession = useCallback(() => {
+    try {
+      const raw = sessionStorage.getItem(EXECUTION_CALENDAR_FOCUS_WEEK_KEY);
+      if (!raw) return;
+      sessionStorage.removeItem(EXECUTION_CALENDAR_FOCUS_WEEK_KEY);
+      const d = parseEventDate(raw);
+      if (d) setWeekStart(startOfWeek(d, { weekStartsOn: 1 }));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     plannerHydratedRef.current = false;
+    setLocalStoreReady(false);
     if (!storageReady || !storageKeys) return;
     try {
       const rawEvents = localStorage.getItem(storageKeys.events);
@@ -529,12 +544,14 @@ export default function ExecutionPlannerPage() {
       } else if (!decisionId) {
         setTasks([]);
       }
+      applyFocusWeekFromSession();
     } catch {
       // ignore local cache parse failures
     } finally {
       plannerHydratedRef.current = true;
+      setLocalStoreReady(true);
     }
-  }, [storageReady, storageKeys]);
+  }, [storageReady, storageKeys, decisionId, applyFocusWeekFromSession]);
 
   /** Slime voice updates localStorage directly; same-tab writes don't fire `storage` events — rehydrate React state. */
   useEffect(() => {
@@ -545,13 +562,14 @@ export default function ExecutionPlannerPage() {
         if (!rawEvents) return;
         const parsed = JSON.parse(rawEvents) as CalendarEvent[];
         if (Array.isArray(parsed)) setEvents(dedupeAiEventsByTitle(parsed));
+        applyFocusWeekFromSession();
       } catch {
         /* ignore */
       }
     };
     window.addEventListener(EXECUTION_CALENDAR_LOCAL_BUMP_EVENT, reloadFromLocalEvents);
     return () => window.removeEventListener(EXECUTION_CALENDAR_LOCAL_BUMP_EVENT, reloadFromLocalEvents);
-  }, [storageReady, storageKeys]);
+  }, [storageReady, storageKeys, applyFocusWeekFromSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -596,9 +614,9 @@ export default function ExecutionPlannerPage() {
   }, [storageReady, storageUserKey]);
 
   useEffect(() => {
-    if (!storageKeys || !plannerHydratedRef.current) return;
+    if (!storageKeys || !localStoreReady) return;
     localStorage.setItem(storageKeys.events, JSON.stringify(events));
-  }, [events, storageKeys]);
+  }, [events, storageKeys, localStoreReady]);
 
   useEffect(() => {
     if (Date.now() < serverSyncSkipUntilRef.current) return;
@@ -625,9 +643,9 @@ export default function ExecutionPlannerPage() {
   }, [events]);
 
   useEffect(() => {
-    if (!storageKeys || !plannerHydratedRef.current) return;
+    if (!storageKeys || !localStoreReady) return;
     localStorage.setItem(storageKeys.tasks, JSON.stringify(tasks));
-  }, [tasks, storageKeys]);
+  }, [tasks, storageKeys, localStoreReady]);
 
   const coachConstraintsLine = useMemo(() => {
     const parts: string[] = [];

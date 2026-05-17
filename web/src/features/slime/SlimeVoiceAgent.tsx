@@ -11,7 +11,7 @@ import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import type { SlimeProfile } from '../../app/model';
 import { apiFetch } from '../../utils/apiFetch';
 import { apiFetchErrorMessage } from '../../utils/apiOrigin';
-import { confirmCalendarDraft } from '../../utils/calendarAgentApi';
+import { confirmCalendarDraft, mergeExecutionCalendarEvents } from '../../utils/calendarAgentApi';
 import { parseSseBlocks } from '../../utils/parseSse';
 import {
   dispatchExecutionCalendarLocalBump,
@@ -1003,27 +1003,13 @@ export function SlimeVoiceAgent({
     [runTts],
   );
 
-  const mergeCalendarEvent = useCallback((event: Record<string, unknown>) => {
-    if (!storageUserKey) return;
-    try {
-      const k = executionStorageKeys(storageUserKey).events;
-      const raw = localStorage.getItem(k);
-      let arr: unknown[] = [];
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as unknown;
-          if (Array.isArray(parsed)) arr = parsed;
-        } catch {
-          arr = [];
-        }
-      }
-      arr.push(event);
-      localStorage.setItem(k, JSON.stringify(arr));
-      dispatchExecutionCalendarLocalBump();
-    } catch {
-      /* ignore */
-    }
-  }, [storageUserKey]);
+  const mergeCalendarEvent = useCallback(
+    (event: Record<string, unknown>) => {
+      if (!storageUserKey) return;
+      mergeExecutionCalendarEvents(storageUserKey, [event]);
+    },
+    [storageUserKey],
+  );
 
   const updateLocalCalendarEvent = useCallback((event: SlimeCalendarEvent | null, deleteId?: string) => {
     if (!storageUserKey) return;

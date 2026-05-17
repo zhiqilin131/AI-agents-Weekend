@@ -7,7 +7,7 @@ import { getSlimeIdentity } from './slimeIdentity';
 import type { TherapyReport, TherapyActionSuggestion } from './therapySession';
 import { scheduleTextOnExecutionCalendar } from '../../utils/calendarAgentApi';
 import { useExecutionStorageUserKey } from '../../hooks/useExecutionStorageUserKey';
-import { SLIME_VOICE_CALENDAR_RESOLVED_KEY } from '../../utils/executionStorageKeys';
+import { EXECUTION_CALENDAR_FOCUS_WEEK_KEY } from '../../utils/executionStorageKeys';
 import { BuddyTooltip } from './BuddyTooltip';
 import { MarkdownContent } from '../../app/components/MarkdownContent';
 import { renderChatMarkdownInline } from '../../utils/chatMarkdown';
@@ -83,6 +83,13 @@ export function TherapyReportPanel({ open, report, onClose }: Props) {
       const ev = events[0] ?? {};
       const title = String(ev.title || action.title);
       const timing = readEventTiming(ev);
+      if (timing.startIso) {
+        try {
+          sessionStorage.setItem(EXECUTION_CALENDAR_FOCUS_WEEK_KEY, timing.startIso);
+        } catch {
+          /* ignore */
+        }
+      }
       setAddedByTitle((prev) => ({
         ...prev,
         [key]: { eventTitle: title, ...timing },
@@ -98,17 +105,9 @@ export function TherapyReportPanel({ open, report, onClose }: Props) {
   };
 
   const openInExecutionCalendar = (entry: AddedCalendarEntry) => {
-    if (entry.startIso && entry.endIso) {
+    if (entry.startIso) {
       try {
-        sessionStorage.setItem(
-          SLIME_VOICE_CALENDAR_RESOLVED_KEY,
-          JSON.stringify({
-            title: entry.eventTitle,
-            start_iso: entry.startIso,
-            end_iso: entry.endIso,
-            display_summary: entry.eventTitle,
-          }),
-        );
+        sessionStorage.setItem(EXECUTION_CALENDAR_FOCUS_WEEK_KEY, entry.startIso);
       } catch {
         /* ignore */
       }
