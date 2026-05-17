@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
 import { apiFetch } from '../utils/apiFetch';
@@ -23,6 +23,7 @@ import {
   createEmptyOnboardingDraft,
   generateValuesNarrative,
   loadDraftFromStorage,
+  markOnboardingJustFinished,
   nowIso,
   saveDraftToStorage,
   type OnboardingDraft,
@@ -63,8 +64,10 @@ export default function OnboardingPage() {
   const [draft, setDraft] = useState<OnboardingDraft>(() => createEmptyOnboardingDraft());
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [step3SavingDone, setStep3SavingDone] = useState(false);
+  const initialLoadHandledRef = useRef(false);
 
   const currentStep = clampStep(draft.step);
+  const onboardingCompleted = Boolean(profile?.personal_profile?.onboardingStatus?.completed);
   const progressValue = ((currentStep + 1) / 5) * 100;
 
   const hydrateDraftFromProfile = useCallback((payload: UserProfile): OnboardingDraft => {
@@ -84,6 +87,14 @@ export default function OnboardingPage() {
       if (item.domain !== 'custom') {
         draftFromProfile.prioritySelections[item.domain] = item.sourceChoice || 'custom';
       }
+    }
+    const completed = Boolean(existing?.onboardingStatus?.completed);
+    if (completed) {
+      clearDraftFromStorage();
+      if (!draftFromProfile.valuesNarrative.trim()) {
+        draftFromProfile.valuesNarrative = generateValuesNarrative(draftFromProfile.pvqResponses);
+      }
+      return { ...draftFromProfile, step: 4 };
     }
     const local = loadDraftFromStorage();
     if (!local) {
@@ -130,8 +141,22 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (loading) return;
+    if (onboardingCompleted) {
+      clearDraftFromStorage();
+      return;
+    }
     saveDraftToStorage(draft);
-  }, [draft, loading]);
+  }, [draft, loading, onboardingCompleted]);
+
+  /** Re-login with completed profile: skip the stuck completion screen and go home. */
+  useEffect(() => {
+    if (loading || !profile || initialLoadHandledRef.current) return;
+    initialLoadHandledRef.current = true;
+    if (onboardingCompleted && currentStep >= 4 && mode !== 'resume') {
+      markOnboardingJustFinished();
+      navigate('/', { replace: true });
+    }
+  }, [loading, profile, onboardingCompleted, currentStep, mode, navigate]);
 
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -242,6 +267,24 @@ export default function OnboardingPage() {
       setSaving(false);
     }
   }, [persistProfile]);
+
+  const finishOnboardingAndNavigate = useCallback(
+    async (to: string) => {
+      setSaving(true);
+      setError(null);
+      try {
+        await persistProfile({ completed: true, incrementPrompt: false });
+        clearDraftFromStorage();
+        markOnboardingJustFinished();
+        navigate(to, { replace: true });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Could not finish setup');
+      } finally {
+        setSaving(false);
+      }
+    },
+    [navigate, persistProfile],
+  );
 
   const saveAndExit = useCallback(async () => {
     setSaving(true);
@@ -629,11 +672,12 @@ export default function OnboardingPage() {
             <div className="flex flex-col items-center gap-2 pt-2">
               <Button
                 className="rounded-full bg-gradient-to-r from-purple-600 to-blue-600 px-5 text-white"
-                onClick={() => navigate('/', { replace: true })}
+                disabled={saving}
+                onClick={() => void finishOnboardingAndNavigate('/chat')}
               >
-                Start my first Decision Session →
+                {saving ? 'Opening…' : 'Start my first Decision Session →'}
               </Button>
-              <Button variant="ghost" onClick={() => navigate('/', { replace: true })}>
+              <Button variant="ghost" disabled={saving} onClick={() => void finishOnboardingAndNavigate('/')}>
                 Back to Home
               </Button>
             </div>

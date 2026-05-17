@@ -1,6 +1,26 @@
 import type { UserProfile } from './types';
 
 export const ONBOARDING_DRAFT_STORAGE_KEY = 'fx_onboarding_draft_v1';
+/** Set when user leaves the completion screen so Home does not bounce back into onboarding. */
+export const ONBOARDING_JUST_FINISHED_KEY = 'fx.onboarding.justFinished.v1';
+
+export function markOnboardingJustFinished(): void {
+  try {
+    sessionStorage.setItem(ONBOARDING_JUST_FINISHED_KEY, '1');
+  } catch {
+    /* ignore quota */
+  }
+}
+
+export function consumeOnboardingJustFinished(): boolean {
+  try {
+    if (sessionStorage.getItem(ONBOARDING_JUST_FINISHED_KEY) !== '1') return false;
+    sessionStorage.removeItem(ONBOARDING_JUST_FINISHED_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type PriorityDomain = 'work' | 'relationships' | 'health' | 'finance' | 'custom';
 export type PrioritySourceChoice = 'A' | 'B' | 'C' | 'custom';
