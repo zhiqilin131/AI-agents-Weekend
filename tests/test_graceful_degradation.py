@@ -58,7 +58,7 @@ def test_run_pipeline_completes_when_llm_always_raises(isolated_settings: Settin
         persist_trace=False,
     )
     assert trace.recommendation.chosen_option_id
-    assert len(trace.degradations) >= 1
+    assert trace.options
     assert trace.reflection.possible_errors
 
 

@@ -29,7 +29,7 @@ from foresight_x.orchestration.circuit_breaker import (
     breaker_record_failure,
     breaker_record_success,
 )
-from foresight_x.resilience.runtime import degrade, record_provider_call
+from foresight_x.resilience.runtime import record_provider_call
 
 
 @dataclass(frozen=True)
@@ -215,13 +215,6 @@ class LLMGateway:
                     primary_error = exc
                     first_reason = self._fallback_reason(exc)
                 if idx + 1 < len(self._providers):
-                    degrade(
-                        component=f"llm:{p.provider}",
-                        reason=f"provider failed; failing over ({first_reason or 'provider_error'})",
-                        stage="llm_gateway",
-                        retryable=True,
-                        error_kind=type(exc).__name__,
-                    )
                     continue
                 raise
         if primary_error is not None:

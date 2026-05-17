@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Sparkles, X } from 'lucide-react';
 import { useNavigate } from 'react-router';
@@ -90,6 +90,8 @@ export function ShadowChatShell({
   const [calendarCoachHint, setCalendarCoachHint] = useState<string | null>(null);
   const [calendarCoachBusy, setCalendarCoachBusy] = useState(false);
   const [plannerSelectionContext, setPlannerSelectionContext] = useState(() => loadSelectedBlocksContext());
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatContentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   /** Hold decision_suggestion until `done` + thread reload so the card does not flash then disappear. */
   const lastDecisionSuggestionRef = useRef<ShadowSuggestion | null>(null);
@@ -153,7 +155,15 @@ export function ShadowChatShell({
     setThreadsLoaded(true);
   }, []);
 
-  const loadThread = async (id: string, opts?: { preservePendingSuggestion?: boolean }) => {
+  const scrollChatToBottom = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  const loadThread = async (
+    id: string,
+    opts?: { preservePendingSuggestion?: boolean },
+  ) => {
     const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`);
     if (res.status === 404) {
       const sp = new URLSearchParams(window.location.search);
@@ -301,8 +311,35 @@ export function ShadowChatShell({
   }, [threadsLoaded, threads, activeThreadId, initialThreadId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, timeline]);
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, []);
+
+  /** Inner chat: always show latest messages after load, refresh, thread switch, or new content height. */
+  useLayoutEffect(() => {
+    const viewport = chatScrollRef.current;
+    const content = chatContentRef.current;
+    if (!viewport) return;
+
+    const pinBottom = () => {
+      viewport.scrollTop = viewport.scrollHeight;
+    };
+
+    pinBottom();
+    const raf = requestAnimationFrame(pinBottom);
+    const t = window.setTimeout(pinBottom, 120);
+
+    const ro =
+      content && typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => pinBottom())
+        : null;
+    ro?.observe(content);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(t);
+      ro?.disconnect();
+    };
+  }, [messages, activeThreadId]);
 
   /** Recover `report_generating` if chat streaming callbacks briefly set `idle` during report generation. */
   useEffect(() => {
@@ -879,15 +916,20 @@ export function ShadowChatShell({
           </div>
           <div className="lg:col-span-6">
             <section className="rounded-[28px] border border-white/90 bg-white/65 p-4 shadow-[0_16px_42px_rgba(99,102,241,0.09)] backdrop-blur-md">
-              <div className="min-h-[58vh] max-h-[66vh] overflow-y-auto px-1 py-3">
-                <ChatMessageList
-                  messages={messages}
-                  onOpenReportArtifact={onOpenReportArtifact}
-                  onReviseArtifact={onReviseFromArtifactOrPanel}
-                  onArtifactExecutionCalendar={openExecutionCalendar}
-                  onSuggestionChip={(label) => setInputBootstrap(label)}
-                />
-                <div ref={bottomRef} />
+              <div
+                ref={chatScrollRef}
+                className="min-h-[58vh] max-h-[66vh] overflow-y-auto px-1 py-3 [overflow-anchor:none]"
+              >
+                <div ref={chatContentRef}>
+                  <ChatMessageList
+                    messages={messages}
+                    onOpenReportArtifact={onOpenReportArtifact}
+                    onReviseArtifact={onReviseFromArtifactOrPanel}
+                    onArtifactExecutionCalendar={openExecutionCalendar}
+                    onSuggestionChip={(label) => setInputBootstrap(label)}
+                  />
+                  <div ref={bottomRef} aria-hidden />
+                </div>
               </div>
               <div className="mt-3 space-y-3 border-t border-gray-200/80 pt-3">
                 {reportStream.degradedWarnings.length > 0 ? (

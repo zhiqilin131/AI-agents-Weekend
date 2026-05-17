@@ -15,29 +15,59 @@ def _utc_now() -> str:
 
 
 _run_events_var: ContextVar[list[dict[str, Any]] | None] = ContextVar("fx_resilience_run_events", default=None)
+_tls_run_events = threading.local()
 
 
-def start_resilience_run() -> object:
-    """Begin a run-scoped resilience event list."""
-    return _run_events_var.set([])
+def _active_run_buffer() -> list[dict[str, Any]] | None:
+    cur = _run_events_var.get()
+    if cur is not None:
+        return cur
+    buf = getattr(_tls_run_events, "run_events", None)
+    return buf if isinstance(buf, list) else None
 
 
-def end_resilience_run(token: object) -> list[dict[str, Any]]:
+def start_resilience_run() -> tuple[object, list[dict[str, Any]]]:
+    """Begin a run-scoped resilience event list.
+
+    Returns ``(context_token, mutable_buffer)``. Keep the buffer reference for
+    finalize/SSE paths where ContextVar tokens may not reset across yields.
+    """
+    events: list[dict[str, Any]] = []
+    token = _run_events_var.set(events)
+    _tls_run_events.run_events = events
+    return token, events
+
+
+def end_resilience_run(
+    token: object,
+    *,
+    buffer: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Finish run-scoped collection and restore prior context."""
-    events = list(_run_events_var.get() or [])
-    _run_events_var.reset(token)  # type: ignore[arg-type]
+    if buffer is not None:
+        events = list(buffer)
+    else:
+        events = list(_active_run_buffer() or [])
+    try:
+        _run_events_var.reset(token)  # type: ignore[arg-type]
+    except ValueError:
+        # Starlette/FastAPI SSE generators often resume in a different Context.
+        _run_events_var.set(None)
+    if getattr(_tls_run_events, "run_events", None) is not None:
+        _tls_run_events.run_events = None
     return events
 
 
 def current_run_events() -> list[dict[str, Any]]:
-    return list(_run_events_var.get() or [])
+    buf = _active_run_buffer()
+    return list(buf) if buf is not None else []
 
 
 def _append_run_event(ev: dict[str, Any]) -> None:
-    cur = _run_events_var.get()
-    if cur is None:
+    buf = _active_run_buffer()
+    if buf is None:
         return
-    cur.append(ev)
+    buf.append(ev)
 
 
 _LOCK = threading.Lock()
@@ -108,14 +138,8 @@ def record_provider_call(
             retryable=True,
             error_kind="brownout",
         )
-    if (not ok) and error_kind:
-        degrade(
-            component=provider,
-            reason=f"{provider} error: {error_kind}",
-            stage="runtime",
-            retryable=True,
-            error_kind=error_kind,
-        )
+    # Failed calls are tracked in stats only; do not mark the run degraded when a
+    # later retry/failover succeeds (e.g. ValidationError on primary OpenAI).
 
 
 def degrade(

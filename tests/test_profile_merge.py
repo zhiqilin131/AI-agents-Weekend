@@ -74,3 +74,11 @@ def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settin
 
 def test_load_missing_profile_empty(isolated_settings: Settings) -> None:
     assert load_user_profile(isolated_settings) == UserProfile()
+
+
+def test_load_empty_local_profile_file(isolated_settings: Settings) -> None:
+    path = isolated_settings.profile_dir / "ghost.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+    settings = isolated_settings.model_copy(update={"foresight_user_id": "ghost"})
+    assert load_user_profile(settings) == UserProfile()

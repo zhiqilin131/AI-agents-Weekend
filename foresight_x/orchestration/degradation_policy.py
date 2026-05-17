@@ -400,3 +400,54 @@ def safe_reflect(trace: Any, llm: Any | None) -> tuple[Reflection, str, StageDeg
             error_kind=type(exc).__name__,
         )
         return reflect(trace, None), "deterministic", ev
+
+
+_SOFT_STAGE_FALLBACKS = frozenset(
+    {"enhance", "perceive", "retrieve", "infer", "simulate", "evaluate", "finalize", "reflect"}
+)
+_RECOVERED_PROVIDER_ERROR_KINDS = frozenset(
+    {
+        "validationerror",
+        "jsondecodeerror",
+        "rate_limit_exceeded",
+        "ratelimiterror",
+        "apiconnectionerror",
+        "timeouterror",
+        "readtimeout",
+    }
+)
+_HARD_ERROR_KINDS = frozenset(
+    {"circuit_open", "outage", "timeout", "5xx", "chaos_outage", "chaos_timeout", "chaos_5xx"}
+)
+
+
+def should_surface_degradation_to_user(row: dict[str, Any] | None) -> bool:
+    """Whether a degradation row should trigger user-facing Degraded mode UI.
+
+    Routine stage fallbacks and recovered provider errors stay on the trace for
+    resilience tooling but must not alarm users when the pipeline still completes.
+    """
+    if not isinstance(row, dict):
+        return False
+    kind = str(row.get("error_kind") or "").strip().lower()
+    stage = str(row.get("stage") or "").strip().lower()
+    reason = str(row.get("reason") or "").strip().lower()
+
+    if kind in _HARD_ERROR_KINDS:
+        return True
+    if "circuit" in reason and "open" in reason:
+        return True
+    if "outage" in reason or "chaos injection" in reason:
+        return True
+
+    if kind == "llm_unavailable" and stage in _SOFT_STAGE_FALLBACKS:
+        return False
+    if stage == "llm_gateway" and "failing over" in reason:
+        return False
+    if stage == "infra_probe":
+        return False
+    if stage == "runtime" and kind in _RECOVERED_PROVIDER_ERROR_KINDS:
+        return False
+    if stage == "runtime" and kind == "brownout":
+        return False
+    return False

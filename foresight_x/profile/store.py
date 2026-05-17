@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,11 +71,46 @@ def _handle_supabase_failure(op: str, user_id: str, exc: Exception):
     _warn_fallback(op, user_id=user_id, exc=exc)
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically so readers never see a truncated file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _parse_local_profile_text(path: Path, text: str) -> UserProfile | None:
+    payload = text.strip()
+    if not payload:
+        _log.warning("profile.store empty local profile file: path=%s", path)
+        return None
+    try:
+        return UserProfile.model_validate_json(payload)
+    except Exception as exc:
+        _log.warning("profile.store invalid local profile JSON: path=%s err=%s", path, exc)
+        return None
+
+
 def _local_load_user_profile(settings: Settings | None = None) -> UserProfile:
     path = profile_path(settings)
     if not path.is_file():
         return UserProfile()
-    raw = UserProfile.model_validate_json(path.read_text(encoding="utf-8"))
+    raw = _parse_local_profile_text(path, path.read_text(encoding="utf-8"))
+    if raw is None:
+        return UserProfile()
     fixed, changed = normalize_profile_ids(raw)
     hydrated = hydrate_profile_from_onboarding(fixed)
     if changed or hydrated.model_dump(mode="json") != fixed.model_dump(mode="json"):
@@ -91,7 +127,7 @@ def _local_save_user_profile(profile: UserProfile, settings: Settings | None = N
     stated = profile.stated_priority_lines()
     profile = profile.model_copy(update={"user_priorities": stated, "priorities": stated})
     path = profile_path(s)
-    path.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+    _atomic_write_text(path, profile.model_dump_json(indent=2))
     return path
 
 

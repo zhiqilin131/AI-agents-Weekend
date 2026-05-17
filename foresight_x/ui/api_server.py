@@ -40,6 +40,7 @@ from foresight_x.harness.decision_commit import load_commit, save_commit
 from foresight_x.harness.evaluation_log import append_evaluation_log, build_evaluation_record
 from foresight_x.harness.decision_followup import mark_followups_completed_for_decision
 from foresight_x.harness.trace_index import delete_trace, list_traces
+from foresight_x.orchestration.degradation_policy import should_surface_degradation_to_user
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.orchestration.pipeline import PipelineContext, iter_pipeline_events, run_pipeline
 from foresight_x.perception.clarify_gate import merge_clarification_answers, run_clarify_gate
@@ -459,6 +460,8 @@ def _auth_exempt_path(path: str) -> bool:
     if p == "/api/health":
         return True
     if p == "/api/health/resilience":
+        return True
+    if p.startswith("/api/resilience"):
         return True
     return False
 
@@ -905,6 +908,35 @@ def resilience_health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/resilience/judge-pack")
+def resilience_judge_pack() -> dict[str, Any]:
+    """Judge-facing bundle: health, chaos timeline summary, optional report_card.md (FOR-17)."""
+    from foresight_x.resilience.judge_demo import build_judge_pack, isolated_smoke_settings
+
+    return build_judge_pack(settings=isolated_smoke_settings(_settings_for_active_user()))
+
+
+@app.post("/api/resilience/smoke-run")
+def resilience_smoke_run() -> dict[str, Any]:
+    """
+    Isolated offline degraded pipeline completion for demos.
+    No credits, no user thread writes — safe to run during judging.
+    """
+    from foresight_x.resilience.judge_demo import isolated_smoke_settings, run_isolated_smoke_pipeline
+
+    return run_isolated_smoke_pipeline(settings=isolated_smoke_settings(_settings_for_active_user()))
+
+
+@app.post("/api/resilience/smoke-run/stream")
+def resilience_smoke_run_stream() -> StreamingResponse:
+    """SSE stream of smoke-run phases, pipeline events, and final graded result."""
+    from foresight_x.resilience.judge_demo import isolated_smoke_settings, iter_smoke_run_sse
+
+    return _sse_streaming_response(
+        iter_smoke_run_sse(settings=isolated_smoke_settings(_settings_for_active_user())),
+    )
+
+
 @app.get("/")
 def root() -> dict[str, object]:
     return {
@@ -913,6 +945,8 @@ def root() -> dict[str, object]:
         "routes": [
             "/api/health",
             "/api/health/resilience",
+            "/api/resilience/judge-pack",
+            "/api/resilience/smoke-run",
             "/api/_chaos",
             "/api/_chaos/{target}",
             "/api/me",
@@ -3446,6 +3480,8 @@ def stream_shadow_decision_report(
                 run_degrade = current_run_events()
                 if sent_degrade < len(run_degrade):
                     for d in run_degrade[sent_degrade:]:
+                        if not should_surface_degradation_to_user(d):
+                            continue
                         yield _sse_chunk(
                             {
                                 "type": "warning",
@@ -3518,6 +3554,8 @@ def stream_shadow_decision_report(
             run_degrade = current_run_events()
             if sent_degrade < len(run_degrade):
                 for d in run_degrade[sent_degrade:]:
+                    if not should_surface_degradation_to_user(d):
+                        continue
                     yield _sse_chunk(
                         {
                             "type": "warning",

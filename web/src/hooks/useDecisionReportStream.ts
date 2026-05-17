@@ -4,9 +4,11 @@ import { buildCheaperModelHint, fetchSlimeModelCatalog } from '../features/model
 import { apiFetch } from '../utils/apiFetch';
 import {
   formatDegradedPayload,
+  isUserVisibleDegradation,
   mergeDegradedNotices,
   noticeMessages,
   noticesFromTrace,
+  shouldShowDegradedModeBanner,
   type DegradedNotice,
 } from '../utils/degradedModeNotices';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
@@ -16,7 +18,7 @@ function pushDegraded(
   setNotices: Dispatch<SetStateAction<DegradedNotice[]>>,
   raw: Record<string, unknown> | undefined,
 ) {
-  if (!raw || typeof raw !== 'object') return;
+  if (!raw || typeof raw !== 'object' || !isUserVisibleDegradation(raw)) return;
   const notice = formatDegradedPayload(raw);
   setNotices((prev) => mergeDegradedNotices(prev, [notice]));
 }
@@ -289,7 +291,11 @@ export function useDecisionReportStream() {
     finalTrace,
     trace,
     error,
-    degradedWarnings: noticeMessages(degradedNotices),
+    degradedWarnings: shouldShowDegradedModeBanner(degradedNotices, {
+      streamError: status === 'error',
+    })
+      ? noticeMessages(degradedNotices)
+      : [],
     degradedNotices,
     start,
     cancel,

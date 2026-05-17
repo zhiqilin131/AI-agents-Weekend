@@ -85,15 +85,17 @@ describe('RecommendationCard', () => {
     const html = renderToStaticMarkup(<RecommendationCard report={makeReport()} />);
     expect(html).toContain('data-testid="slime-advisor"');
     expect(html).toContain('Best current path');
-    expect(html).toContain('Mochi shares');
+    expect(html).toContain('Mochi');
+    expect(html).toContain('suggestion');
   });
 
-  it('uses slime persona tone for bubble label when set', () => {
+  it('uses possessive suggestion label for slime name', () => {
     slimeMock.name = 'Ron';
     slimeMock.personality = 'calm';
     if (slimeMock.persona) slimeMock.persona.tone = 'analytical';
     const html = renderToStaticMarkup(<RecommendationCard report={makeReport()} />);
-    expect(html).toContain('Ron notes');
+    expect(html).toContain('Ron');
+    expect(html).toContain('suggestion');
   });
 
   it('passes cautious slime state when bias risks exist', () => {

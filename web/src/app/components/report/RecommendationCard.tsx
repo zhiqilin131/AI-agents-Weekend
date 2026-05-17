@@ -4,11 +4,7 @@ import { CheckCircle2 } from 'lucide-react';
 import type { DecisionReport, ResourceDrop } from '../../model';
 import { RESOURCE_DROP_CALENDAR_ID } from '../../model';
 import { TypewriterText } from '../TypewriterText';
-import {
-  bubbleTextFromReasoningWithPersona,
-  conciseReasoningPreview,
-  isLongReasoning,
-} from '../../../utils/recommendationNarration';
+import { conciseReasoningPreview, isLongReasoning } from '../../../utils/recommendationNarration';
 import { SlimeAdvisor, type SlimeAdvisorState } from './SlimeAdvisor';
 import { SpeechBubble } from './SpeechBubble';
 import { MiniReadAloudControl } from './MiniReadAloudControl';
@@ -60,11 +56,12 @@ export function RecommendationCard({
   const cloudWebAudioStopRef = useRef<(() => void) | null>(null);
   const cloudTtsGenRef = useRef(0);
 
-  const bubbleText = useMemo(
-    () => bubbleTextFromReasoningWithPersona(reasoning, title, slimeProfile.persona),
-    [reasoning, title, slimeProfile.persona],
-  );
-  const speechText = bubbleText;
+  const speechText = useMemo(() => {
+    const t = title.trim();
+    const r = reasoning.trim();
+    if (t && r) return `${t}. ${r}`;
+    return r || t;
+  }, [title, reasoning]);
 
   const longBody = isLongReasoning(reasoning);
   const [showFullReasoning, setShowFullReasoning] = useState(false);
@@ -325,10 +322,48 @@ export function RecommendationCard({
             </p>
           </div>
           <SpeechBubble speaking={mouthSpeaking} tailToward="start">
-            <p className="mb-1 text-[11px] uppercase tracking-wide text-purple-700/90">
+            <p className="mb-2 text-[11px] font-semibold tracking-wide text-purple-700/90">
               {slimeBubbleLabel(slimeProfile)}
             </p>
-            <p className="text-sm font-medium leading-relaxed text-gray-800">{bubbleText}</p>
+            {hasRec ? (
+              isStreaming ? (
+                <p className="whitespace-pre-wrap text-sm font-normal leading-relaxed text-gray-800">{reasoning}</p>
+              ) : showCollapsedReasoning ? (
+                <TypewriterText
+                  text={preview}
+                  as="p"
+                  className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800"
+                  enabled={Boolean(preview) && !reasoningTypewriterDone}
+                  onComplete={() => setReasoningTypewriterDone(true)}
+                />
+              ) : longBody ? (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">{reasoning}</p>
+              ) : (
+                <TypewriterText
+                  text={reasoning}
+                  as="p"
+                  className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800"
+                  enabled={Boolean(reasoning) && !reasoningTypewriterDone}
+                  onComplete={() => setReasoningTypewriterDone(true)}
+                />
+              )
+            ) : (
+              <p className="text-sm leading-relaxed text-gray-600">Your recommendation is loading…</p>
+            )}
+            {longBody && !isStreaming ? (
+              <button
+                type="button"
+                className="mt-3 text-xs font-semibold text-indigo-700 underline-offset-2 hover:underline"
+                onClick={() => {
+                  setShowFullReasoning((prev) => {
+                    if (!prev) setReasoningTypewriterDone(true);
+                    return !prev;
+                  });
+                }}
+              >
+                {showFullReasoning ? 'Show less' : 'Show full reasoning'}
+              </button>
+            ) : null}
           </SpeechBubble>
           {readAloudHint ? <p className="text-[11px] text-amber-800">{readAloudHint}</p> : null}
           {executionCalendar ? (
@@ -336,44 +371,6 @@ export function RecommendationCard({
           ) : null}
         </div>
       </div>
-
-      {hasRec &&
-        (isStreaming ? (
-          <p className="whitespace-pre-wrap text-sm font-normal leading-relaxed text-gray-700">{reasoning}</p>
-        ) : showCollapsedReasoning ? (
-          <TypewriterText
-            text={preview}
-            as="p"
-            className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700"
-            enabled={Boolean(preview) && !reasoningTypewriterDone}
-            onComplete={() => setReasoningTypewriterDone(true)}
-          />
-        ) : longBody ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{reasoning}</p>
-        ) : (
-          <TypewriterText
-            text={reasoning}
-            as="p"
-            className="text-sm leading-relaxed text-gray-700 whitespace-pre-wrap"
-            enabled={Boolean(reasoning) && !reasoningTypewriterDone}
-            onComplete={() => setReasoningTypewriterDone(true)}
-          />
-        ))}
-
-      {longBody && !isStreaming ? (
-        <button
-          type="button"
-          className="mt-3 text-xs font-semibold text-indigo-700 underline-offset-2 hover:underline"
-          onClick={() => {
-            setShowFullReasoning((prev) => {
-              if (!prev) setReasoningTypewriterDone(true);
-              return !prev;
-            });
-          }}
-        >
-          {showFullReasoning ? 'Show less' : 'Show full reasoning'}
-        </button>
-      ) : null}
 
       {executionCalendar && report.actions.length > 0 ? (
         <ul className="mt-4 space-y-2">

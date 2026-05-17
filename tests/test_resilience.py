@@ -11,6 +11,20 @@ from foresight_x.structured_predict import structured_predict
 from foresight_x.ui.api_server import app
 
 
+def test_end_resilience_run_survives_context_mismatch() -> None:
+    from contextvars import copy_context
+
+    from foresight_x.resilience.runtime import degrade, end_resilience_run, start_resilience_run
+
+    child = copy_context()
+    token, buf = child.run(start_resilience_run)
+    child.run(lambda: degrade(component="openai", reason="test", stage="infer"))
+    # Reset from parent context (mimics SSE generator finally block).
+    events = end_resilience_run(token, buffer=buf)
+    assert len(events) == 1
+    assert events[0]["stage"] == "infer"
+
+
 def test_resilience_health_endpoint_shape():
     c = TestClient(app)
     r = c.get("/api/health/resilience")

@@ -559,7 +559,7 @@ def iter_pipeline_events(
     """Yield meta, partial trace fragments per stage, then ``complete`` (SSE)."""
     settings = ctx.settings or load_settings()
     raise_if_strict_llm_missing(ctx.llm)
-    run_token = start_resilience_run()
+    run_token, run_events_buf = start_resilience_run()
     reset_llm_probe_cache()
     probe_linear_mcp()
     for provider in ("openai", "tavily"):
@@ -728,7 +728,7 @@ def iter_pipeline_events(
             chaos_profile=chaos_profile,
         )
         t_finalize = time.perf_counter()
-        degradations = [Degradation.model_validate(e) for e in current_run_events()]
+        degradations = [Degradation.model_validate(e) for e in run_events_buf]
         trace = finalize_trace(
             decision_id=did,
             timestamp=ts,
@@ -745,13 +745,13 @@ def iter_pipeline_events(
             user_memory=ctx.user_memory,
             original_user_input=original,
             anchor_now_iso=anchor,
-            resilience_events=current_run_events(),
+            resilience_events=run_events_buf,
             runtime_context=runtime_context,
             degradations=degradations,
         )
         per_stage_latency_ms["finalize"] = int(round((time.perf_counter() - t_finalize) * 1000.0))
         provider_per_stage["finalize"] = _provider_label_from_llm(ctx.llm) or "unknown"
-        all_events = _ensure_runtime_degradations(current_run_events(), chaos_profile)
+        all_events = _ensure_runtime_degradations(run_events_buf, chaos_profile)
         runtime_context = runtime_context.model_copy(
             update={
                 "total_latency_ms": int(round((time.perf_counter() - t0_total) * 1000.0)),
@@ -785,7 +785,7 @@ def iter_pipeline_events(
             save_user_profile(p, settings=settings)
         yield {"event": "complete", "trace": trace.model_dump(mode="json")}
     finally:
-        end_resilience_run(run_token)
+        end_resilience_run(run_token, buffer=run_events_buf)
 
 
 def run_pipeline(
@@ -805,7 +805,7 @@ def run_pipeline(
     """Execute the full RIS stack and return a ``DecisionTrace``; optionally save JSON under ``data/traces/``."""
     settings = ctx.settings or load_settings()
     raise_if_strict_llm_missing(ctx.llm)
-    run_token = start_resilience_run()
+    run_token, run_events_buf = start_resilience_run()
     reset_llm_probe_cache()
     probe_linear_mcp()
     for provider in ("openai", "tavily"):
@@ -905,7 +905,7 @@ def run_pipeline(
             chaos_profile=chaos_profile,
         )
         t_finalize = time.perf_counter()
-        degradations = [Degradation.model_validate(e) for e in current_run_events()]
+        degradations = [Degradation.model_validate(e) for e in run_events_buf]
         trace = finalize_trace(
             decision_id=did,
             timestamp=ts,
@@ -922,13 +922,13 @@ def run_pipeline(
             user_memory=ctx.user_memory,
             original_user_input=original,
             anchor_now_iso=anchor,
-            resilience_events=current_run_events(),
+            resilience_events=run_events_buf,
             runtime_context=runtime_context,
             degradations=degradations,
         )
         per_stage_latency_ms["finalize"] = int(round((time.perf_counter() - t_finalize) * 1000.0))
         provider_per_stage["finalize"] = _provider_label_from_llm(ctx.llm) or "unknown"
-        all_events = _ensure_runtime_degradations(current_run_events(), chaos_profile)
+        all_events = _ensure_runtime_degradations(run_events_buf, chaos_profile)
         runtime_context = runtime_context.model_copy(
             update={
                 "total_latency_ms": int(round((time.perf_counter() - t0_total) * 1000.0)),
@@ -962,4 +962,4 @@ def run_pipeline(
             save_user_profile(p, settings=settings)
         return trace
     finally:
-        end_resilience_run(run_token)
+        end_resilience_run(run_token, buffer=run_events_buf)

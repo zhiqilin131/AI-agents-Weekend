@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createHashRouter, RouterProvider } from 'react-router';
 import HomePage from './pages/HomePage';
+import ResilienceReportPage from './pages/ResilienceReportPage';
 import UnifiedChatPage from './pages/UnifiedChatPage';
 import HistoryPage from './pages/HistoryPage';
 import ProfilePage from './pages/ProfilePage';
@@ -37,6 +38,7 @@ const router = createHashRouter([
     errorElement: <AppErrorPage />,
     children: [
       { path: '/', element: <HomePage />, errorElement: <AppErrorPage /> },
+      { path: '/resilience', element: <ResilienceReportPage />, errorElement: <AppErrorPage /> },
       { path: '/chat', element: <UnifiedChatPage />, errorElement: <AppErrorPage /> },
       { path: '/trace/:decisionId', element: <HomePage />, errorElement: <AppErrorPage /> },
       { path: '/history', element: <HistoryPage />, errorElement: <AppErrorPage /> },

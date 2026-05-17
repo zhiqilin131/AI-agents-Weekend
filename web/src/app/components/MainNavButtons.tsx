@@ -9,6 +9,7 @@ import { isSupabaseEnvConfigured } from '../../auth/RequireAuthLayout';
 import { SlimeCreditsChipNav } from './credits/SlimeCreditsContext';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../../hooks/useSlimeProfile';
 import { BuddyTooltip } from '../../features/slime/BuddyTooltip';
+import { HomeResilienceNavButton } from './home/HomeResilienceNavButton';
 
 type NavIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
@@ -198,8 +199,32 @@ export function MainNavButtons({
           </div>
         )}
       </div>
-      {/* Sign out: fixed bottom-left so the five main pills stay centered above */}
-      {isSupabaseEnvConfigured() && session ? (
+      {/* Home landing only: resilience report (FOR-17); sign out stacked when signed in */}
+      {hideHome ? (
+        <div
+          className={cn(
+            'pointer-events-none fixed z-[60] flex flex-col gap-2',
+            compact ? 'bottom-4 left-4' : 'bottom-5 left-4 sm:bottom-6 sm:left-8',
+          )}
+        >
+          <div className="pointer-events-auto">
+            <HomeResilienceNavButton compact={compact} />
+          </div>
+          {isSupabaseEnvConfigured() && session ? (
+            <BuddyTooltip content="Sign out of your account on this device.">
+              <button
+                type="button"
+                onClick={() => void signOut().then(() => navigate(isSupabaseEnvConfigured() ? '/login' : '/'))}
+                className={cn(btnClass, 'pointer-events-auto')}
+                style={btnStyle}
+              >
+                <NavIconSlot Icon={LogOut} compact={compact} colorClass="text-slate-500" />
+                {compact ? 'Out' : 'Sign out'}
+              </button>
+            </BuddyTooltip>
+          ) : null}
+        </div>
+      ) : isSupabaseEnvConfigured() && session ? (
         <div
           className={cn(
             'pointer-events-none fixed z-[60]',

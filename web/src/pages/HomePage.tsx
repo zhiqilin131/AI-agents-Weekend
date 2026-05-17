@@ -12,6 +12,7 @@ import { mapTraceToReport } from '../utils/mapTrace';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
 import { apiFetch } from '../utils/apiFetch';
 import { parseSseBlocks } from '../utils/parseSse';
+import { isUserVisibleDegradation } from '../utils/degradedModeNotices';
 import type { AppState, DecisionReport } from '../app/model';
 import { HomeRoamingSlime } from '../app/components/home/HomeRoamingSlime';
 import { SlimeLandingCta } from '../app/components/home/SlimeLandingCta';
@@ -407,20 +408,22 @@ export default function HomePage() {
           }
           if (data.event === 'degraded' && data.degraded && typeof data.degraded === 'object') {
             const d = data.degraded as Record<string, unknown>;
-            const msg = String(d.reason || 'Running in degraded mode');
-            const key = `${String(d.at || '')}:${msg}`;
-            setDegradeNotices((prev) => {
-              if (prev.some((x) => `${x.at}:${x.message}` === key)) return prev;
-              return [
-                ...prev.slice(-3),
-                {
-                  at: String(d.at || new Date().toISOString()),
-                  message: msg,
-                  stage: String(d.stage || ''),
-                  retryable: Boolean(d.retryable),
-                },
-              ];
-            });
+            if (isUserVisibleDegradation(d)) {
+              const msg = String(d.reason || 'Running in degraded mode');
+              const key = `${String(d.at || '')}:${msg}`;
+              setDegradeNotices((prev) => {
+                if (prev.some((x) => `${x.at}:${x.message}` === key)) return prev;
+                return [
+                  ...prev.slice(-3),
+                  {
+                    at: String(d.at || new Date().toISOString()),
+                    message: msg,
+                    stage: String(d.stage || ''),
+                    retryable: Boolean(d.retryable),
+                  },
+                ];
+              });
+            }
           }
           if (data.event === 'complete' && data.trace && typeof data.trace === 'object') {
             trace = data.trace as Record<string, unknown>;
