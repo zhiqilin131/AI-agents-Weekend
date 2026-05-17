@@ -285,8 +285,6 @@ def _llm_summarize_thread_title(thread: dict[str, Any], *, force: bool = False) 
         _AUTOTITLE_LLM_ATTEMPTED_THREAD_IDS.add(thread_id)
 
     settings = load_settings()
-    if not (settings.openai_api_key or "").strip():
-        return ""
 
     messages = thread.get("messages") or []
     if not isinstance(messages, list):
