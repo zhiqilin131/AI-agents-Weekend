@@ -25,6 +25,7 @@ import {
   loadDraftFromStorage,
   markOnboardingJustFinished,
   nowIso,
+  resolveOnboardingStep,
   saveDraftToStorage,
   type OnboardingDraft,
   type PriorityDomain,
@@ -33,6 +34,7 @@ import {
   withQuestionMarked,
 } from '../features/onboarding/onboarding';
 import type { UserProfile } from '../features/onboarding/types';
+import { useAuth } from '../auth/AuthContext';
 
 const DOMAIN_LABEL: Record<PriorityDomain, string> = {
   work: 'Work',
@@ -55,7 +57,9 @@ function clampStep(v: number): number {
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
+  const { session } = useAuth();
   const [searchParams] = useSearchParams();
+  const storageUserId = session?.user?.id ?? null;
   const mode = searchParams.get('mode') || '';
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -90,23 +94,22 @@ export default function OnboardingPage() {
     }
     const completed = Boolean(existing?.onboardingStatus?.completed);
     if (completed) {
-      clearDraftFromStorage();
+      clearDraftFromStorage(storageUserId);
       if (!draftFromProfile.valuesNarrative.trim()) {
         draftFromProfile.valuesNarrative = generateValuesNarrative(draftFromProfile.pvqResponses);
       }
       return { ...draftFromProfile, step: 4 };
     }
-    const local = loadDraftFromStorage();
+    const local = loadDraftFromStorage(storageUserId);
     if (!local) {
       if (!draftFromProfile.valuesNarrative.trim()) {
         draftFromProfile.valuesNarrative = generateValuesNarrative(draftFromProfile.pvqResponses);
       }
-      return draftFromProfile;
+      return { ...draftFromProfile, step: 0 };
     }
     const merged: OnboardingDraft = {
       ...draftFromProfile,
       ...local,
-      step: clampStep(local.step ?? draftFromProfile.step),
       priorities: Array.isArray(local.priorities) ? local.priorities : draftFromProfile.priorities,
       pvqResponses:
         Array.isArray(local.pvqResponses) && local.pvqResponses.length === 8
@@ -114,9 +117,14 @@ export default function OnboardingPage() {
           : draftFromProfile.pvqResponses,
       skippedQuestions: Array.isArray(local.skippedQuestions) ? local.skippedQuestions : draftFromProfile.skippedQuestions,
     };
+    merged.step = resolveOnboardingStep({
+      serverCompleted: false,
+      localStep: clampStep(local.step ?? 0),
+      draftFromProfile: merged,
+    });
     if (!merged.valuesNarrative.trim()) merged.valuesNarrative = generateValuesNarrative(merged.pvqResponses);
     return merged;
-  }, []);
+  }, [storageUserId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,16 +145,16 @@ export default function OnboardingPage() {
     return () => {
       cancelled = true;
     };
-  }, [hydrateDraftFromProfile]);
+  }, [hydrateDraftFromProfile, storageUserId]);
 
   useEffect(() => {
     if (loading) return;
     if (onboardingCompleted) {
-      clearDraftFromStorage();
+      clearDraftFromStorage(storageUserId);
       return;
     }
-    saveDraftToStorage(draft);
-  }, [draft, loading, onboardingCompleted]);
+    saveDraftToStorage(draft, storageUserId);
+  }, [draft, loading, onboardingCompleted, storageUserId]);
 
   /** Re-login with completed profile: skip the stuck completion screen and go home. */
   useEffect(() => {
@@ -259,14 +267,14 @@ export default function OnboardingPage() {
     try {
       await persistProfile({ completed: true, incrementPrompt: false });
       setStep3SavingDone(true);
-      clearDraftFromStorage();
+      clearDraftFromStorage(storageUserId);
       setDraft((prev) => ({ ...prev, step: 4 }));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save onboarding');
     } finally {
       setSaving(false);
     }
-  }, [persistProfile]);
+  }, [persistProfile, storageUserId]);
 
   const finishOnboardingAndNavigate = useCallback(
     async (to: string) => {
@@ -274,7 +282,7 @@ export default function OnboardingPage() {
       setError(null);
       try {
         await persistProfile({ completed: true, incrementPrompt: false });
-        clearDraftFromStorage();
+        clearDraftFromStorage(storageUserId);
         markOnboardingJustFinished();
         navigate(to, { replace: true });
       } catch (e) {
@@ -283,7 +291,7 @@ export default function OnboardingPage() {
         setSaving(false);
       }
     },
-    [navigate, persistProfile],
+    [navigate, persistProfile, storageUserId],
   );
 
   const saveAndExit = useCallback(async () => {

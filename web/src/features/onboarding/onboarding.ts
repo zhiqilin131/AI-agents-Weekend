@@ -1,8 +1,51 @@
 import type { UserProfile } from './types';
 
+/** Legacy global key — do not use for new writes (leaked across accounts). */
 export const ONBOARDING_DRAFT_STORAGE_KEY = 'fx_onboarding_draft_v1';
 /** Set when user leaves the completion screen so Home does not bounce back into onboarding. */
 export const ONBOARDING_JUST_FINISHED_KEY = 'fx.onboarding.justFinished.v1';
+
+function sanitizeStorageUserId(raw: string | null | undefined): string {
+  const s = (raw ?? '').trim();
+  if (!s) return 'anon';
+  return s.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+}
+
+export function onboardingDraftStorageKey(userId?: string | null): string {
+  return `${ONBOARDING_DRAFT_STORAGE_KEY}.${sanitizeStorageUserId(userId)}`;
+}
+
+/** Remove legacy global draft and session handoff flags (call on sign-out). */
+export function clearAllOnboardingClientState(userId?: string | null): void {
+  try {
+    localStorage.removeItem(ONBOARDING_DRAFT_STORAGE_KEY);
+    if (userId) localStorage.removeItem(onboardingDraftStorageKey(userId));
+    sessionStorage.removeItem(ONBOARDING_JUST_FINISHED_KEY);
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Never show the completion step unless the server profile is marked completed. */
+export function resolveOnboardingStep(opts: {
+  serverCompleted: boolean;
+  localStep: number;
+  draftFromProfile: OnboardingDraft;
+}): number {
+  if (opts.serverCompleted) return 4;
+  const local = opts.localStep;
+  if (local < 4) return Math.max(0, Math.min(3, local));
+  return inferIncompleteResumeStep(opts.draftFromProfile);
+}
+
+function inferIncompleteResumeStep(d: OnboardingDraft): number {
+  const hasPriorities = d.priorities.some((p) => p.text.trim());
+  const pvqAnswered = d.pvqResponses.some((r) => r.score !== 'skipped');
+  if (hasPriorities && pvqAnswered) return 3;
+  if (pvqAnswered || d.stepOneSummary) return 2;
+  if (hasPriorities || d.priorityCursor > 0) return 1;
+  return 0;
+}
 
 export function markOnboardingJustFinished(): void {
   try {
@@ -294,9 +337,10 @@ export function createEmptyOnboardingDraft(): OnboardingDraft {
   };
 }
 
-export function loadDraftFromStorage(): OnboardingDraft | null {
+export function loadDraftFromStorage(userId?: string | null): OnboardingDraft | null {
   try {
-    const raw = localStorage.getItem(ONBOARDING_DRAFT_STORAGE_KEY);
+    localStorage.removeItem(ONBOARDING_DRAFT_STORAGE_KEY);
+    const raw = localStorage.getItem(onboardingDraftStorageKey(userId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<OnboardingDraft> | null;
     if (!parsed || typeof parsed !== 'object') return null;
@@ -318,17 +362,19 @@ export function loadDraftFromStorage(): OnboardingDraft | null {
   }
 }
 
-export function saveDraftToStorage(draft: OnboardingDraft): void {
+export function saveDraftToStorage(draft: OnboardingDraft, userId?: string | null): void {
   try {
-    localStorage.setItem(ONBOARDING_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    localStorage.removeItem(ONBOARDING_DRAFT_STORAGE_KEY);
+    localStorage.setItem(onboardingDraftStorageKey(userId), JSON.stringify(draft));
   } catch {
     // best effort only
   }
 }
 
-export function clearDraftFromStorage(): void {
+export function clearDraftFromStorage(userId?: string | null): void {
   try {
     localStorage.removeItem(ONBOARDING_DRAFT_STORAGE_KEY);
+    localStorage.removeItem(onboardingDraftStorageKey(userId));
   } catch {
     // best effort only
   }

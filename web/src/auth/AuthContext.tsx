@@ -1,5 +1,6 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { clearAllOnboardingClientState } from '../features/onboarding/onboarding';
 import { registerAuthSessionBridge, setAuthAccessToken, setAuthUserId } from './authTokenBridge';
 
 export type AuthContextValue = {
@@ -71,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [supabase]);
 
   const signOut = async () => {
+    clearAllOnboardingClientState(session?.user?.id);
     if (supabase) await supabase.auth.signOut();
     setAuthAccessToken(null);
     setAuthUserId(null);
