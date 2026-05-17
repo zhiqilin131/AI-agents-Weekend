@@ -47,6 +47,21 @@ describe('AgentPresence3DPanel', () => {
     expect(html).toContain('Evaluating trade-offs');
   });
 
+  it('hides decision report CTA while report overlay session is open', () => {
+    const html = renderToStaticMarkup(
+      <AgentPresence3DPanel
+        status="report_complete"
+        timeline={['Report complete']}
+        forceFallback
+        suggestion={{ type: 'decision_report', title: 'Turn this into a decision report?', message: 'Structured options and trade-offs.' }}
+        reportOverlaySession={{ streaming: false, progressStep: 'Done' }}
+        onGenerateReport={() => {}}
+      />,
+    );
+    expect(html).not.toContain('Generate report');
+    expect(html).not.toContain('Decision detected');
+  });
+
   it('keeps decision report CTA when status returns to idle but suggestion is still active', () => {
     const html = renderToStaticMarkup(
       <AgentPresence3DPanel

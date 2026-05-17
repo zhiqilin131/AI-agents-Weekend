@@ -174,6 +174,13 @@ def sync_decision_pending_from_trigger(thread: dict[str, Any], *, last_user_mess
     existing = thread.get("pending_action")
     if isinstance(existing, dict) and existing.get("type") == "clarification":
         return existing
+    if thread_has_decision_report_artifact(thread):
+        existing_pa = thread.get("pending_action")
+        if isinstance(existing_pa, dict) and existing_pa.get("type") == "decision_report":
+            payload = existing_pa.get("payload") if isinstance(existing_pa.get("payload"), dict) else {}
+            if payload.get("manual_mode") or not bool(_ensure_state(thread).get("pending_confirmation")):
+                clear_pending_action(thread, resolution="confirmed")
+                return None
     dts = _ensure_state(thread)
     if not bool(dts.get("pending_confirmation")):
         if isinstance(existing, dict) and existing.get("type") == "decision_report":
@@ -226,6 +233,10 @@ def return_thread_to_normal_chat_after_report(thread: dict[str, Any]) -> None:
     """After a report artifact, keep chatting in normal mode so new decisions can be offered."""
     if str(thread.get("mode") or "") == "decision_report":
         thread["mode"] = "normal"
+    clear_pending_action(thread, resolution="confirmed")
+    dts = _ensure_state(thread)
+    dts["pending_confirmation"] = False
+    dts["pending_prompt"] = ""
 
 
 def derive_pending_action(thread: dict[str, Any], *, last_user_message: str = "") -> dict[str, Any] | None:
@@ -250,6 +261,11 @@ def derive_pending_action(thread: dict[str, Any], *, last_user_message: str = ""
 
     if isinstance(existing, dict) and existing.get("type") == "decision_report":
         clear_pending_action(thread)
+        return None
+
+    if thread_has_decision_report_artifact(thread) and not bool(dts.get("pending_confirmation")):
+        clear_pending_action(thread)
+        return None
 
     return None
 

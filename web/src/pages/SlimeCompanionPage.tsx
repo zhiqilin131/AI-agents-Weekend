@@ -9,6 +9,7 @@ import { ThreadActionDock } from '../app/components/shadow/ThreadActionDock';
 import {
   decisionPromptFromPendingAction,
   pendingActionToSuggestion,
+  shouldSurfaceDecisionReportPending,
   type PendingAction,
 } from '../app/components/shadow/pendingActionTypes';
 import { DecisionReportStreamingPanel } from '../app/components/shadow/DecisionReportStreamingPanel';
@@ -253,12 +254,25 @@ export default function SlimeCompanionPage() {
     setBuddyPendingAction(null);
     setReportOpen(true);
     const { error } = await reportStream.start({ threadId: tid, decisionPrompt: p });
+    setPendingDecision(null);
+    setBuddyPendingAction(null);
     if (error === 'insufficient_credits') {
       setReportOpen(false);
       return;
     }
     if (error && error !== 'cancelled') {
       flashBuddyCornerToast(error.length > 120 ? `${error.slice(0, 120)}…` : error, 'error');
+      return;
+    }
+    try {
+      const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(tid)}`);
+      if (res.ok) {
+        const data = (await res.json()) as { thread?: { pending_action?: PendingAction } };
+        const pa = data.thread?.pending_action;
+        setBuddyPendingAction(pa && typeof pa === 'object' && pa.type ? pa : null);
+      }
+    } catch {
+      /* keep cleared */
     }
   };
 
@@ -460,44 +474,58 @@ export default function SlimeCompanionPage() {
             profile={slimeDraft}
             advisorState={advisorState}
             speechOutput={speechOutput}
-            decisionSuggestion={pendingDecision}
+            decisionSuggestion={
+              reportOpen || reportStream.isStreaming || reportStream.finalTrace ? null : pendingDecision
+            }
             onEvidenceOpen={() => setEvidenceDrawerOpen(true)}
           />
         </div>
 
-        {buddyPendingAction || buddyDecisionSuggestion ? (
-          <div
-            data-slime-avoid
-            className="relative z-[48] mx-auto mt-3 w-full max-w-lg px-1 sm:mt-4"
-          >
-            <ThreadActionDock
-              pendingAction={
-                buddyPendingAction ??
-                (buddyDecisionSuggestion
-                  ? {
-                      id: 'buddy-voice-sug',
-                      type: buddyDecisionSuggestion.type || 'decision_report',
-                      title: buddyDecisionSuggestion.title,
-                      message: buddyDecisionSuggestion.message,
-                      blocks: ['generate_decision_report'],
-                      payload: { decision_prompt: pendingDecision?.decision_prompt || '' },
-                    }
-                  : null)
-              }
-              disabled={reportStream.isStreaming}
-              onClarifySkip={() => void dismissBuddyDecisionSuggestion()}
-              onClarifyAnswer={() => {}}
-              onGenerateDecisionReport={() =>
-                void startDecisionReportFlow(
-                  pendingDecision?.decision_prompt ||
-                    decisionPromptFromPendingAction(buddyPendingAction) ||
-                    '',
-                )
-              }
-              onDismissSuggestion={() => void dismissBuddyDecisionSuggestion()}
-            />
-          </div>
-        ) : null}
+        {(() => {
+          const buddyDockPending: PendingAction | null =
+            buddyPendingAction ??
+            (buddyDecisionSuggestion
+              ? {
+                  id: 'buddy-voice-sug',
+                  type: (buddyDecisionSuggestion.type || 'decision_report') as PendingAction['type'],
+                  title: buddyDecisionSuggestion.title,
+                  message: buddyDecisionSuggestion.message,
+                  blocks: ['generate_decision_report'],
+                  payload: { decision_prompt: pendingDecision?.decision_prompt || '' },
+                }
+              : null);
+          const showBuddyDock =
+            buddyDockPending &&
+            (buddyDockPending.type === 'clarification' ||
+              buddyDockPending.type === 'role_mode' ||
+              shouldSurfaceDecisionReportPending(buddyDockPending, {
+                isReportGenerating: reportStream.isStreaming,
+                reportPanelOpen: reportOpen,
+                reportComplete: reportStream.status === 'done' && Boolean(reportStream.finalTrace),
+              }));
+          if (!showBuddyDock) return null;
+          return (
+            <motion.div
+              data-slime-avoid
+              className="relative z-[48] mx-auto mt-3 w-full max-w-lg px-1 sm:mt-4"
+            >
+              <ThreadActionDock
+                pendingAction={buddyDockPending}
+                disabled={reportStream.isStreaming}
+                onClarifySkip={() => void dismissBuddyDecisionSuggestion()}
+                onClarifyAnswer={() => {}}
+                onGenerateDecisionReport={() =>
+                  void startDecisionReportFlow(
+                    pendingDecision?.decision_prompt ||
+                      decisionPromptFromPendingAction(buddyPendingAction) ||
+                      '',
+                  )
+                }
+                onDismissSuggestion={() => void dismissBuddyDecisionSuggestion()}
+              />
+            </motion.div>
+          );
+        })()}
       </div>
 
       <DecisionReportStreamingPanel

@@ -229,9 +229,11 @@ export function AgentPresence3DPanel({
 
   const ribbon = useMemo(() => statusRibbon[status], [status]);
 
-  /** Stream `done` sets status to `idle` — keep decision affordances while suggestion is still active. */
+  /** Hide duplicate generate CTAs while the report overlay is open or already finished. */
   const showDecisionReportCta =
-    suggestion?.type === 'decision_report' && !['report_generating', 'report_open'].includes(status);
+    suggestion?.type === 'decision_report' &&
+    !reportOverlaySession &&
+    !['report_generating', 'report_complete'].includes(status);
   const companionMode =
     status === 'idle' && suggestion?.type === 'decision_report' ? 'decision_detected' : status;
 

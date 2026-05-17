@@ -43,6 +43,7 @@ import {
   SLIME_CALENDAR_BRIEF_CONTEXT_KEY,
   SLIME_VOICE_CALENDAR_RESOLVED_KEY,
 } from '../utils/executionStorageKeys';
+import { applyCalendarDraftToPlanner, loadCalendarDraftForPlanner } from '../utils/calendarAgentApply';
 import {
   loadCoachSchedulerOptions,
   mergeEventsAfterRefine,
@@ -237,6 +238,7 @@ export default function ExecutionPlannerPage() {
     end: string;
   } | null>(null);
   const plannerHydratedRef = useRef(false);
+  const reportCalendarAppliedRef = useRef<string | null>(null);
   const serverSyncSkipUntilRef = useRef<number>(0);
   const dragStateRef = useRef<{
     eventId: string;
@@ -357,6 +359,75 @@ export default function ExecutionPlannerPage() {
       cancelled = true;
     };
   }, [decisionId]);
+
+  useEffect(() => {
+    reportCalendarAppliedRef.current = null;
+  }, [decisionId]);
+
+  /** After a decision report, confirm the calendar-agent draft (or auto-place tasks) on the grid. */
+  useEffect(() => {
+    if (!decisionId || !storageReady || loading) return;
+    if (reportCalendarAppliedRef.current === decisionId) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const draft = await loadCalendarDraftForPlanner(decisionId, shadowThreadId);
+        if (cancelled) return;
+
+        if (draft) {
+          const { events: planned, message } = await applyCalendarDraftToPlanner(draft);
+          if (cancelled) return;
+          if (planned.length > 0) {
+            reportCalendarAppliedRef.current = decisionId;
+            setEvents((prev) => dedupeAiEventsByTitle([...prev.filter((x) => x.source !== 'ai'), ...planned]));
+            const firstStart = parseEventDate(planned[0]!.start);
+            if (firstStart) {
+              setWeekStart(startOfWeek(firstStart, { weekStartsOn: 1 }));
+            }
+            setScheduleCoachNote(message);
+            setCalendarWarning(null);
+            return;
+          }
+        }
+
+        if (tasks.length === 0) {
+          reportCalendarAppliedRef.current = decisionId;
+          return;
+        }
+
+        const weekAnchor = startOfWeek(new Date(), { weekStartsOn: 1 });
+        const visibleWeekStart = setMinutes(setHours(startOfDay(weekAnchor), SCHEDULER_DAY_START_HOUR), 0);
+        reportCalendarAppliedRef.current = decisionId;
+        setEvents((prev) => {
+          const { scheduled, unscheduled } = scheduleTasksIntoFreeSlots(tasks, prev, {
+            dayStartHour: SCHEDULER_DAY_START_HOUR,
+            dayEndHour: SCHEDULER_DAY_END_HOUR,
+            slotMinutes: SLOT_MINUTES,
+            startDate: visibleWeekStart,
+            days: 7,
+          });
+          if (scheduled.length === 0) return prev;
+          setUnscheduled(unscheduled);
+          setScheduleCoachNote(`Scheduled ${scheduled.length} task(s) from your report plan.`);
+          setCalendarWarning(null);
+          setWeekStart(weekAnchor);
+          return dedupeAiEventsByTitle([...prev.filter((x) => x.source !== 'ai'), ...scheduled]);
+        });
+      } catch (e) {
+        if (!cancelled) {
+          reportCalendarAppliedRef.current = decisionId;
+          setScheduleCoachNote(
+            e instanceof Error ? e.message : 'Could not add report plan to calendar — try Auto-schedule.',
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [decisionId, storageReady, loading, shadowThreadId, tasks]);
 
   useEffect(() => {
     try {

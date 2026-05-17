@@ -26,8 +26,10 @@ import { ThreadActionDock } from './ThreadActionDock';
 import {
   buildClarificationPendingAction,
   decisionPromptFromPendingAction,
+  messagesHaveDecisionReportArtifact,
   normalizeThreadMessages,
   pendingActionToSuggestion,
+  shouldSurfaceDecisionReportPending,
   type PendingAction,
 } from './pendingActionTypes';
 import {
@@ -598,7 +600,12 @@ export function ShadowChatShell({
           if (activeThreadId) {
             void loadThread(activeThreadId, { preservePendingSuggestion: true })
               .then(() => {
-                if (!paDone && lastDecisionSuggestionRef.current) {
+                if (
+                  !paDone &&
+                  lastDecisionSuggestionRef.current &&
+                  !messagesHaveDecisionReportArtifact(messagesRef.current) &&
+                  !reportGeneratingRef.current
+                ) {
                   const sug = lastDecisionSuggestionRef.current;
                   if (sug?.type === 'decision_report' || sug?.type === 'role_mode') {
                     setPendingAction({
@@ -707,6 +714,8 @@ export function ShadowChatShell({
         pushTimeline('Report complete');
         void refreshCredits();
         await loadThread(activeThreadId);
+        setPendingAction(null);
+        lastDecisionSuggestionRef.current = null;
         await refreshThreads();
       }
     } catch (e) {
@@ -883,13 +892,21 @@ export function ShadowChatShell({
   }, [messages, hasClarificationPending, pendingAction, requestClarifyIfNeeded]);
 
   const isReportGenerating = reportStream.isStreaming;
+  const hasReportArtifact = useMemo(() => messagesHaveDecisionReportArtifact(messages), [messages]);
+  const reportComplete = reportStream.status === 'done' && Boolean(reportStream.finalTrace);
   const dockPendingAction = useMemo(() => {
-    if (!pendingAction) return null;
-    if (pendingAction.type === 'decision_report' && isReportGenerating) {
-      return null;
+    if (
+      !shouldSurfaceDecisionReportPending(pendingAction, {
+        isReportGenerating,
+        hasReportArtifact,
+        reportPanelOpen: reportOpen,
+        reportComplete,
+      })
+    ) {
+      return pendingAction?.type === 'clarification' || pendingAction?.type === 'role_mode' ? pendingAction : null;
     }
     return pendingAction;
-  }, [pendingAction, isReportGenerating]);
+  }, [pendingAction, isReportGenerating, hasReportArtifact, reportOpen, reportComplete]);
   const suggestion = useMemo(() => pendingActionToSuggestion(dockPendingAction), [dockPendingAction]);
 
   return (

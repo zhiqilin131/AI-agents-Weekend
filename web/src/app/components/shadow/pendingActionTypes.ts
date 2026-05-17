@@ -55,6 +55,22 @@ export function messagesHaveDecisionReportArtifact(messages: ShadowMessage[]): b
   return messages.some((m) => String(m.metadata?.type || '') === 'decision_report_artifact');
 }
 
+/** Hide stale "generate report?" cards while a report is open, streaming, or already saved on the thread. */
+export function shouldSurfaceDecisionReportPending(
+  pa: PendingAction | null | undefined,
+  opts: {
+    isReportGenerating?: boolean;
+    hasReportArtifact?: boolean;
+    reportPanelOpen?: boolean;
+    reportComplete?: boolean;
+  },
+): boolean {
+  if (!pa || pa.type !== 'decision_report') return Boolean(pa);
+  if (opts.isReportGenerating || opts.reportPanelOpen || opts.reportComplete) return false;
+  if (opts.hasReportArtifact) return false;
+  return true;
+}
+
 export function normalizeThreadMessages(raw: unknown): ShadowMessage[] {
   if (!Array.isArray(raw)) return [];
   const out: ShadowMessage[] = [];
