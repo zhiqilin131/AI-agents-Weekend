@@ -6,6 +6,7 @@ import { Ghost, Home, MessageSquare, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { ThreadActionDock } from '../app/components/shadow/ThreadActionDock';
+import { BrandMark } from '../app/components/BrandMark';
 import {
   decisionPromptFromPendingAction,
   pendingActionToSuggestion,
@@ -346,6 +347,16 @@ export default function SlimeCompanionPage() {
         data-slime-avoid
         className="absolute left-3 top-3 z-[60] flex flex-wrap items-center gap-2 sm:left-4 sm:top-4"
       >
+        <BuddyTooltip content="Foresight-X home">
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="inline-flex items-center focus:outline-none focus:ring-2 focus:ring-violet-400/40 rounded-full"
+            aria-label="Open Foresight-X home"
+          >
+            <BrandMark compact iconOnly />
+          </button>
+        </BuddyTooltip>
         <BuddyTooltip content="Go to the Foresight-X home screen and decision workspace.">
           <button
             type="button"

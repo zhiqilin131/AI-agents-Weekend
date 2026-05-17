@@ -10,6 +10,7 @@ import { SlimeCreditsChipNav } from './credits/SlimeCreditsContext';
 import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../../hooks/useSlimeProfile';
 import { BuddyTooltip } from '../../features/slime/BuddyTooltip';
 import { HomeResilienceNavButton } from './home/HomeResilienceNavButton';
+import { BrandMark } from './BrandMark';
 
 type NavIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
@@ -121,6 +122,19 @@ export function MainNavButtons({
     </BuddyTooltip>
   ) : null;
 
+  const brandBtn = (
+    <BuddyTooltip content="Foresight-X home">
+      <button
+        type="button"
+        onClick={() => navigate('/')}
+        className="inline-flex shrink-0 items-center focus:outline-none focus:ring-2 focus:ring-violet-400/40 rounded-full"
+        aria-label="Open Foresight-X home"
+      >
+        <BrandMark compact={compact} iconOnly={compact} />
+      </button>
+    </BuddyTooltip>
+  );
+
   const navPills = (
     <>
       <BuddyTooltip content="Open Shadow Chat — threaded assistant with reports, memory, and full composer.">
@@ -179,6 +193,7 @@ export function MainNavButtons({
         {!compact ? (
           <div className="flex w-full min-w-0 items-center gap-2 py-2">
             <div className="flex shrink-0 items-center gap-2">
+              {brandBtn}
               {homeBtn}
               <PersonaSwitcher compact />
             </div>
@@ -191,7 +206,10 @@ export function MainNavButtons({
           </div>
         ) : (
           <div className="flex w-full min-w-0 items-center gap-2 py-3 px-1">
-            <div className="flex shrink-0 items-center gap-2">{homeBtn}</div>
+            <div className="flex shrink-0 items-center gap-2">
+              {brandBtn}
+              {homeBtn}
+            </div>
             <div className={scrollClass}>
               <div className="flex w-max flex-nowrap items-center justify-center gap-2">{navPills}</div>
             </div>
