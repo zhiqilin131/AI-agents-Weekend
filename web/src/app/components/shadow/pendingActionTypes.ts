@@ -67,7 +67,11 @@ export function shouldSurfaceDecisionReportPending(
 ): boolean {
   if (!pa || pa.type !== 'decision_report') return Boolean(pa);
   if (opts.isReportGenerating || opts.reportPanelOpen || opts.reportComplete) return false;
-  if (opts.hasReportArtifact) return false;
+  if (opts.hasReportArtifact) {
+    if (pa.payload?.manual_mode === true) return true;
+    if (typeof pa.payload?.decision_prompt === 'string' && pa.payload.decision_prompt.trim()) return true;
+    return false;
+  }
   return true;
 }
 

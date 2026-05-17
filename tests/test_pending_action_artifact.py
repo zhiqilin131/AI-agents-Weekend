@@ -5,6 +5,7 @@ from __future__ import annotations
 from foresight_x.chat.pending_action import (
     derive_pending_action,
     return_thread_to_normal_chat_after_report,
+    set_manual_decision_pending,
     set_suggestion_pending,
 )
 
@@ -59,6 +60,27 @@ def test_return_thread_to_normal_chat_after_report() -> None:
     assert thread["mode"] == "normal"
     assert "pending_action" not in thread
     assert thread["decision_trigger_state"]["pending_confirmation"] is False
+
+
+def test_active_manual_confirm_kept_after_report_artifact() -> None:
+    thread: dict = {
+        "messages": [
+            {
+                "role": "assistant",
+                "metadata": {"type": "decision_report_artifact", "status": "complete"},
+            }
+        ],
+        "dismissed_suggestions": {"role_mode": False, "decision_report": False},
+    }
+    set_manual_decision_pending(
+        thread,
+        original_prompt="Should I sleep with my girlfriend tonight?",
+        enhanced_prompt="Should I sleep with my girlfriend Rose tonight?",
+    )
+    pa = derive_pending_action(thread)
+    assert pa is not None
+    assert pa["type"] == "decision_report"
+    assert pa.get("payload", {}).get("manual_mode") is True
 
 
 def test_stale_manual_confirm_hidden_after_report_artifact() -> None:

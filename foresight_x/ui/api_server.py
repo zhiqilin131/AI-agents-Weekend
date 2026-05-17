@@ -3003,14 +3003,13 @@ def stream_shadow_chat_message(
                 yield _sse_chunk({"type": "decision_suggestion", "suggestion": suggestion_manual})
                 yield _sse_chunk({"type": "pending_action_updated", "pending_action": pa_manual})
                 t_done_m = datetime.now(timezone.utc)
-                enrich_thread_with_pending_action(thread, last_user_message=message)
                 yield _sse_chunk(
                     {
                         "type": "done",
                         "thread_id": thread["thread_id"],
                         "message": thread.get("messages", [])[-1],
                         "suggestion": suggestion_manual,
-                        "pending_action": thread.get("pending_action"),
+                        "pending_action": pa_manual,
                         "metrics": {
                             "response_total_ms": int((t_done_m - t0_manual).total_seconds() * 1000),
                             "manual_decision_mode": True,

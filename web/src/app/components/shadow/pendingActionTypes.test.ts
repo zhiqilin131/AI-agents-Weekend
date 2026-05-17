@@ -29,12 +29,21 @@ describe('shouldSurfaceDecisionReportPending', () => {
     ).toBe(false);
   });
 
-  it('hides when thread already has a report artifact', () => {
+  it('hides generic offer when thread already has a report artifact', () => {
     expect(
       shouldSurfaceDecisionReportPending(decisionPending, {
         hasReportArtifact: true,
       }),
     ).toBe(false);
+  });
+
+  it('keeps manual confirmation when an older report exists on the thread', () => {
+    expect(
+      shouldSurfaceDecisionReportPending(
+        { ...decisionPending, payload: { manual_mode: true, decision_prompt: 'New question?' } },
+        { hasReportArtifact: true },
+      ),
+    ).toBe(true);
   });
 
   it('still surfaces clarification pending', () => {

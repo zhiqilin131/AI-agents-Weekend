@@ -178,7 +178,9 @@ def sync_decision_pending_from_trigger(thread: dict[str, Any], *, last_user_mess
         existing_pa = thread.get("pending_action")
         if isinstance(existing_pa, dict) and existing_pa.get("type") == "decision_report":
             payload = existing_pa.get("payload") if isinstance(existing_pa.get("payload"), dict) else {}
-            if payload.get("manual_mode") or not bool(_ensure_state(thread).get("pending_confirmation")):
+            if payload.get("manual_mode"):
+                return existing_pa
+            if not bool(_ensure_state(thread).get("pending_confirmation")):
                 clear_pending_action(thread, resolution="confirmed")
                 return None
     dts = _ensure_state(thread)
