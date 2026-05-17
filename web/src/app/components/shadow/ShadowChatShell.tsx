@@ -157,6 +157,14 @@ export function ShadowChatShell({
     setThreadsLoaded(true);
   }, []);
 
+  const patchThreadTitle = useCallback((threadId: string, title: string) => {
+    const trimmed = title.trim();
+    if (!threadId || !trimmed) return;
+    setThreads((prev) =>
+      prev.map((t) => (t.thread_id === threadId ? { ...t, title: trimmed } : t)),
+    );
+  }, []);
+
   const scrollChatToBottom = useCallback(() => {
     const el = chatScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -561,10 +569,17 @@ export function ShadowChatShell({
         } else if (type === 'pending_action_updated') {
           const paUp = ev.pending_action;
           if (paUp && typeof paUp === 'object') setPendingAction(paUp as PendingAction);
+        } else if (type === 'thread_title_updated') {
+          const tid = String(ev.thread_id || '');
+          const title = String(ev.title || '');
+          if (tid && title) patchThreadTitle(tid, title);
         } else if (type === 'decision_suggestion') {
           lastDecisionSuggestionRef.current = (ev.suggestion || null) as ShadowSuggestion | null;
         } else if (type === 'done') {
           done = true;
+          const doneTitle = typeof ev.thread_title === 'string' ? ev.thread_title.trim() : '';
+          const doneTid = String(ev.thread_id || activeThreadId || '');
+          if (doneTitle && doneTid) patchThreadTitle(doneTid, doneTitle);
           const fe = ev.frontend_action as { type?: string } | undefined;
           if (fe?.type === 'slime_profile_refresh') {
             void refetchSlimeProfileGlobal();

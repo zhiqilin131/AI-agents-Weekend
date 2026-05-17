@@ -116,6 +116,7 @@ from foresight_x.chat import (
 )
 from foresight_x.chat.decision_trigger import evaluate_decision_trigger, preview_will_auto_start_decision
 from foresight_x.chat.manual_decision_mode import build_manual_decision_confirmation
+from foresight_x.chat.thread_title import apply_title_for_first_user_message
 from foresight_x.chat.option_coach import build_option_chat_prompt
 from foresight_x.chat.pending_action import (
     clear_pending_action,
@@ -344,6 +345,20 @@ def _trace_artifact_summary(trace: dict | None) -> str:
 def _sse_chunk(obj: dict) -> str:
     """SSE line; ``default=str`` avoids rare non-JSON-native values aborting the stream."""
     return f"data: {json.dumps(obj, ensure_ascii=False, default=str)}\n\n"
+
+
+def _refine_thread_title_first_turn(thread: dict[str, Any], user_message: str, llm: Any | None) -> str | None:
+    title = apply_title_for_first_user_message(thread, user_message, llm=llm)
+    if title:
+        save_thread(thread)
+    return title
+
+
+def _thread_title_sse_fields(thread: dict[str, Any]) -> dict[str, str]:
+    t = str(thread.get("title") or "").strip()
+    if t and t != "New chat":
+        return {"thread_title": t}
+    return {}
 
 
 def _split_text_deltas(text: str, *, max_chars: int = 120) -> list[str]:
@@ -2767,6 +2782,11 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
             }
 
     append_message(thread, role="user", content=effective_msg, mode=mode, intent=intent.intent)
+    try:
+        ctx_title, _ = _build_context(settings, llm_model=chat_pm)
+        _refine_thread_title_first_turn(thread, effective_msg, ctx_title.llm)
+    except Exception:
+        _log.debug("thread title refine failed (non-stream)", exc_info=True)
 
     suggestion: dict | None = None
     decision_trace: dict | None = None
@@ -2973,6 +2993,15 @@ def stream_shadow_chat_message(
                     enhanced=enhanced,
                 )
                 append_message(thread, role="user", content=effective_message, mode=mode)
+                refined_title = _refine_thread_title_first_turn(thread, effective_message, ctx_m.llm)
+                if refined_title:
+                    yield _sse_chunk(
+                        {
+                            "type": "thread_title_updated",
+                            "thread_id": thread["thread_id"],
+                            "title": refined_title,
+                        }
+                    )
                 yield _sse_chunk({"type": "status", "status": "responding", "label": "Confirm decision question…"})
                 for chunk in _chunk_text(assistant_text):
                     yield _sse_chunk({"type": "delta", "content": chunk})
@@ -3015,6 +3044,7 @@ def stream_shadow_chat_message(
                             "manual_decision_mode": True,
                             "client_turn_seq": body.client_turn_seq,
                         },
+                        **_thread_title_sse_fields(thread),
                     }
                 )
                 return
@@ -3108,6 +3138,15 @@ def stream_shadow_chat_message(
             user_msg_id = str(user_row.get("id") or "")
 
             ctx, _ = _build_context(settings, llm_model=chat_pm_outer)
+            refined_title = _refine_thread_title_first_turn(thread, effective_message, ctx.llm)
+            if refined_title:
+                yield _sse_chunk(
+                    {
+                        "type": "thread_title_updated",
+                        "thread_id": thread["thread_id"],
+                        "title": refined_title,
+                    }
+                )
             profile = load_user_profile(settings)
             events = list(thread.get("clarification_events") or [])
             recent_slice = [
@@ -3392,6 +3431,7 @@ def stream_shadow_chat_message(
                     "suggestion": suggestion,
                     "pending_action": thread.get("pending_action"),
                     "metrics": metrics,
+                    **_thread_title_sse_fields(thread),
                 }
             )
         except Exception as e:

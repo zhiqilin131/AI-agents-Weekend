@@ -16,6 +16,26 @@ describe('ChatMessageList (shadow)', () => {
     expect(html).toContain('Hi');
   });
 
+  it('renders assistant **bold** as strong, not literal asterisks', () => {
+    const html = renderToStaticMarkup(
+      <ChatMessageList
+        messages={[
+          {
+            id: 'a1',
+            role: 'assistant',
+            content: 'Tap **Yes** below when ready.\n\n> Should I go?',
+          },
+        ]}
+        onOpenReportArtifact={() => {}}
+        onReviseArtifact={() => {}}
+        onArtifactExecutionCalendar={() => {}}
+      />,
+    );
+    expect(html).toContain('<strong');
+    expect(html).not.toContain('**Yes**');
+    expect(html).toContain('<blockquote');
+  });
+
   it('shows empty-state prompt and suggestion chips without calling API', () => {
     const html = renderToStaticMarkup(
       <ChatMessageList

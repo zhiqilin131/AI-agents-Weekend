@@ -11,14 +11,10 @@ const decisionPending: PendingAction = {
 };
 
 describe('shouldSurfaceDecisionReportPending', () => {
-  it('hides decision report pending while report panel is open or complete', () => {
+  it('hides decision report pending while generating or viewing a finished report', () => {
     expect(
       shouldSurfaceDecisionReportPending(decisionPending, {
         reportPanelOpen: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldSurfaceDecisionReportPending(decisionPending, {
         reportComplete: true,
       }),
     ).toBe(false);
@@ -27,6 +23,15 @@ describe('shouldSurfaceDecisionReportPending', () => {
         isReportGenerating: true,
       }),
     ).toBe(false);
+  });
+
+  it('surfaces a new decision after a prior report when the panel is closed', () => {
+    expect(
+      shouldSurfaceDecisionReportPending(
+        { ...decisionPending, payload: { manual_mode: true, decision_prompt: 'Second question?' } },
+        { reportComplete: true, hasReportArtifact: true },
+      ),
+    ).toBe(true);
   });
 
   it('hides generic offer when thread already has a report artifact', () => {

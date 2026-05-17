@@ -55,7 +55,7 @@ export function messagesHaveDecisionReportArtifact(messages: ShadowMessage[]): b
   return messages.some((m) => String(m.metadata?.type || '') === 'decision_report_artifact');
 }
 
-/** Hide stale "generate report?" cards while a report is open, streaming, or already saved on the thread. */
+/** Hide stale "generate report?" cards while generating or viewing a finished report in the panel. */
 export function shouldSurfaceDecisionReportPending(
   pa: PendingAction | null | undefined,
   opts: {
@@ -66,7 +66,8 @@ export function shouldSurfaceDecisionReportPending(
   },
 ): boolean {
   if (!pa || pa.type !== 'decision_report') return Boolean(pa);
-  if (opts.isReportGenerating || opts.reportPanelOpen || opts.reportComplete) return false;
+  if (opts.isReportGenerating) return false;
+  if (opts.reportPanelOpen && opts.reportComplete) return false;
   if (opts.hasReportArtifact) {
     if (pa.payload?.manual_mode === true) return true;
     if (typeof pa.payload?.decision_prompt === 'string' && pa.payload.decision_prompt.trim()) return true;

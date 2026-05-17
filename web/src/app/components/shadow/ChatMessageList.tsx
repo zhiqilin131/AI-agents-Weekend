@@ -1,6 +1,7 @@
 import type { ShadowMessage } from './types';
 import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
 import { DecisionReportArtifactCard, type ArtifactStatus } from './DecisionReportArtifactCard';
+import { ChatMessageBody } from './ChatMessageBody';
 
 const SUGGESTION_CHIPS = [
   'Help me decide something concrete',
@@ -84,13 +85,13 @@ export function ChatMessageList({
         return (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
-              className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+              className={`max-w-[80%] rounded-2xl px-4 py-3.5 shadow-sm ${
                 m.role === 'user'
-                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-sm'
-                  : 'border border-gray-200 bg-white/90 text-gray-900 shadow-sm'
+                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-[15px] leading-relaxed text-white'
+                  : 'border border-gray-200/90 bg-white/95 font-sans text-[15px] leading-[1.65] tracking-[0.01em] text-gray-800 antialiased'
               }`}
             >
-              <span className="whitespace-pre-wrap">{m.content || '\u00a0'}</span>
+              <ChatMessageBody content={m.content} role={m.role} />
             </div>
           </div>
         );

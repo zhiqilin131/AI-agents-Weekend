@@ -10,6 +10,7 @@ from typing import Any
 
 from foresight_x.config import load_settings
 from foresight_x.db.supabase_client import get_client
+from foresight_x.chat.thread_title import apply_title_for_first_user_message, heuristic_thread_title
 from foresight_x.perception.clarification_gate import default_clarification_state
 
 _log = logging.getLogger(__name__)
@@ -56,11 +57,7 @@ def _thread_path(user_id: str, thread_id: str) -> Path:
 
 
 def _default_title(first_message: str = "") -> str:
-    t = (first_message or "").strip()
-    if not t:
-        return "New chat"
-    x = " ".join(t.split())
-    return x[:64] + ("..." if len(x) > 64 else "")
+    return heuristic_thread_title(first_message)
 
 
 def _default_thread_payload(*, user_id: str, thread_id: str, title: str | None = None) -> dict[str, Any]:
@@ -550,6 +547,7 @@ def append_message(
     memory_used: bool = False,
     profile_updated: bool = False,
     metadata_extra: dict[str, Any] | None = None,
+    title_llm: Any | None = None,
 ) -> dict[str, Any]:
     meta: dict[str, Any] = {
         "mode": mode,
@@ -570,8 +568,8 @@ def append_message(
         "metadata": meta,
     }
     thread.setdefault("messages", []).append(msg)
-    if thread.get("title", "New chat") == "New chat" and role == "user":
-        thread["title"] = _default_title(content)
+    if role == "user":
+        apply_title_for_first_user_message(thread, content, llm=title_llm)
     if decision_id:
         ids = thread.setdefault("linked_decision_ids", [])
         if decision_id not in ids:
