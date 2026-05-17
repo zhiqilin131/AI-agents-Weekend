@@ -111,7 +111,14 @@ export default function ProfilePage() {
   const [creditRedeemErr, setCreditRedeemErr] = useState<string | null>(null);
   const [creditTxBusy, setCreditTxBusy] = useState(false);
   const [recentCreditTx, setRecentCreditTx] = useState<
-    Array<{ type?: string; amount?: number; reason?: string; feature?: string; created_at?: string }>
+    Array<{
+      id?: string;
+      type?: string;
+      amount?: number;
+      reason?: string;
+      feature?: string;
+      created_at?: string;
+    }>
   >([]);
 
   const loadCreditTx = useCallback(async () => {
@@ -613,12 +620,15 @@ export default function ProfilePage() {
                           <p className="text-[11px] text-gray-500">No transactions yet.</p>
                         ) : (
                           <ul className="space-y-1 text-[11px] text-gray-700">
-                            {recentCreditTx.slice(0, 5).map((tx) => {
+                            {recentCreditTx.slice(0, 5).map((tx, index) => {
                               const amt = typeof tx.amount === 'number' ? tx.amount : 0;
                               const sign = amt > 0 ? '+' : '';
                               const label = (tx.reason || tx.feature || tx.type || 'Activity').slice(0, 48);
+                              const rowKey =
+                                tx.id?.trim() ||
+                                `${tx.created_at ?? 'unknown'}-${label}-${amt}-${index}`;
                               return (
-                                <li key={`${tx.created_at}-${label}-${amt}`} className="flex justify-between gap-2 border-b border-gray-100/80 pb-1 last:border-0">
+                                <li key={rowKey} className="flex justify-between gap-2 border-b border-gray-100/80 pb-1 last:border-0">
                                   <span className="min-w-0 truncate">{label}</span>
                                   <span className={cn('shrink-0 font-semibold', amt < 0 ? 'text-rose-700' : 'text-emerald-700')}>
                                     {sign}
