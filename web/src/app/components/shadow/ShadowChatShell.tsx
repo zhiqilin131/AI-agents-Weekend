@@ -174,7 +174,14 @@ export function ShadowChatShell({
     id: string,
     opts?: { preservePendingSuggestion?: boolean },
   ) => {
-    const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`);
+    const fetchThread = () => apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`);
+    let res = await fetchThread();
+    if (res.status === 404) {
+      // Guard against transient consistency hiccups (e.g. Supabase/local fallback jitter).
+      await refreshThreads();
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      res = await fetchThread();
+    }
     if (res.status === 404) {
       const sp = new URLSearchParams(window.location.search);
       if (sp.has('thread')) {
@@ -192,6 +199,14 @@ export function ShadowChatShell({
     }
     const data = (await res.json()) as { thread: ShadowThread };
     const tid = data.thread.thread_id;
+    // Keep sidebar/header titles in sync with freshly loaded thread payload.
+    setThreads((prev) => {
+      const idx = prev.findIndex((t) => t.thread_id === tid);
+      if (idx < 0) return prev;
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], ...data.thread };
+      return copy;
+    });
     const mem = Array.isArray(data.thread.memory_events)
       ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string; details?: ProfileMemoryDetail[] }>)
       : [];
@@ -554,6 +569,9 @@ export function ShadowChatShell({
           if (seqEv != null && seqEv !== streamSeq) return;
           const qs = ev.questions;
           if (!Array.isArray(qs) || qs.length === 0) return;
+          // Clarification cards are interactive; do not keep UI in "sending" lock state.
+          setSending(false);
+          if (!reportGeneratingRef.current) setAgentStatus('idle');
           const metaRaw = ev.clarification_meta;
           const meta =
             metaRaw && typeof metaRaw === 'object' ? (metaRaw as ClarificationGateMeta) : null;

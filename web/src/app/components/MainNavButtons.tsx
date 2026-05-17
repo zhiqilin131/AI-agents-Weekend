@@ -100,6 +100,8 @@ export function MainNavButtons({
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const hideHome = isHomeNavRoute(pathname);
+  // Avoid blocking chat/clarification controls near the bottom edge.
+  const suppressFloatingCorners = pathname.startsWith('/chat') || pathname.startsWith('/reflect');
   const { session, signOut } = useAuth();
   const compact = variant === 'compact';
   const btnClass = compact ? btnClassCompact : btnClassDefault;
@@ -224,7 +226,7 @@ export function MainNavButtons({
             </BuddyTooltip>
           ) : null}
         </div>
-      ) : isSupabaseEnvConfigured() && session ? (
+      ) : isSupabaseEnvConfigured() && session && !suppressFloatingCorners ? (
         <div
           className={cn(
             'pointer-events-none fixed z-[60]',
@@ -245,16 +247,18 @@ export function MainNavButtons({
         </div>
       ) : null}
       {/* Below PersonaSwitcher (z-70); clears common bottom UI */}
-      <div
-        className={cn(
-          'pointer-events-none fixed z-[60]',
-          compact ? 'bottom-4 right-4' : 'bottom-5 right-5 sm:bottom-6 sm:right-8',
-        )}
-      >
-        <div className="pointer-events-auto">
-          <ProfileSlimeNav compact={compact} className="ring-1 ring-violet-200/60" />
+      {!suppressFloatingCorners ? (
+        <div
+          className={cn(
+            'pointer-events-none fixed z-[60]',
+            compact ? 'bottom-4 right-4' : 'bottom-5 right-5 sm:bottom-6 sm:right-8',
+          )}
+        >
+          <div className="pointer-events-auto">
+            <ProfileSlimeNav compact={compact} className="ring-1 ring-violet-200/60" />
+          </div>
         </div>
-      </div>
+      ) : null}
     </>
   );
 }

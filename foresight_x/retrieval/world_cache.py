@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import chromadb
@@ -178,8 +178,9 @@ def _cached_tavily_fact_eligible(
     if max_age_days >= 0:
         at = _safe_parse_iso(str(md.get("tavily_ingested_at") or ""))
         if at is not None:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-            if at < cutoff:
+            # Treat max_age_days as inclusive calendar-day age (stable across run time-of-day).
+            age_days = (datetime.now(timezone.utc).date() - at.date()).days
+            if age_days > max_age_days:
                 return False
     return True
 
