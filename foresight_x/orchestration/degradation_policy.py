@@ -370,10 +370,20 @@ def safe_recommend(
         return rec, "deterministic", ev
 
 
+def _trace_has_provider_outage_degradations(trace: Any) -> bool:
+    """True when the trace records dependency outages users should see (not offline heuristics)."""
+    degradations = getattr(trace, "degradations", None) or []
+    for row in degradations:
+        payload = row.model_dump(mode="json") if hasattr(row, "model_dump") else row
+        if isinstance(payload, dict) and should_surface_degradation_to_user(payload):
+            return True
+    return False
+
+
 def safe_reflect(trace: Any, llm: Any | None) -> tuple[Reflection, str, StageDegradation | None]:
     offline = llm_unavailable(llm)
-    degraded_run = bool(getattr(trace, "degradations", None))
-    if offline or degraded_run:
+    provider_degraded = _trace_has_provider_outage_degradations(trace)
+    if offline or provider_degraded:
         ev = _record_stage_fallback(
             "reflect",
             reason="LLM unavailable or degraded run; templated reflection",
@@ -381,7 +391,7 @@ def safe_reflect(trace: Any, llm: Any | None) -> tuple[Reflection, str, StageDeg
             provider="none",
         )
         reflection = reflect(trace, None)
-        if degraded_run:
+        if provider_degraded:
             extra = "This decision completed in degraded mode; provider outages were handled with deterministic fallbacks."
             reflection = reflection.model_copy(
                 update={

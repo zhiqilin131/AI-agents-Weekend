@@ -4,6 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from foresight_x.resilience.runtime import reset_resilience_runtime_state
+
+
+@pytest.fixture(autouse=True)
+def _isolated_resilience_state() -> None:
+    """Prevent circuit-breaker / degradation events from leaking across tests."""
+    reset_resilience_runtime_state()
+    yield
+    reset_resilience_runtime_state()
+
 
 @pytest.fixture
 def sample_user_state_dict() -> dict:
