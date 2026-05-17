@@ -3,6 +3,7 @@ import {
   firstSpeakableChunk,
   firstSpeakableSentence,
   remainderAfterSpokenPrefix,
+  groupSpeakableParts,
   splitSpeakableParts,
   ttsPrefetchMatchesFinal,
 } from './slimeTtsChunks';
@@ -38,6 +39,13 @@ describe('slimeTtsChunks', () => {
   it('splitSpeakableParts splits on sentence boundaries', () => {
     const parts = splitSpeakableParts('First line. Second line here?');
     expect(parts).toEqual(['First line.', 'Second line here?']);
+  });
+
+  it('groupSpeakableParts merges short adjacent sentences', () => {
+    const parts = splitSpeakableParts('One. Two. Three. Four.');
+    const grouped = groupSpeakableParts(parts, 80, 4);
+    expect(grouped.length).toBeLessThan(parts.length);
+    expect(grouped.join(' ')).toContain('Four.');
   });
 
   it('matches prefetch prefix when final text grows', () => {

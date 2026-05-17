@@ -36,11 +36,15 @@ import {
 } from '../utils/executionScheduler';
 import { parseIcsToCalendarEvents, exportEventsToIcs } from '../utils/ics';
 import { mapRecommendationActionsToTasks } from '../utils/executionTasks';
+import { dedupeOverlappingCalendarEvents } from '../utils/executionCalendarDedupe';
 import {
+  CALENDAR_AGENT_SESSION_DRAFT_KEY,
   EXECUTION_CALENDAR_FOCUS_WEEK_KEY,
   EXECUTION_CALENDAR_LOCAL_BUMP_EVENT,
   EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY,
   executionStorageKeys,
+  isReportCalendarApplied,
+  markReportCalendarApplied,
   SLIME_CALENDAR_BRIEF_CONTEXT_KEY,
   SLIME_VOICE_CALENDAR_RESOLVED_KEY,
 } from '../utils/executionStorageKeys';
@@ -112,17 +116,7 @@ function dedupeExecutionTasks(tasks: ExecutionTask[], limit = 8): ExecutionTask[
 }
 
 function dedupeAiEventsByTitle(events: CalendarEvent[]): CalendarEvent[] {
-  const seenAiTitles = new Set<string>();
-  const out: CalendarEvent[] = [];
-  for (const event of events) {
-    const key = event.title.trim().toLowerCase().replace(/\s+/g, ' ');
-    if (event.source === 'ai' && key) {
-      if (seenAiTitles.has(key)) continue;
-      seenAiTitles.add(key);
-    }
-    out.push(event);
-  }
-  return out;
+  return dedupeOverlappingCalendarEvents(events);
 }
 
 function dedupeEventsForTaskTitles(events: CalendarEvent[], tasks: ExecutionTask[]): CalendarEvent[] {
@@ -241,6 +235,7 @@ export default function ExecutionPlannerPage() {
   const plannerHydratedRef = useRef(false);
   const [localStoreReady, setLocalStoreReady] = useState(false);
   const reportCalendarAppliedRef = useRef<string | null>(null);
+  const reportCalendarApplyingRef = useRef<string | null>(null);
   const serverSyncSkipUntilRef = useRef<number>(0);
   const dragStateRef = useRef<{
     eventId: string;
@@ -370,9 +365,40 @@ export default function ExecutionPlannerPage() {
   useEffect(() => {
     if (!decisionId || !storageReady || loading) return;
     if (reportCalendarAppliedRef.current === decisionId) return;
+    if (reportCalendarApplyingRef.current === decisionId) return;
 
+    const alreadyApplied =
+      storageUserKey.trim() !== '' && isReportCalendarApplied(storageUserKey, decisionId);
+    const hasSessionDraft = (() => {
+      try {
+        return Boolean(sessionStorage.getItem(CALENDAR_AGENT_SESSION_DRAFT_KEY));
+      } catch {
+        return false;
+      }
+    })();
+    if (alreadyApplied) {
+      reportCalendarAppliedRef.current = decisionId;
+      if (hasSessionDraft) {
+        try {
+          sessionStorage.removeItem(CALENDAR_AGENT_SESSION_DRAFT_KEY);
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+
+    reportCalendarApplyingRef.current = decisionId;
     let cancelled = false;
     void (async () => {
+      const finishApply = (applied: boolean) => {
+        reportCalendarApplyingRef.current = null;
+        if (applied) {
+          reportCalendarAppliedRef.current = decisionId;
+          if (storageUserKey.trim()) markReportCalendarApplied(storageUserKey, decisionId);
+        }
+      };
+
       try {
         const draft = await loadCalendarDraftForPlanner(decisionId, shadowThreadId);
         if (cancelled) return;
@@ -381,26 +407,29 @@ export default function ExecutionPlannerPage() {
           const { events: planned, message } = await applyCalendarDraftToPlanner(draft);
           if (cancelled) return;
           if (planned.length > 0) {
-            reportCalendarAppliedRef.current = decisionId;
+            finishApply(true);
             setEvents((prev) => dedupeAiEventsByTitle([...prev.filter((x) => x.source !== 'ai'), ...planned]));
             const firstStart = parseEventDate(planned[0]!.start);
             if (firstStart) {
               setWeekStart(startOfWeek(firstStart, { weekStartsOn: 1 }));
             }
-            setScheduleCoachNote(message);
+            setScheduleCoachNote(
+              alreadyApplied
+                ? 'Your report plan is already on the calendar — showing existing blocks.'
+                : message,
+            );
             setCalendarWarning(null);
             return;
           }
         }
 
         if (tasks.length === 0) {
-          reportCalendarAppliedRef.current = decisionId;
+          finishApply(true);
           return;
         }
 
         const weekAnchor = startOfWeek(new Date(), { weekStartsOn: 1 });
         const visibleWeekStart = setMinutes(setHours(startOfDay(weekAnchor), SCHEDULER_DAY_START_HOUR), 0);
-        reportCalendarAppliedRef.current = decisionId;
         setEvents((prev) => {
           const { scheduled, unscheduled } = scheduleTasksIntoFreeSlots(tasks, prev, {
             dayStartHour: SCHEDULER_DAY_START_HOUR,
@@ -409,16 +438,24 @@ export default function ExecutionPlannerPage() {
             startDate: visibleWeekStart,
             days: 7,
           });
-          if (scheduled.length === 0) return prev;
+          if (scheduled.length === 0) {
+            finishApply(true);
+            return prev;
+          }
+          finishApply(true);
           setUnscheduled(unscheduled);
-          setScheduleCoachNote(`Scheduled ${scheduled.length} task(s) from your report plan.`);
+          setScheduleCoachNote(
+            alreadyApplied
+              ? 'Your report plan is already on the calendar — showing existing blocks.'
+              : `Scheduled ${scheduled.length} task(s) from your report plan.`,
+          );
           setCalendarWarning(null);
           setWeekStart(weekAnchor);
           return dedupeAiEventsByTitle([...prev.filter((x) => x.source !== 'ai'), ...scheduled]);
         });
       } catch (e) {
         if (!cancelled) {
-          reportCalendarAppliedRef.current = decisionId;
+          finishApply(true);
           setScheduleCoachNote(
             e instanceof Error ? e.message : 'Could not add report plan to calendar — try Auto-schedule.',
           );
@@ -428,8 +465,11 @@ export default function ExecutionPlannerPage() {
 
     return () => {
       cancelled = true;
+      if (reportCalendarApplyingRef.current === decisionId) {
+        reportCalendarApplyingRef.current = null;
+      }
     };
-  }, [decisionId, storageReady, loading, shadowThreadId, tasks]);
+  }, [decisionId, storageReady, loading, shadowThreadId, storageUserKey, tasks]);
 
   useEffect(() => {
     try {

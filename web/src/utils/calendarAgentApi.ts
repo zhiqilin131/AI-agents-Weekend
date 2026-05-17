@@ -1,5 +1,6 @@
 import { apiFetch } from './apiFetch';
 import { mapAgentEventsToPlanner } from './calendarAgentApply';
+import { dedupeOverlappingCalendarEvents } from './executionCalendarDedupe';
 import type { CalendarEvent } from './executionScheduler';
 import {
   dispatchExecutionCalendarLocalBump,
@@ -80,7 +81,7 @@ export function mergeExecutionCalendarEvents(
         focusStart ??= ev.start;
       }
     }
-    localStorage.setItem(k, JSON.stringify(merged));
+    localStorage.setItem(k, JSON.stringify(dedupeOverlappingCalendarEvents(merged)));
     dispatchExecutionCalendarLocalBump();
     if (focusStart && typeof sessionStorage !== 'undefined') {
       sessionStorage.setItem(EXECUTION_CALENDAR_FOCUS_WEEK_KEY, focusStart);

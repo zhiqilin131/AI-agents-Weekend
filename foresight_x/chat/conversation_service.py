@@ -45,7 +45,7 @@ from foresight_x.slime.wellbeing_router import build_safety_escalation_reply
 _log = logging.getLogger(__name__)
 
 
-def _split_spoken_sequence(text: str, *, max_parts: int = 4) -> list[str]:
+def _split_spoken_sequence(text: str, *, max_parts: int = 12) -> list[str]:
     """One sentence per part so voice UI can TTS each without dropping the tail."""
     t = (text or "").strip()
     if not t:

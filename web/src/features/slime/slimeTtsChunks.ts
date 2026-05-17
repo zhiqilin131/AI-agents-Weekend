@@ -45,6 +45,27 @@ export function splitSpeakableParts(text: string, maxParts = 4): string[] {
   return parts.slice(0, maxParts);
 }
 
+/** Merge adjacent sentences into fewer TTS requests (shorter gaps between phrases). */
+export function groupSpeakableParts(parts: string[], maxChars = 340, maxGroups = 6): string[] {
+  if (parts.length <= 1) return parts;
+  const groups: string[] = [];
+  let current = '';
+  for (const part of parts) {
+    const candidate = current ? `${current} ${part}` : part;
+    if (current && candidate.length > maxChars) {
+      groups.push(current);
+      current = part;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) groups.push(current);
+  if (groups.length <= maxGroups) return groups;
+  const head = groups.slice(0, maxGroups - 1);
+  const tail = groups.slice(maxGroups - 1).join(' ');
+  return [...head, tail];
+}
+
 export function ttsPrefetchMatchesFinal(prefetched: string, finalText: string): boolean {
   const pf = normalizeSpeechText(prefetched);
   const fin = normalizeSpeechText(finalText);

@@ -28,7 +28,8 @@ import { apiFetch } from '../../utils/apiFetch';
 import { useSlimeModelCatalog } from '../../features/models/useSlimeModelCatalog';
 import { OptionCoachPanel, type CoachOptionContext } from './report/OptionCoachPanel';
 import { fetchCalendarDraftFromReport } from '../../utils/calendarAgentApi';
-import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from '../../utils/executionStorageKeys';
+import { CALENDAR_AGENT_SESSION_DRAFT_KEY, isReportCalendarApplied } from '../../utils/executionStorageKeys';
+import { useExecutionStorageUserKey } from '../../hooks/useExecutionStorageUserKey';
 import type { TraceUserStateLite } from '../../utils/evidenceDetailFromTrace';
 import { AssumptionsCard } from './report/AssumptionsCard';
 import { FuturePathsCard } from './report/FuturePathsCard';
@@ -132,6 +133,7 @@ export function ReportCompact({
   shadowThreadId = null,
 }: ReportCompactProps) {
   const navigate = useNavigate();
+  const { storageUserKey } = useExecutionStorageUserKey();
   const slimeModels = useSlimeModelCatalog();
   const [modelOptionId, setModelOptionId] = useState('');
   useEffect(() => {
@@ -148,9 +150,12 @@ export function ReportCompact({
 
   const prefetchExecutionDraft = useCallback(async () => {
     if (!decisionId) return;
+    if (storageUserKey && isReportCalendarApplied(storageUserKey, decisionId)) {
+      return;
+    }
     const draft = await fetchCalendarDraftFromReport(decisionId, shadowThreadId ?? null);
     sessionStorage.setItem(CALENDAR_AGENT_SESSION_DRAFT_KEY, JSON.stringify({ draft }));
-  }, [decisionId, shadowThreadId]);
+  }, [decisionId, shadowThreadId, storageUserKey]);
   const surface = report.reportSurface;
   const [resourceDrops, setResourceDrops] = useState<ResourceDrop[]>([]);
   const [resourceDropsLoading, setResourceDropsLoading] = useState(false);

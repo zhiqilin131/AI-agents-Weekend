@@ -359,9 +359,12 @@ def confirm_draft(
 
     from foresight_x.calendar_agent import store as cal_store
 
+    replace_decision_id = (d.intent.decision_id or "").strip() or None
     lk = cal_store._user_lock(user_id)
     with lk:
         d2 = cal_store.load_store(settings, user_id)
+        if replace_decision_id:
+            d2.events = [e for e in d2.events if (e.decision_id or "").strip() != replace_decision_id]
         d2.events.extend(confirmed)
         d2.drafts.pop(draft_id, None)
         cal_store.save_store(settings, user_id, d2)
