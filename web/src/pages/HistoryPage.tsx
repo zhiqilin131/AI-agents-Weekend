@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Info } from 'lucide-react';
 import { Link } from 'react-router';
-import { PageBackButton } from '../app/components/PageBackButton';
+import { MainNavButtons } from '../app/components/MainNavButtons';
 import { OutcomeReviewCard } from '../app/components/followup/OutcomeReviewCard';
 import type { FollowupToastPayload } from '../app/components/followup/DecisionFollowupToast';
 import { SavedOutcomeModal } from '../app/components/SavedOutcomeModal';
@@ -71,11 +71,11 @@ export default function HistoryPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-8 py-16">
-      <div className="max-w-3xl mx-auto">
-        <div className="-ml-2 sm:-ml-5 md:-ml-8 lg:-ml-10">
-          <PageBackButton />
-        </div>
+    <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-4 sm:px-6 sm:py-6">
+      <div className="mx-auto w-full max-w-[1500px]">
+        <MainNavButtons layout="topbar" className="!mb-6" />
+      </div>
+      <div className="mx-auto mt-1 w-full max-w-3xl">
         <div className="mb-8 flex items-center gap-2">
           <h1 className="text-3xl text-gray-900" style={{ fontWeight: 700 }}>
             Decision history

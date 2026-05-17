@@ -646,8 +646,8 @@ export default function HomePage() {
     [decisionId],
   );
 
-  const nav = <MainNavButtons />;
-  const navLanding = <MainNavButtons className="!mb-4 sm:!mb-5" />;
+  const nav = <MainNavButtons layout="topbar" className="!mb-5" />;
+  const navLanding = <MainNavButtons layout="topbar" className="!mb-0" />;
   const onboardingReminderBanner = onboardingReminder ? (
     <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50/90 px-4 py-2.5 text-sm text-indigo-950">
       You still have {onboardingReminder.missingCount} basic setup item(s) incomplete. If you finish them, I can give more tailored suggestions.{' '}
@@ -807,10 +807,10 @@ export default function HomePage() {
       <div className="relative z-10">
         {state === 'empty' ? (
           <div className="relative flex min-h-screen flex-col items-center px-6 pb-12 pt-3 sm:px-8 sm:pt-4 md:pt-5">
-            <div className="w-full max-w-3xl">
-              {navLanding}
-              <div className="mt-10 w-full sm:mt-14 md:mt-20">
-                <div className="mb-12 text-center sm:mb-14">
+            <div className="w-full max-w-[1500px]">{navLanding}</div>
+            <div className="flex flex-1 w-full max-w-3xl items-center justify-center">
+              <div className="relative w-full min-h-[32rem]">
+                <div className="mx-auto max-w-2xl pt-2 text-center sm:pt-6">
                   <h1 className="mb-4 text-6xl text-gray-900 tracking-tight sm:mb-5 sm:text-7xl" style={{ fontWeight: 700, letterSpacing: '-0.04em' }}>
                     Foresight-<span className="text-purple-600">X</span>
                   </h1>
@@ -820,10 +820,10 @@ export default function HomePage() {
                 </div>
 
                 {error && (
-                  <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>
+                  <div className="mx-auto mt-6 max-w-xl rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div>
                 )}
                 {error && lastFailedStage ? (
-                  <div className="mb-6 rounded-2xl border border-amber-200/90 bg-amber-50/95 p-3 text-sm text-amber-950">
+                  <div className="mx-auto mt-6 max-w-xl rounded-2xl border border-amber-200/90 bg-amber-50/95 p-3 text-sm text-amber-950">
                     <p className="font-medium">
                       Last failed stage: {STAGE_LABEL[lastFailedStage] ?? lastFailedStage}
                     </p>
@@ -842,9 +842,14 @@ export default function HomePage() {
                   </div>
                 ) : null}
 
-                <div className="mx-auto max-w-xl text-center">
+                <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+                  <div className="pointer-events-auto">
+                    <SlimeLandingCta profile={slimeProfile} onClick={() => navigate('/buddy')} />
+                  </div>
+                </div>
+
+                <div className="mx-auto mt-[13.5rem] max-w-xl text-center">
                   {onboardingReminderBanner}
-                  <SlimeLandingCta profile={slimeProfile} onClick={() => navigate('/buddy')} />
                 </div>
               </div>
             </div>

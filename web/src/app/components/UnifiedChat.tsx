@@ -99,7 +99,7 @@ export function UnifiedChat() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
       <div className="mx-auto max-w-5xl">
-        <MainNavButtons />
+        <MainNavButtons layout="topbar" />
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-2xl text-gray-900" style={{ fontWeight: 700 }}>
             Foresight-<span className="text-purple-600">X</span>

@@ -1266,7 +1266,7 @@ export default function ExecutionPlannerPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
         <div className="mx-auto max-w-[1500px]">
-          <MainNavButtons />
+          <MainNavButtons layout="topbar" />
           <p className="mt-6 text-gray-600">
             {loading ? 'Loading calendar…' : 'Preparing your workspace…'}
           </p>
@@ -1278,7 +1278,7 @@ export default function ExecutionPlannerPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
         <div className="mx-auto max-w-[1500px]">
-          <MainNavButtons />
+          <MainNavButtons layout="topbar" />
           <p className="mt-6 text-red-700">Failed: {error}</p>
         </div>
       </div>
@@ -1288,7 +1288,7 @@ export default function ExecutionPlannerPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
       <div className="mx-auto max-w-[1500px]">
-        <MainNavButtons />
+        <MainNavButtons layout="topbar" />
         <div className="mb-4 overflow-hidden rounded-[32px] border border-white/90 bg-white/62 p-4 shadow-[0_18px_58px_rgba(99,102,241,0.10)] backdrop-blur-xl">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex min-w-0 items-start gap-3">

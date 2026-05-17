@@ -60,7 +60,7 @@ export default function ResilienceReportPage() {
       <JudgeJourneyNav />
 
       <div className="relative z-10 mx-auto max-w-6xl px-5 pb-24 pt-4 sm:px-8">
-        <MainNavButtons className="!mb-2" variant="compact" />
+        <MainNavButtons layout="topbar" className="!mb-2" />
 
         <header id="journey-hero" className={cn(shellCard, 'scroll-mt-8 p-6 text-center sm:p-10')}>
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }}>

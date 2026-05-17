@@ -26,7 +26,7 @@ export function BrandMark({ compact = false, iconOnly = false, className }: Bran
         )}
       >
         <img
-          src="/ForesightX-Icon.svg"
+          src="/ForesightXIconDark.svg"
           alt=""
           aria-hidden
           decoding="async"
@@ -35,7 +35,7 @@ export function BrandMark({ compact = false, iconOnly = false, className }: Bran
       </span>
       {!iconOnly ? (
         <img
-          src="/ForesightXLogo.svg"
+          src="/ForesightXLogoDark.svg"
           alt=""
           aria-hidden
           decoding="async"

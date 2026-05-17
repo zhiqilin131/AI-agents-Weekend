@@ -353,7 +353,7 @@ export default function DiaryPage() {
       <div className="pointer-events-none absolute inset-0 opacity-[0.32] [background-image:linear-gradient(rgba(124,58,237,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(14,165,233,0.09)_1px,transparent_1px)] [background-size:44px_44px] [mask-image:linear-gradient(to_bottom,black,transparent_82%)]" />
 
       <div className="relative mx-auto max-w-7xl px-4 sm:px-6">
-        <MainNavButtons className="mb-7" />
+        <MainNavButtons layout="topbar" className="mb-7" />
 
         <header>
           <div>

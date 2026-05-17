@@ -55,7 +55,7 @@ export function AuthFormCard({
       data-testid="auth-form-card"
     >
       <div className="mb-8 flex flex-col items-center gap-5 text-center">
-        <img src="/ForesightXLogo.svg" alt="Foresight-X" className="h-10 w-auto select-none md:h-12" />
+        <img src="/ForesightXLogoDark.svg" alt="Foresight-X" className="h-10 w-auto select-none md:h-12" />
         <div>
           <h1
             className="text-2xl tracking-tight text-gray-900 md:text-[1.75rem]"

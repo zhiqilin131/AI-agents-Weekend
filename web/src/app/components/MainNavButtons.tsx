@@ -28,7 +28,7 @@ function NavIconSlot({
   const sz = compact ? 'h-3.5 w-3.5' : 'h-4 w-4';
   return (
     <span className={cn('inline-flex shrink-0 items-center justify-center overflow-visible', box)} aria-hidden>
-      <Icon className={cn(sz, 'shrink-0', colorClass)} strokeWidth={compact ? 2 : 1.85} absoluteStrokeWidth={false} />
+      <Icon className={cn(sz, 'shrink-0', colorClass)} strokeWidth={compact ? 2 : 1.85} />
     </span>
   );
 }
@@ -92,9 +92,11 @@ function isHomeNavRoute(pathname: string): boolean {
 
 export function MainNavButtons({
   variant = 'default',
+  layout = 'classic',
   className,
 }: {
   variant?: 'default' | 'compact';
+  layout?: 'classic' | 'topbar';
   /** Extra classes on the outer wrapper (e.g. margin). */
   className?: string;
 }) {
@@ -105,6 +107,7 @@ export function MainNavButtons({
   const suppressFloatingCorners = pathname.startsWith('/chat') || pathname.startsWith('/reflect');
   const { session, signOut } = useAuth();
   const compact = variant === 'compact';
+  const useTopbar = layout === 'topbar' && !compact;
   const btnClass = compact ? btnClassCompact : btnClassDefault;
 
   const btnStyle = {
@@ -112,11 +115,23 @@ export function MainNavButtons({
     lineHeight: 1,
     fontWeight: compact ? 500 : 600,
   };
+  const navBtnClass = (active = false) =>
+    useTopbar
+      ? cn(
+          'inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm text-slate-700 transition-colors',
+          active ? 'bg-violet-100/95 text-violet-900' : 'hover:bg-slate-200/70',
+          'focus:outline-none focus:ring-2 focus:ring-violet-500/35',
+        )
+      : btnClass;
+  const navBtnStyle = useTopbar ? undefined : btnStyle;
+  const isActivePath = (base: string) =>
+    base === '/' ? pathname === '/' : pathname === base || pathname.startsWith(`${base}/`);
+  const iconTone = (classic: string, topbar: string) => (useTopbar ? topbar : classic);
 
   const homeBtn = !hideHome ? (
     <BuddyTooltip content="Go to the Foresight-X home screen and decision workspace.">
-      <button type="button" onClick={() => navigate('/')} className={btnClass} style={btnStyle}>
-        <NavIconSlot Icon={Home} compact={compact} colorClass="text-violet-600" />
+      <button type="button" onClick={() => navigate('/')} className={navBtnClass(isActivePath('/'))} style={navBtnStyle}>
+        <NavIconSlot Icon={Home} compact={compact} colorClass={iconTone('text-violet-600', 'text-violet-700')} />
         Home
       </button>
     </BuddyTooltip>
@@ -127,10 +142,17 @@ export function MainNavButtons({
       <button
         type="button"
         onClick={() => navigate('/')}
-        className="inline-flex shrink-0 items-center focus:outline-none focus:ring-2 focus:ring-violet-400/40 rounded-full"
+        className={cn(
+          'inline-flex shrink-0 items-center focus:outline-none focus:ring-2 focus:ring-violet-400/40',
+          useTopbar ? 'rounded-lg px-1.5 py-1 hover:bg-white/10' : 'rounded-full',
+        )}
         aria-label="Open Foresight-X home"
       >
-        <BrandMark compact={compact} iconOnly={compact} />
+        {useTopbar ? (
+          <img src="/ForesightXLogoDark.svg" alt="Foresight-X" className="h-10 w-auto sm:h-11" decoding="async" />
+        ) : (
+          <BrandMark compact={compact} iconOnly={compact} />
+        )}
       </button>
     </BuddyTooltip>
   );
@@ -138,44 +160,44 @@ export function MainNavButtons({
   const navPills = (
     <>
       <BuddyTooltip content="Open Shadow Chat — threaded assistant with reports, memory, and full composer.">
-        <button type="button" onClick={() => navigate('/chat')} className={btnClass} style={btnStyle}>
-          <NavIconSlot Icon={MessagesSquare} compact={compact} colorClass="text-indigo-600" />
+        <button type="button" onClick={() => navigate('/chat')} className={navBtnClass(isActivePath('/chat'))} style={navBtnStyle}>
+          <NavIconSlot Icon={MessagesSquare} compact={compact} colorClass={iconTone('text-indigo-600', 'text-indigo-700')} />
           Chat
         </button>
       </BuddyTooltip>
       <BuddyTooltip content="Browse saved decision traces and past runs.">
-        <button type="button" onClick={() => navigate('/history')} className={btnClass} style={btnStyle}>
-          <NavIconSlot Icon={History} compact={compact} colorClass="text-purple-600" />
+        <button type="button" onClick={() => navigate('/history')} className={navBtnClass(isActivePath('/history'))} style={navBtnStyle}>
+          <NavIconSlot Icon={History} compact={compact} colorClass={iconTone('text-purple-600', 'text-purple-700')} />
           History
         </button>
       </BuddyTooltip>
       <BuddyTooltip content="Open your diary workspace for daily notes and reflections.">
-        <button type="button" onClick={() => navigate('/diary')} className={btnClass} style={btnStyle}>
-          <NavIconSlot Icon={BookOpen} compact={compact} colorClass="text-emerald-600" />
+        <button type="button" onClick={() => navigate('/diary')} className={navBtnClass(isActivePath('/diary'))} style={navBtnStyle}>
+          <NavIconSlot Icon={BookOpen} compact={compact} colorClass={iconTone('text-emerald-600', 'text-emerald-700')} />
           Diary
         </button>
       </BuddyTooltip>
       <BuddyTooltip content="Plan tasks and calendar blocks in the execution planner.">
-        <button type="button" onClick={() => navigate('/execution')} className={btnClass} style={btnStyle}>
-          <NavIconSlot Icon={CalendarDays} compact={compact} colorClass="text-purple-600" />
+        <button type="button" onClick={() => navigate('/execution')} className={navBtnClass(isActivePath('/execution'))} style={navBtnStyle}>
+          <NavIconSlot Icon={CalendarDays} compact={compact} colorClass={iconTone('text-purple-600', 'text-purple-700')} />
           Calendar
         </button>
       </BuddyTooltip>
       <BuddyTooltip content="Voice-first Slime buddy — quick chat, personalization, and playful companion mode.">
-        <button type="button" onClick={() => navigate('/buddy')} className={btnClass} style={btnStyle}>
-          <NavIconSlot Icon={Ghost} compact={compact} colorClass="text-fuchsia-600" />
+        <button type="button" onClick={() => navigate('/buddy')} className={navBtnClass(isActivePath('/buddy'))} style={navBtnStyle}>
+          <NavIconSlot Icon={Ghost} compact={compact} colorClass={iconTone('text-fuchsia-600', 'text-fuchsia-700')} />
           {compact ? 'Buddy' : 'Slime buddy'}
         </button>
       </BuddyTooltip>
       {isSupabaseEnvConfigured() && !session ? (
         <>
           <BuddyTooltip content="Sign in with email to sync your profile and credits.">
-            <button type="button" onClick={() => navigate('/login')} className={btnClass} style={btnStyle}>
+            <button type="button" onClick={() => navigate('/login')} className={navBtnClass(isActivePath('/login'))} style={navBtnStyle}>
               {compact ? 'Log in' : 'Sign in'}
             </button>
           </BuddyTooltip>
           <BuddyTooltip content="Create a new account.">
-            <button type="button" onClick={() => navigate('/register')} className={btnClass} style={btnStyle}>
+            <button type="button" onClick={() => navigate('/register')} className={navBtnClass(isActivePath('/register'))} style={navBtnStyle}>
               {compact ? 'Join' : 'Register'}
             </button>
           </BuddyTooltip>
@@ -186,11 +208,33 @@ export function MainNavButtons({
 
   const scrollClass =
     'flex min-w-0 flex-1 justify-center overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]';
-
   return (
     <>
       <div className={cn(!compact && 'mb-8', className)}>
-        {!compact ? (
+        {useTopbar ? (
+          <>
+            <div className="h-[74px] sm:h-[80px] md:h-[84px]" aria-hidden />
+            <div
+              data-slime-avoid
+              className="fixed left-1/2 top-3 z-[70] w-[min(1500px,calc(100vw-1.5rem))] -translate-x-1/2 sm:top-4 sm:w-[min(1500px,calc(100vw-2rem))] md:top-5"
+            >
+              <div className="w-full rounded-2xl border border-slate-300/90 bg-white/90 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.12)] backdrop-blur-md">
+                <div className="grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-4">
+                  <div className="flex min-w-0 items-center justify-start">{brandBtn}</div>
+                  <div className="flex min-w-0 items-center justify-center">
+                    <div className="flex max-w-full items-center justify-center overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]">
+                      <div className="flex w-max flex-nowrap items-center justify-center gap-1 px-1">{navPills}</div>
+                    </div>
+                  </div>
+                  <div className="flex min-w-0 items-center justify-end gap-2">
+                    <SlimeCreditsChipNav withProfile />
+                    <PersonaSwitcher compact />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : !compact ? (
           <div className="flex w-full min-w-0 items-center gap-2 py-2">
             <div className="flex shrink-0 items-center gap-2">
               {brandBtn}
@@ -265,7 +309,7 @@ export function MainNavButtons({
         </div>
       ) : null}
       {/* Below PersonaSwitcher (z-70); clears common bottom UI */}
-      {!suppressFloatingCorners ? (
+      {!suppressFloatingCorners && !useTopbar ? (
         <div
           className={cn(
             'pointer-events-none fixed z-[60]',

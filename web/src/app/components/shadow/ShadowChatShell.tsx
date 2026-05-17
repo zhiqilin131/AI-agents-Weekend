@@ -945,7 +945,7 @@ export function ShadowChatShell({
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
       <div className="mx-auto max-w-[1500px]">
-        <MainNavButtons />
+        <MainNavButtons layout="topbar" />
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-3xl text-gray-900" style={{ fontWeight: 700 }}>Shadow Chat</h1>
           <p className="text-sm text-gray-500">{activeTitle}</p>

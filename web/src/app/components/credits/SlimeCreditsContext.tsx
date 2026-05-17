@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { User } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { apiFetch } from '../../../utils/apiFetch';
 import { useAuth } from '../../../auth/AuthContext';
@@ -205,11 +206,15 @@ export function useSlimeCreditsOptional() {
 }
 
 /** Compact chip for nav: safe when provider missing (returns null UI helpers). */
-export function SlimeCreditsChipNav({ compact }: { compact?: boolean }) {
+export function SlimeCreditsChipNav({ compact, withProfile }: { compact?: boolean; withProfile?: boolean }) {
   const ctx = useSlimeCreditsOptional();
   const navigate = useNavigate();
   if (!ctx) return null;
   const { credits, loading } = ctx;
+  const shapeClass = withProfile ? 'rounded-2xl' : 'rounded-full';
+  const spacingClass = withProfile ? 'gap-2 px-3.5 py-2 text-sm' : 'gap-1.5 px-2.5 py-1 text-xs';
+  const compactClass = compact ? (withProfile ? 'gap-1.5 px-2.5 py-1 text-xs' : 'px-2 py-0.5 text-[11px]') : '';
+
   if (!credits) {
     return (
       <BuddyTooltip content="Open Profile. If the balance stays empty, point the web app at your API (e.g. VITE_API_ORIGIN on Vercel).">
@@ -218,11 +223,15 @@ export function SlimeCreditsChipNav({ compact }: { compact?: boolean }) {
           onClick={() => navigate('/profile')}
           disabled={loading}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-full border border-amber-200/90 bg-amber-50/90 px-2.5 py-1 text-xs font-semibold text-amber-950 shadow-sm backdrop-blur-sm transition hover:border-amber-300',
-            compact && 'px-2 py-0.5 text-[11px]',
+            'inline-flex items-center border border-amber-200/90 bg-amber-50/90 font-semibold text-amber-950 shadow-sm backdrop-blur-sm transition hover:border-amber-300',
+            shapeClass,
+            spacingClass,
+            compactClass,
           )}
           aria-label="Slime Credits status unavailable — open Profile"
         >
+          {withProfile ? <User className={cn('h-3.5 w-3.5', compact && 'h-3 w-3')} /> : null}
+          {withProfile ? <span className={cn('font-semibold', compact ? 'hidden' : 'hidden sm:inline')}>Profile</span> : null}
           <SlimeCreditIcon className="h-3.5 w-3.5" />
           <span>{loading ? '…' : '—'}</span>
         </button>
@@ -236,11 +245,15 @@ export function SlimeCreditsChipNav({ compact }: { compact?: boolean }) {
           type="button"
           onClick={() => navigate('/profile')}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-full border border-violet-200/90 bg-gradient-to-r from-violet-50/95 to-emerald-50/90 px-2.5 py-1 text-xs font-semibold text-violet-900 shadow-sm backdrop-blur-sm transition hover:border-violet-300',
-            compact && 'px-2 py-0.5 text-[11px]',
+            'inline-flex items-center border border-violet-200/90 bg-gradient-to-r from-violet-50/95 to-emerald-50/90 font-semibold text-violet-900 shadow-sm backdrop-blur-sm transition hover:border-violet-300',
+            shapeClass,
+            spacingClass,
+            compactClass,
           )}
           aria-label="Unlimited Slime Credits — open Profile"
         >
+          {withProfile ? <User className={cn('h-3.5 w-3.5', compact && 'h-3 w-3')} /> : null}
+          {withProfile ? <span className={cn('font-semibold', compact ? 'hidden' : 'hidden sm:inline')}>Profile</span> : null}
           <SlimeCreditIcon className="h-3.5 w-3.5" />
           <span>∞</span>
         </button>
@@ -265,14 +278,18 @@ export function SlimeCreditsChipNav({ compact }: { compact?: boolean }) {
         onClick={() => navigate('/profile')}
         disabled={loading}
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur-sm transition',
-          compact && 'px-2 py-0.5 text-[11px]',
+          'inline-flex items-center border font-semibold shadow-sm backdrop-blur-sm transition',
+          shapeClass,
+          spacingClass,
+          compactClass,
           out && 'border-rose-200 bg-rose-50/95 text-rose-900 hover:border-rose-300',
           low && !out && 'border-amber-200 bg-amber-50/95 text-amber-950 hover:border-amber-300',
           !low && !out && 'border-emerald-200/90 bg-white/90 text-emerald-950 hover:border-emerald-300',
         )}
         aria-label={`Slime Credits: ${bal}. Open Profile.`}
       >
+        {withProfile ? <User className={cn('h-3.5 w-3.5', compact && 'h-3 w-3')} /> : null}
+        {withProfile ? <span className={cn('font-semibold', compact ? 'hidden' : 'hidden sm:inline')}>Profile</span> : null}
         <SlimeCreditIcon className="h-3.5 w-3.5" />
         <span>{loading ? '…' : bal}</span>
         {low && !out ? <span className="sr-only">Low credits</span> : null}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Crown } from 'lucide-react';
 import { useNavigate } from 'react-router';
-import { PageBackButton } from '../app/components/PageBackButton';
+import { MainNavButtons } from '../app/components/MainNavButtons';
 import { apiFetch } from '../utils/apiFetch';
 import { SlimeCreditIcon } from '../app/components/credits/SlimeCreditIcon';
 import { useSlimeCredits } from '../app/components/credits/SlimeCreditsContext';
@@ -422,7 +422,7 @@ export default function ProfilePage() {
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-3 py-4 pb-24 md:px-6 md:py-6 md:pb-28">
       <div className="mx-auto max-w-[1300px]">
-        <PageBackButton />
+        <MainNavButtons layout="topbar" className="!mb-3" />
         <div className="mt-1 mb-3 md:flex md:items-end md:justify-between md:gap-4">
           <div className="min-w-0">
             <h1 className="text-2xl text-gray-900 md:text-3xl" style={{ fontWeight: 700 }}>

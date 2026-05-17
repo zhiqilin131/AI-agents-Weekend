@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
-import { Ghost, Home, MessageSquare, Pencil, Trash2 } from 'lucide-react';
+import { Ghost, MessageSquare, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { ThreadActionDock } from '../app/components/shadow/ThreadActionDock';
-import { BrandMark } from '../app/components/BrandMark';
+import { MainNavButtons } from '../app/components/MainNavButtons';
 import {
   decisionPromptFromPendingAction,
   pendingActionToSuggestion,
@@ -343,39 +343,8 @@ export default function SlimeCompanionPage() {
       <div className="pointer-events-none absolute inset-0 opacity-[0.58] bg-[radial-gradient(ellipse_at_50%_38%,rgba(139,92,246,0.18),transparent_58%),radial-gradient(circle_at_18%_72%,rgba(34,211,238,0.12),transparent_30%),radial-gradient(circle_at_82%_70%,rgba(244,114,182,0.10),transparent_32%)]" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-white/55 to-transparent" />
 
-      <div
-        data-slime-avoid
-        className="absolute left-3 top-3 z-[60] flex flex-wrap items-center gap-2 sm:left-4 sm:top-4"
-      >
-        <BuddyTooltip content="Foresight-X home">
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="inline-flex items-center focus:outline-none focus:ring-2 focus:ring-violet-400/40 rounded-full"
-            aria-label="Open Foresight-X home"
-          >
-            <BrandMark compact iconOnly />
-          </button>
-        </BuddyTooltip>
-        <BuddyTooltip content="Go to the Foresight-X home screen and decision workspace.">
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/82 px-4 py-2 text-sm font-semibold text-slate-800 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:bg-white hover:-translate-y-0.5"
-          >
-            <Home className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
-            Home
-          </button>
-        </BuddyTooltip>
-        <BuddyTooltip content="Manage your account, memory sources, and saved traces.">
-          <button
-            type="button"
-            onClick={() => navigate('/profile')}
-            className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/82 px-4 py-2 text-sm font-semibold text-slate-800 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:bg-white hover:-translate-y-0.5"
-          >
-            Profile
-          </button>
-        </BuddyTooltip>
+      <div className="relative z-[60]">
+        <MainNavButtons layout="topbar" className="!mb-0" />
       </div>
 
       <BuddyTooltip
@@ -390,7 +359,7 @@ export default function SlimeCompanionPage() {
           type="button"
           data-slime-avoid
           onClick={() => setPanelOpen((open) => !open)}
-          className="absolute right-3 top-3 z-[60] inline-flex items-center gap-2 rounded-full border border-violet-200/70 bg-white/85 px-4 py-2 text-sm font-semibold text-violet-950 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:-translate-y-0.5 hover:border-violet-400 sm:right-4 sm:top-4"
+          className="absolute right-3 top-[6rem] z-[60] inline-flex items-center gap-2 rounded-full border border-violet-200/70 bg-white/85 px-4 py-2 text-sm font-semibold text-violet-950 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:-translate-y-0.5 hover:border-violet-400 sm:right-4 sm:top-[6.4rem] md:top-[6.8rem]"
           aria-expanded={panelOpen}
           aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
         >
@@ -429,7 +398,7 @@ export default function SlimeCompanionPage() {
           </button>
         </BuddyTooltip>
         <img
-          src="/ForesightXLogo.svg"
+          src="/ForesightXLogoDark.svg"
           alt=""
           className="pointer-events-none h-8 w-auto max-w-[min(100vw-5rem,240px)] opacity-90 drop-shadow-sm sm:h-9"
           decoding="async"
@@ -437,7 +406,7 @@ export default function SlimeCompanionPage() {
         />
       </div>
 
-      <div className="relative flex min-h-[100dvh] w-full flex-col items-center px-4 pb-16 pt-16 sm:pb-20 sm:pt-20">
+      <div className="relative flex min-h-[100dvh] w-full flex-col items-center px-4 pb-16 pt-24 sm:pb-20 sm:pt-28">
         <div data-slime-avoid className="relative z-30 mb-2 text-center sm:mb-0">
           <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-violet-500/80">Slime Chat</p>
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
