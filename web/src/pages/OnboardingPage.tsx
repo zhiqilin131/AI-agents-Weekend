@@ -98,7 +98,8 @@ export default function OnboardingPage() {
       if (!draftFromProfile.valuesNarrative.trim()) {
         draftFromProfile.valuesNarrative = generateValuesNarrative(draftFromProfile.pvqResponses);
       }
-      return { ...draftFromProfile, step: 4 };
+      const step = mode === 'resume' ? 3 : 4;
+      return { ...draftFromProfile, step };
     }
     const local = loadDraftFromStorage(storageUserId);
     if (!local) {
@@ -124,7 +125,7 @@ export default function OnboardingPage() {
     });
     if (!merged.valuesNarrative.trim()) merged.valuesNarrative = generateValuesNarrative(merged.pvqResponses);
     return merged;
-  }, [storageUserId]);
+  }, [storageUserId, mode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,12 +150,12 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (loading) return;
-    if (onboardingCompleted) {
+    if (onboardingCompleted && currentStep >= 4) {
       clearDraftFromStorage(storageUserId);
       return;
     }
     saveDraftToStorage(draft, storageUserId);
-  }, [draft, loading, onboardingCompleted, storageUserId]);
+  }, [draft, loading, onboardingCompleted, storageUserId, currentStep]);
 
   /** Re-login with completed profile: skip the stuck completion screen and go home. */
   useEffect(() => {
@@ -275,6 +276,11 @@ export default function OnboardingPage() {
       setSaving(false);
     }
   }, [persistProfile, storageUserId]);
+
+  const returnToReviewAndEdit = useCallback(() => {
+    setStep3SavingDone(true);
+    setDraft((prev) => ({ ...prev, step: 3 }));
+  }, []);
 
   const finishOnboardingAndNavigate = useCallback(
     async (to: string) => {
@@ -663,7 +669,11 @@ export default function OnboardingPage() {
                 Back
               </Button>
               <Button onClick={() => void continueFromStep3()} disabled={saving}>
-                {saving ? 'Saving…' : '✓ Looks good, finish setup'}
+                {saving
+                  ? 'Saving…'
+                  : onboardingCompleted
+                    ? 'Save changes and continue'
+                    : '✓ Looks good, finish setup'}
               </Button>
             </div>
           </section>
@@ -675,9 +685,17 @@ export default function OnboardingPage() {
             <div className="space-y-2 text-sm text-gray-700">
               <p>Your Personal Profile is now created.</p>
               <p>From now on, when you describe a choice in Decision Space, I will use this context.</p>
-              <p>You can edit or add details anytime in your Profile.</p>
+              <p>You can review and change your priorities below, or edit anytime later in Profile.</p>
             </div>
-            <div className="flex flex-col items-center gap-2 pt-2">
+            <motion.div className="flex flex-col items-center gap-2 pt-2">
+              <Button
+                variant="outline"
+                className="w-full max-w-sm"
+                disabled={saving}
+                onClick={returnToReviewAndEdit}
+              >
+                Review and edit my answers
+              </Button>
               <Button
                 className="rounded-full bg-gradient-to-r from-purple-600 to-blue-600 px-5 text-white"
                 disabled={saving}
@@ -688,7 +706,7 @@ export default function OnboardingPage() {
               <Button variant="ghost" disabled={saving} onClick={() => void finishOnboardingAndNavigate('/')}>
                 Back to Home
               </Button>
-            </div>
+            </motion.div>
           </section>
         ) : null}
       </div>
