@@ -24,9 +24,15 @@ def test_heuristic_strips_decision_starter_prefix() -> None:
 def test_apply_title_only_on_first_user_turn() -> None:
     t = create_thread(user_id="demo_user")
     append_message(t, role="user", content="Should I go to the gym?", mode="normal")
+    # Store-level autotitle intentionally waits for assistant response.
+    assert t["title"] == "New chat"
+    updated = apply_title_for_first_user_message(t, "Should I go to the gym?")
+    assert updated is not None
     first = t["title"]
     assert first != "New chat"
     append_message(t, role="user", content="Another question", mode="normal")
+    updated_again = apply_title_for_first_user_message(t, "Another question")
+    assert updated_again is None
     assert t["title"] == first
 
 
@@ -40,6 +46,8 @@ def test_llm_title_replaces_heuristic_on_first_turn(monkeypatch) -> None:
     )
     t = create_thread(user_id="demo_user")
     append_message(t, role="user", content="Help me decide: gym or rest?", mode="normal")
+    assert t["title"] == "New chat"
+    apply_title_for_first_user_message(t, "Help me decide: gym or rest?")
     assert "gym" in t["title"].lower() or "rest" in t["title"].lower()
     updated = apply_title_for_first_user_message(t, "Help me decide: gym or rest?", llm=MagicMock())
     assert updated == "Gym vs rest day"

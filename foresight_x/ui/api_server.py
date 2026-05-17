@@ -133,7 +133,11 @@ from foresight_x.chat.pending_action import (
     set_suggestion_pending,
     sync_decision_pending_from_trigger,
 )
-from foresight_x.chat.thread_store import append_clarification_event
+from foresight_x.chat.thread_store import (
+    append_clarification_event,
+    regenerate_thread_title,
+    set_manual_thread_title,
+)
 from foresight_x.auth import (
     decode_supabase_access_token,
     get_current_user,
@@ -2263,6 +2267,19 @@ class WellbeingIntakeRequest(BaseModel):
     support_preference: str = Field(default="mixed", max_length=32)
 
 
+class ShadowThreadTitleRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    regenerate_auto: bool = False
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _normalize_title(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = " ".join(str(v).strip().split())
+        return s or None
+
+
 class ShadowThreadMessageRequest(BaseModel):
     message: str = ""
     mode: str | None = None
@@ -2697,6 +2714,25 @@ def patch_shadow_chat_thread(thread_id: str, body: ShadowThreadPatchRequest) -> 
         if st != existing:
             raise HTTPException(status_code=400, detail="slime_type_immutable")
     return {"thread": _shadow_response_thread(thread)}
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/title")
+def update_shadow_chat_thread_title(thread_id: str, body: ShadowThreadTitleRequest) -> dict:
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = _load_thread_or_404(thread_id, uid=uid)
+
+    if body.regenerate_auto:
+        regenerate_thread_title(thread)
+        save_thread(thread)
+        return {"ok": True, "thread": _load_thread_or_404(thread_id, uid=uid)}
+
+    title = body.title
+    if not title:
+        raise HTTPException(status_code=422, detail="title required unless regenerate_auto=true")
+    set_manual_thread_title(thread, title)
+    save_thread(thread)
+    return {"ok": True, "thread": _load_thread_or_404(thread_id, uid=uid)}
 
 
 @app.delete("/api/shadow-chat/threads/{thread_id}")
