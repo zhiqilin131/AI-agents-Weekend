@@ -1,4 +1,5 @@
 import { Pencil, Trash2, X } from 'lucide-react';
+import { cn } from '../ui/utils';
 
 export type ProfileMemoryDetail = {
   action?: 'new' | 'updated' | 'merged' | string;
@@ -23,7 +24,13 @@ export function formatProfileMemoryToastAt(iso: string): string {
   if (!t) return '';
   const d = Date.parse(t);
   if (Number.isNaN(d)) return t.slice(0, 16);
-  return new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return new Date(d).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export function ProfileMemoryToastStack({
@@ -31,12 +38,44 @@ export function ProfileMemoryToastStack({
   onDismiss,
   onDelete,
   onEdit,
+  headerTitle = 'Profile memory updated',
+  tone = 'emerald',
 }: {
   toasts: ProfileMemoryToast[];
   onDismiss: (id: string) => void;
   onDelete?: (factId: string, toastId: string) => void;
   onEdit?: (factId?: string) => void;
+  headerTitle?: string;
+  tone?: 'emerald' | 'rose';
 }) {
+  const toneCls =
+    tone === 'rose'
+      ? {
+          border: 'border-rose-200/90',
+          shadow: 'shadow-[0_18px_50px_rgba(244,114,182,0.16)]',
+          header: 'text-rose-800',
+          dismiss: 'text-rose-700/70 hover:bg-rose-100/90 hover:text-rose-900',
+          card: 'border-rose-100 bg-rose-50/70',
+          pill: 'bg-rose-600',
+          pillText: 'text-white',
+          catBorder: 'border-rose-200',
+          catText: 'text-rose-800',
+          body: 'text-rose-950',
+          time: 'text-rose-800/75',
+        }
+      : {
+          border: 'border-emerald-200/90',
+          shadow: 'shadow-[0_18px_50px_rgba(16,185,129,0.16)]',
+          header: 'text-emerald-800',
+          dismiss: 'text-emerald-700/70 hover:bg-emerald-100/90 hover:text-emerald-900',
+          card: 'border-emerald-100 bg-emerald-50/70',
+          pill: 'bg-emerald-600',
+          pillText: 'text-white',
+          catBorder: 'border-emerald-200',
+          catText: 'text-emerald-800',
+          body: 'text-emerald-950',
+          time: 'text-emerald-800/75',
+        };
   if (!toasts.length) return null;
   return (
     <div
@@ -46,17 +85,21 @@ export function ProfileMemoryToastStack({
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className="pointer-events-auto relative rounded-2xl border border-emerald-200/90 bg-white/95 px-4 py-3 pr-9 text-sm shadow-[0_18px_50px_rgba(16,185,129,0.16)] backdrop-blur-md transition-opacity duration-300"
+          className={cn(
+            'pointer-events-auto relative rounded-2xl border bg-white/95 px-4 py-3 pr-9 text-sm backdrop-blur-md transition-opacity duration-300',
+            toneCls.border,
+            toneCls.shadow,
+          )}
         >
           <button
             type="button"
-            className="absolute right-2 top-2 rounded-full p-1 text-emerald-700/70 hover:bg-emerald-100/90 hover:text-emerald-900"
+            className={cn('absolute right-2 top-2 rounded-full p-1', toneCls.dismiss)}
             aria-label="Dismiss"
             onClick={() => onDismiss(toast.id)}
           >
             <X className="h-4 w-4" />
           </button>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-800">Profile memory updated</p>
+          <p className={cn('text-[11px] font-semibold uppercase tracking-wide', toneCls.header)}>{headerTitle}</p>
           <div className="mt-1.5 space-y-2">
             {(toast.details?.length ? toast.details : toast.items.map((text) => ({ text }))).slice(0, 4).map((detail, i) => {
               const factId = typeof detail.id === 'string' ? detail.id : '';
@@ -64,21 +107,35 @@ export function ProfileMemoryToastStack({
               const category = String(detail.category || 'memory');
               const label = action === 'merged' ? 'reinforced' : action;
               return (
-                <div key={`${toast.id}-${factId || i}`} className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-2.5 py-2">
+                <div key={`${toast.id}-${factId || i}`} className={cn('rounded-xl border px-2.5 py-2', toneCls.card)}>
                   <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                    <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                        toneCls.pill,
+                        toneCls.pillText,
+                      )}
+                    >
                       {label}
                     </span>
-                    <span className="rounded-full border border-emerald-200 bg-white px-2 py-0.5 text-[10px] font-medium text-emerald-800">
+                    <span
+                      className={cn(
+                        'rounded-full border bg-white px-2 py-0.5 text-[10px] font-medium',
+                        toneCls.catBorder,
+                        toneCls.catText,
+                      )}
+                    >
                       {category}
                     </span>
                   </div>
-                  <p className="text-[13px] leading-snug text-emerald-950">{String(detail.text || toast.items[i] || '')}</p>
+                  <p className={cn('text-[13px] leading-snug', toneCls.body)}>
+                    {String(detail.text || toast.items[i] || '')}
+                  </p>
                   {factId ? (
                     <div className="mt-1.5 flex gap-2">
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 hover:text-emerald-950"
+                        className={cn('inline-flex items-center gap-1 text-[11px] font-semibold hover:opacity-90', toneCls.catText)}
                         onClick={() => onEdit?.(factId)}
                       >
                         <Pencil className="h-3 w-3" />
@@ -99,7 +156,7 @@ export function ProfileMemoryToastStack({
             })}
           </div>
           {toast.at ? (
-            <p className="mt-1.5 text-[10px] text-emerald-800/75">{formatProfileMemoryToastAt(toast.at)}</p>
+            <p className={cn('mt-1.5 text-[10px]', toneCls.time)}>{formatProfileMemoryToastAt(toast.at)}</p>
           ) : null}
         </div>
       ))}

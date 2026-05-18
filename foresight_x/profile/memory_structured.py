@@ -107,5 +107,13 @@ def is_slime_owned_memory_fact(fact: ProfileMemoryFact) -> bool:
 
 
 def user_scope_memory_facts(facts: list[ProfileMemoryFact]) -> list[ProfileMemoryFact]:
-    """Profile rows about the human user only (Slime companion bucket removed)."""
-    return [f for f in facts if not is_slime_owned_memory_fact(f)]
+    """Profile rows about the human user only (Slime companion + wellbeing buckets removed)."""
+    from foresight_x.profile.wellbeing_memory import is_wellbeing_memory_fact
+
+    return [f for f in facts if not is_slime_owned_memory_fact(f) and not is_wellbeing_memory_fact(f)]
+
+
+def wellbeing_memory_facts(facts: list[ProfileMemoryFact]) -> list[ProfileMemoryFact]:
+    from foresight_x.profile.wellbeing_memory import is_wellbeing_memory_fact
+
+    return [f for f in facts if is_wellbeing_memory_fact(f)]

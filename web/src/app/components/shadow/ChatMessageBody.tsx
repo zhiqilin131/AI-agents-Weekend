@@ -1,4 +1,4 @@
-import { renderChatMarkdown } from '../../../utils/chatMarkdown';
+import { MarkdownContent } from '../MarkdownContent';
 
 export function ChatMessageBody({
   content,
@@ -11,9 +11,5 @@ export function ChatMessageBody({
     return <span className="whitespace-pre-wrap">{content || '\u00a0'}</span>;
   }
 
-  return (
-    <div className="chat-message-markdown space-y-2.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-      {renderChatMarkdown(content)}
-    </div>
-  );
+  return <MarkdownContent content={content} />;
 }

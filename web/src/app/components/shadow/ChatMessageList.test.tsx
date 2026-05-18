@@ -36,6 +36,34 @@ describe('ChatMessageList (shadow)', () => {
     expect(html).toContain('<blockquote');
   });
 
+  it('renders therapy report artifact card in transcript', () => {
+    const html = renderToStaticMarkup(
+      <ChatMessageList
+        messages={[
+          {
+            id: 'tr1',
+            role: 'assistant',
+            content: 'Session wrap-up.',
+            metadata: {
+              type: 'therapy_report_artifact',
+              title: 'Therapy Report',
+              summary: 'You named what matters.',
+              status: 'complete',
+            },
+          },
+        ]}
+        onOpenReportArtifact={() => {}}
+        onOpenTherapyReportArtifact={() => {}}
+        onReviseArtifact={() => {}}
+        onArtifactExecutionCalendar={() => {}}
+        slimeType="wellbeing"
+      />,
+    );
+    expect(html).toContain('Therapy Report');
+    expect(html).toContain('Open report');
+    expect(html).toContain('You named what matters');
+  });
+
   it('shows empty-state prompt and suggestion chips without calling API', () => {
     const html = renderToStaticMarkup(
       <ChatMessageList

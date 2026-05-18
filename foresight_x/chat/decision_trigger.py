@@ -178,11 +178,26 @@ def evaluate_decision_trigger(
     intent_label: str,
     intent_confidence: float,
 ) -> DecisionTriggerEvaluation:
+    from foresight_x.slime.identity import slime_supports_decision_mode
+
     now = _now_utc()
     state = _ensure_state(thread)
     action = (user_action or "send_message").strip() or "send_message"
     message = (user_message or "").strip()
     decision_prompt = message[:1200] if message else str(state.get("pending_prompt") or "")
+
+    if not slime_supports_decision_mode(thread=thread):
+        if action in ("dismiss_suggestion", "continue_normally"):
+            state["pending_confirmation"] = False
+            state["pending_prompt"] = ""
+            return DecisionTriggerEvaluation(effective_action=action)
+        state["pending_confirmation"] = False
+        state["pending_prompt"] = ""
+        return DecisionTriggerEvaluation(
+            effective_action="send_message",
+            should_offer_suggestion=False,
+            reason="wellbeing_no_decision_mode",
+        )
 
     if action == "dismiss_suggestion":
         state["pending_confirmation"] = False

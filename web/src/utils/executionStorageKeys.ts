@@ -30,10 +30,37 @@ export function dispatchExecutionCalendarLocalBump(): void {
 export const EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY = 'fx.execution.pendingCalendarFeedback';
 /** Resolved start/end from Slime voice — place exact block when user taps Edit */
 export const SLIME_VOICE_CALENDAR_RESOLVED_KEY = 'fx.slime.calendarResolved.v1';
+/** ISO start of an event — execution planner jumps to that week (no duplicate insert). */
+export const EXECUTION_CALENDAR_FOCUS_WEEK_KEY = 'fx.execution.focusWeekIso.v1';
 /** Selected AI task ids + labels when opening chat from execution calendar (session). */
 export const EXECUTION_SELECTED_BLOCKS_CONTEXT_KEY = 'fx.execution.selectedBlocksContext.v1';
 
 /** Full Calendar Agent draft payload when opening planner from report or Slime. */
 export const CALENDAR_AGENT_SESSION_DRAFT_KEY = 'fx.calendarAgent.sessionDraft.v1';
+
+function reportCalendarAppliedKey(storageUserKey: string, decisionId: string): string {
+  const seg = sanitizeExecutionStorageSegment(storageUserKey);
+  const dec = sanitizeExecutionStorageSegment(decisionId);
+  return `fx.execution.reportCalendarApplied.v1.${seg}.${dec}`;
+}
+
+/** Whether report plan blocks were already placed for this decision (per user). */
+export function isReportCalendarApplied(storageUserKey: string, decisionId: string): boolean {
+  if (typeof localStorage === 'undefined' || !storageUserKey?.trim() || !decisionId?.trim()) return false;
+  try {
+    return localStorage.getItem(reportCalendarAppliedKey(storageUserKey, decisionId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function markReportCalendarApplied(storageUserKey: string, decisionId: string): void {
+  if (typeof localStorage === 'undefined' || !storageUserKey?.trim() || !decisionId?.trim()) return;
+  try {
+    localStorage.setItem(reportCalendarAppliedKey(storageUserKey, decisionId), '1');
+  } catch {
+    /* ignore quota */
+  }
+}
 /** Calendar context handoff from planner into Slime Buddy voice/chat. */
 export const SLIME_CALENDAR_BRIEF_CONTEXT_KEY = 'fx.slime.calendarBriefContext.v1';

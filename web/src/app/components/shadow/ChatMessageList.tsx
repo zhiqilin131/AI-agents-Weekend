@@ -1,7 +1,11 @@
 import type { ShadowMessage } from './types';
 import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
+import { getSlimeIdentity, type SlimeType } from '../../../features/slime/slimeIdentity';
+import { slimeCtaButtonStyle } from '../../../features/slime/slimeCtaButton';
 import { DecisionReportArtifactCard, type ArtifactStatus } from './DecisionReportArtifactCard';
+import { TherapyReportArtifactCard } from './TherapyReportArtifactCard';
 import { ChatMessageBody } from './ChatMessageBody';
+import type { TherapyReport } from '../../../features/slime/therapySession';
 
 const SUGGESTION_CHIPS = [
   'Help me decide something concrete',
@@ -13,16 +17,22 @@ const SUGGESTION_CHIPS = [
 export function ChatMessageList({
   messages,
   onOpenReportArtifact,
+  onOpenTherapyReportArtifact,
   onReviseArtifact,
   onArtifactExecutionCalendar,
   onSuggestionChip,
+  slimeType = 'generalized',
 }: {
   messages: ShadowMessage[];
   onOpenReportArtifact: (decisionId: string) => void;
+  onOpenTherapyReportArtifact?: (report?: TherapyReport) => void;
   onReviseArtifact: (decisionId: string) => void;
   onArtifactExecutionCalendar: (decisionId: string) => void;
   onSuggestionChip?: (text: string) => void;
+  slimeType?: SlimeType;
 }) {
+  const theme = getSlimeIdentity(slimeType).theme;
+  const isRimumu = slimeType === 'wellbeing';
   if (!messages.length) {
     return (
       <div className="flex min-h-[45vh] items-center justify-center">
@@ -37,6 +47,7 @@ export function ChatMessageList({
                   disabled={!onSuggestionChip}
                   onClick={() => onSuggestionChip?.(label)}
                   className="rounded-full border border-indigo-200/90 bg-white/90 px-3 py-1.5 text-xs font-medium text-indigo-900 shadow-sm hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ borderColor: theme.border, color: theme.primary }}
                 >
                   {label}
                 </button>
@@ -51,8 +62,33 @@ export function ChatMessageList({
     <div className="space-y-4">
       {messages.map((m) => {
         const meta = m.metadata;
-        const isArtifact = meta && String(meta.type) === 'decision_report_artifact';
-        if (m.role === 'assistant' && isArtifact) {
+        const isDecisionArtifact = meta && String(meta.type) === 'decision_report_artifact';
+        const isTherapyArtifact =
+          meta &&
+          (String(meta.type) === 'therapy_report_artifact' ||
+            String(meta.artifact_type) === 'therapy_report');
+        if (m.role === 'assistant' && isTherapyArtifact && onOpenTherapyReportArtifact) {
+          const title = String(meta.title ?? 'Therapy Report');
+          const summary = String(meta.summary ?? m.content ?? 'Session summary ready.');
+          const st = String(meta.status ?? 'complete') as ArtifactStatus;
+          const createdAt = meta.created_at != null ? String(meta.created_at) : undefined;
+          const embedded =
+            meta.therapy_report && typeof meta.therapy_report === 'object'
+              ? (meta.therapy_report as TherapyReport)
+              : undefined;
+          return (
+            <div key={m.id} className="flex justify-start">
+              <TherapyReportArtifactCard
+                title={title}
+                summary={summary}
+                status={st === 'generating' || st === 'error' ? st : 'complete'}
+                createdAt={createdAt}
+                onOpenReport={() => onOpenTherapyReportArtifact(embedded)}
+              />
+            </div>
+          );
+        }
+        if (m.role === 'assistant' && isDecisionArtifact) {
           const decisionId = String(meta?.decision_id ?? '');
           const title = String(meta?.title ?? 'Decision Report');
           const summary = String(meta?.summary ?? '');
@@ -87,9 +123,21 @@ export function ChatMessageList({
             <div
               className={`max-w-[80%] rounded-2xl px-4 py-3.5 shadow-sm ${
                 m.role === 'user'
-                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-[15px] leading-relaxed text-white'
+                  ? 'text-[15px] leading-relaxed'
                   : 'border border-gray-200/90 bg-white/95 font-sans text-[15px] leading-[1.65] tracking-[0.01em] text-gray-800 antialiased'
               }`}
+              style={
+                m.role === 'user'
+                  ? isRimumu
+                    ? {
+                        background: `linear-gradient(135deg, ${theme.highlight}, ${theme.surface})`,
+                        border: `1px solid ${theme.border}`,
+                        color: theme.heading,
+                        boxShadow: `0 12px 24px ${theme.glow}`,
+                      }
+                    : slimeCtaButtonStyle(theme)
+                  : undefined
+              }
             >
               <ChatMessageBody content={m.content} role={m.role} />
             </div>

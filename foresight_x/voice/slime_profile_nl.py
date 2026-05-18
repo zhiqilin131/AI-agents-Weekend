@@ -74,7 +74,8 @@ def should_attempt_nl_slime_patch(message: str) -> bool:
         return False
     si = classify_slime_intent(raw)
     if si.intent == "profile_update":
-        return True
+        # Appearance, voice, and speaking style are fixed per Slime type.
+        return False
     low = raw.lower()
     return any(s in low for s in _STYLE_GATE_EXTRA)
 
@@ -148,6 +149,12 @@ def try_apply_slime_profile_from_chat_message(message: str, *, settings: Setting
     patch = {k: v for k, v in out.patch.items() if v is not None}
     if not patch:
         return False, ""
+
+    from foresight_x.voice.slime_tools import _reject_slime_personalization_patch
+
+    blocked = _reject_slime_personalization_patch(patch)
+    if blocked:
+        return True, blocked
 
     ok, err = merge_and_save_slime_profile(settings, patch)
     if not ok:

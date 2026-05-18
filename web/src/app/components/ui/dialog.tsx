@@ -46,14 +46,20 @@ function DialogOverlay({
   );
 }
 
+type DialogContentProps = React.ComponentProps<typeof DialogPrimitive.Content> & {
+  /** Merged onto the overlay (e.g. raise z-index above full-screen panels). */
+  overlayClassName?: string;
+};
+
 function DialogContent({
   className,
+  overlayClassName,
   children,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content>) {
+}: DialogContentProps) {
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(

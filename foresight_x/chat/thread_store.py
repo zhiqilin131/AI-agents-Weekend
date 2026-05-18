@@ -13,7 +13,13 @@ from pydantic import BaseModel, Field
 
 from foresight_x.config import load_settings
 from foresight_x.db.supabase_client import get_client
-from foresight_x.chat.thread_title import heuristic_thread_title
+from foresight_x.chat.thread_title import (
+    apply_title_for_first_user_message,
+    heuristic_thread_title,
+    resolve_thread_title,
+    sync_list_thread_title,
+    title_needs_refresh,
+)
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.perception.clarification_gate import default_clarification_state
 from foresight_x.structured_predict import structured_predict
@@ -31,7 +37,7 @@ class ThreadNotFoundError(KeyError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _is_valid_uuid(v: str | None) -> bool:
@@ -407,9 +413,28 @@ def _default_thread_payload(*, user_id: str, thread_id: str, title: str | None =
     }
 
 
-def _local_create_thread(*, user_id: str, title: str | None = None) -> dict[str, Any]:
+def _init_therapy_session_for_thread(t: dict[str, Any], slime_type: str | None) -> None:
+    if (slime_type or "").strip() == "wellbeing":
+        t["therapy_session"] = {
+            "status": "not_started",
+            "intake_complete": False,
+            "check_in_count": 0,
+            "episode_notes": [],
+        }
+        t["wellbeing_session"] = dict(t["therapy_session"])
+
+
+def _local_create_thread(
+    *,
+    user_id: str,
+    title: str | None = None,
+    slime_type: str | None = "generalized",
+) -> dict[str, Any]:
     tid = str(uuid.uuid4())
     t = _default_thread_payload(user_id=user_id, thread_id=tid, title=title)
+    if slime_type:
+        t["slime_type"] = slime_type
+    _init_therapy_session_for_thread(t, slime_type)
     _local_save_thread(t)
     return t
 
@@ -420,16 +445,35 @@ def _local_list_threads(*, user_id: str) -> list[dict[str, Any]]:
     for p in sorted(d.glob("*.json"), reverse=True):
         try:
             t = json.loads(p.read_text(encoding="utf-8"))
+            slime = str(t.get("slime_type") or "generalized")
+            therapy = t.get("therapy_session") if isinstance(t.get("therapy_session"), dict) else {}
+            if not therapy and isinstance(t.get("wellbeing_session"), dict):
+                therapy = t["wellbeing_session"]
+            report = therapy.get("report") if isinstance(therapy.get("report"), dict) else None
             _ensure_thread_title_source(t)
+            before_title = str(t.get("title") or "")
+            before_updated = t.get("updated_at")
+            title = sync_list_thread_title(t, llm=None)
+            if title != before_title:
+                t["updated_at"] = before_updated or t.get("updated_at")
+                p.write_text(json.dumps(t, ensure_ascii=False, indent=2), encoding="utf-8")
             out.append(
                 {
                     "thread_id": t.get("thread_id"),
-                    "title": t.get("title") or "New chat",
+                    "title": title,
                     "title_source": t.get("title_source", _TITLE_SOURCE_AUTO),
                     "updated_at": t.get("updated_at"),
                     "created_at": t.get("created_at"),
                     "mode": t.get("mode", "shadow"),
                     "message_count": len(t.get("messages", [])),
+                    "slime_type": slime,
+                    "therapy_status": therapy.get("status") or (
+                        "ended" if report else ("not_started")
+                    ),
+                    "has_therapy_report": bool(report),
+                    "mood_score": therapy.get("mood_score"),
+                    "primary_concern": (therapy.get("primary_concern") or "")[:120],
+                    "therapy_started_at": therapy.get("started_at") or therapy.get("intake_at"),
                 }
             )
         except Exception:
@@ -455,7 +499,9 @@ def _local_load_thread(thread_id: str | None, *, user_id: str, allow_create: boo
         if _is_placeholder_title(t.get("title")):
             _maybe_autotitle_from_messages(t)
         if not t.get("title"):
-            first = (t.get("messages") or [{}])[0].get("content", "")
+            from foresight_x.chat.thread_title import _first_user_message_content
+
+            first = _first_user_message_content(t)
             t["title"] = _default_title(first)
         t.setdefault("working_summary", "")
         t.setdefault("temporary_context", [])
@@ -519,7 +565,7 @@ def _handle_supabase_failure(op: str, user_id: str, exc: Exception):
 
 
 def _thread_metadata_from_thread(thread: dict[str, Any]) -> dict[str, Any]:
-    return {
+    meta: dict[str, Any] = {
         "title_source": thread.get("title_source", _TITLE_SOURCE_AUTO),
         "memory_events": thread.get("memory_events", []),
         "dismissed_suggestions": thread.get("dismissed_suggestions", {"role_mode": False, "decision_report": False}),
@@ -530,6 +576,15 @@ def _thread_metadata_from_thread(thread: dict[str, Any]) -> dict[str, Any]:
         "clarification_state": thread.get("clarification_state", default_clarification_state()),
         "decision_trigger_state": thread.get("decision_trigger_state", {}),
     }
+    if thread.get("title_source"):
+        meta["title_source"] = thread.get("title_source")
+    if thread.get("slime_type"):
+        meta["slime_type"] = thread.get("slime_type")
+    if isinstance(thread.get("therapy_session"), dict):
+        meta["therapy_session"] = thread["therapy_session"]
+    if isinstance(thread.get("wellbeing_session"), dict):
+        meta["wellbeing_session"] = thread["wellbeing_session"]
+    return meta
 
 
 def _hydrate_thread_from_row(
@@ -560,6 +615,8 @@ def _hydrate_thread_from_row(
         "clarification_state": md.get("clarification_state", default_clarification_state()),
         "decision_trigger_state": md.get("decision_trigger_state", {}),
     }
+    if md.get("title_source"):
+        out["title_source"] = md.get("title_source")
 
     if not isinstance(out["clarification_state"], dict):
         out["clarification_state"] = default_clarification_state()
@@ -569,6 +626,12 @@ def _hydrate_thread_from_row(
         out["clarification_state"] = base
     if not isinstance(out.get("decision_trigger_state"), dict):
         out["decision_trigger_state"] = {}
+    if md.get("slime_type"):
+        out["slime_type"] = md["slime_type"]
+    if isinstance(md.get("therapy_session"), dict):
+        out["therapy_session"] = md["therapy_session"]
+    if isinstance(md.get("wellbeing_session"), dict):
+        out["wellbeing_session"] = md["wellbeing_session"]
     if _is_placeholder_title(out.get("title")):
         _maybe_autotitle_from_messages(out)
     _ensure_thread_title_source(out)
@@ -589,6 +652,35 @@ def _fetch_thread_row_supabase(*, user_id: str, thread_id: str) -> dict[str, Any
     if not rows:
         return None
     return rows[0]
+
+
+def _fetch_first_user_messages_supabase(thread_ids: list[str]) -> dict[str, str]:
+    """First user message per thread (for sidebar title resolution)."""
+    ids = [tid for tid in thread_ids if tid]
+    if not ids:
+        return {}
+    try:
+        client = get_client()
+        resp = (
+            client.table("messages")
+            .select("thread_id,content,created_at,role")
+            .in_("thread_id", ids)
+            .eq("role", "user")
+            .order("created_at", desc=False)
+            .execute()
+        )
+        rows = resp.data if isinstance(resp.data, list) else []
+        out: dict[str, str] = {}
+        for r in rows:
+            tid = str(r.get("thread_id") or "")
+            if not tid or tid in out:
+                continue
+            text = str(r.get("content") or "").strip()
+            if text:
+                out[tid] = text
+        return out
+    except Exception:
+        return {}
 
 
 def _fetch_messages_supabase(*, thread_id: str) -> list[dict[str, Any]]:
@@ -688,11 +780,19 @@ def _insert_new_messages_supabase(thread: dict[str, Any]) -> None:
         client.table("messages").insert(to_insert).execute()
 
 
-def create_thread(*, user_id: str, title: str | None = None) -> dict[str, Any]:
+def create_thread(
+    *,
+    user_id: str,
+    title: str | None = None,
+    slime_type: str | None = "generalized",
+) -> dict[str, Any]:
     if _supabase_enabled():
         try:
             tid = str(uuid.uuid4())
             t = _default_thread_payload(user_id=user_id, thread_id=tid, title=title)
+            if slime_type:
+                t["slime_type"] = slime_type
+            _init_therapy_session_for_thread(t, slime_type)
             _upsert_thread_supabase(t)
             return t
         except Exception as exc:
@@ -700,7 +800,7 @@ def create_thread(*, user_id: str, title: str | None = None) -> dict[str, Any]:
     else:
         _warn_fallback("create_thread_supabase_not_fully_configured", user_id=user_id)
 
-    return _local_create_thread(user_id=user_id, title=title)
+    return _local_create_thread(user_id=user_id, title=title, slime_type=slime_type)
 
 
 def list_threads(*, user_id: str) -> list[dict[str, Any]]:
@@ -737,12 +837,51 @@ def list_threads(*, user_id: str) -> list[dict[str, Any]]:
                 except Exception:
                     pass
 
+            refresh_ids: list[str] = []
+            row_meta: list[tuple[dict[str, Any], str, str, dict[str, Any], int]] = []
             for r in rows:
                 tid = str(r.get("id") or "")
+                md = r.get("metadata") if isinstance(r.get("metadata"), dict) else {}
+                slime = str(md.get("slime_type") or "generalized")
+                title = str(r.get("title") or "New chat")
+                count = msg_count.get(tid, 0)
+                pseudo: dict[str, Any] = {
+                    "title": title,
+                    "title_source": md.get("title_source"),
+                    "slime_type": slime,
+                    "therapy_session": md.get("therapy_session"),
+                    "wellbeing_session": md.get("wellbeing_session"),
+                    "messages": [],
+                }
+                if count > 0:
+                    refresh_ids.append(tid)
+                row_meta.append((r, tid, slime, md, count))
+
+            first_user_by_tid = _fetch_first_user_messages_supabase(refresh_ids)
+
+            for r, tid, slime, md, count in row_meta:
+                title = str(r.get("title") or "New chat")
+                pseudo = {
+                    "title": title,
+                    "title_source": md.get("title_source"),
+                    "slime_type": slime,
+                    "therapy_session": md.get("therapy_session"),
+                    "wellbeing_session": md.get("wellbeing_session"),
+                    "messages": [],
+                }
+                first = first_user_by_tid.get(tid, "")
+                if first:
+                    pseudo["messages"] = [{"role": "user", "content": first}]
+                title = sync_list_thread_title(pseudo, llm=None)
+                if title != str(r.get("title") or "").strip() and tid:
+                    try:
+                        client.table("threads").update({"title": title}).eq("id", tid).execute()
+                    except Exception:
+                        _log.debug("supabase thread title persist failed", exc_info=True)
                 out.append(
                     {
                         "thread_id": tid,
-                        "title": r.get("title") or "New chat",
+                        "title": title,
                         "title_source": (
                             (r.get("metadata") or {}).get("title_source", _TITLE_SOURCE_AUTO)
                             if isinstance(r.get("metadata"), dict)
@@ -752,6 +891,32 @@ def list_threads(*, user_id: str) -> list[dict[str, Any]]:
                         "created_at": r.get("created_at"),
                         "mode": r.get("mode", "shadow"),
                         "message_count": msg_count.get(tid, 0),
+                        "slime_type": slime,
+                        "therapy_status": (
+                            (md.get("therapy_session") or {}).get("status")
+                            if isinstance(md.get("therapy_session"), dict)
+                            else None
+                        ),
+                        "has_therapy_report": bool(
+                            isinstance(md.get("therapy_session"), dict)
+                            and isinstance((md.get("therapy_session") or {}).get("report"), dict)
+                        ),
+                        "mood_score": (
+                            (md.get("therapy_session") or {}).get("mood_score")
+                            if isinstance(md.get("therapy_session"), dict)
+                            else None
+                        ),
+                        "therapy_started_at": (
+                            (md.get("therapy_session") or {}).get("started_at")
+                            or (md.get("therapy_session") or {}).get("intake_at")
+                            if isinstance(md.get("therapy_session"), dict)
+                            else None
+                        ),
+                        "primary_concern": (
+                            str((md.get("therapy_session") or {}).get("primary_concern") or "")[:120]
+                            if isinstance(md.get("therapy_session"), dict)
+                            else None
+                        ),
                     }
                 )
             return out
@@ -911,6 +1076,15 @@ def append_message(
         "metadata": meta,
     }
     thread.setdefault("messages", []).append(msg)
+    if role == "user":
+        st = str(thread.get("slime_type") or "generalized").strip().lower()
+        if st == "wellbeing" and _is_meaningful_user_text(content):
+            apply_title_for_first_user_message(
+                thread,
+                content,
+                llm=title_llm,
+                slime_type=st,
+            )
     if role == "assistant" and _is_placeholder_title(thread.get("title")):
         _maybe_autotitle_from_messages(thread)
     if decision_id:

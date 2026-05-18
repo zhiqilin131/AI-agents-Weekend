@@ -7,7 +7,9 @@ from dataclasses import dataclass
 
 from foresight_x.config import Settings
 from foresight_x.profile.store import load_user_profile
+from foresight_x.profile.user_address import resolve_user_preferred_name
 from foresight_x.schemas import SlimePersona, SlimePersonaTone
+from foresight_x.slime.identity import SlimeType, get_slime_identity
 from foresight_x.voice.slime_persona_prompt import merge_slime_persona_defaults
 
 
@@ -15,31 +17,37 @@ from foresight_x.voice.slime_persona_prompt import merge_slime_persona_defaults
 class EffectiveSlimePersona:
     """
     Single source of truth for Slime Buddy's display name and speaking persona.
-    ``name`` comes from ``UserProfile.slime_profile.name`` when a profile exists; otherwise the
-    product default (``Mochi``). ``profile_saved`` is False only when ``slime_profile`` is absent.
+    ``name`` is fixed per ``slime_type`` (Mochi or Rimumu). User nickname still comes from profile.
     """
 
     name: str
     persona: SlimePersona
     user_nickname_for_address: str
     profile_saved: bool
+    slime_type: SlimeType
 
 
-def get_effective_slime_persona(settings: Settings) -> EffectiveSlimePersona:
-    """Load saved slime profile/persona for this user (trusted store)."""
+def get_effective_slime_persona(
+    settings: Settings,
+    *,
+    slime_type: SlimeType = "generalized",
+) -> EffectiveSlimePersona:
+    """Load fixed Slime identity + user nickname from profile."""
+    ident = get_slime_identity(slime_type)
     prof = load_user_profile(settings)
     sp = prof.slime_profile
     profile_saved = sp is not None
-    raw_name = str(sp.name if sp else "").strip()[:24] if sp else ""
-    name = raw_name or "Mochi"
-    persona = merge_slime_persona_defaults(sp.persona if sp else None)
-    nick = (persona.user_nickname or "").strip()
+    persona = merge_slime_persona_defaults(ident.fixed_persona)
+    nick = resolve_user_preferred_name(prof)
+    if nick:
+        persona = persona.model_copy(update={"user_nickname": nick})
     addr = nick if nick else "you"
     return EffectiveSlimePersona(
-        name=name,
+        name=ident.ui_spoken_name,
         persona=persona,
         user_nickname_for_address=addr,
         profile_saved=profile_saved,
+        slime_type=slime_type,
     )
 
 
@@ -132,12 +140,7 @@ def is_slime_identity_question(text: str) -> bool:
 
 
 def format_slime_identity_reply(eff: EffectiveSlimePersona) -> str:
-    """Deterministic reply for identity questions (no LLM — preserves exact saved name)."""
-    if not eff.profile_saved:
-        return (
-            "I don’t have a Slime profile saved yet, so I don’t have a name on file. "
-            "You can name me in Slime Buddy / Profile settings."
-        )
+    """Deterministic reply for identity questions (no LLM — fixed name per Slime type)."""
     n = eff.name
     addr = eff.user_nickname_for_address
     tone = eff.persona.tone

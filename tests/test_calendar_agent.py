@@ -90,6 +90,73 @@ def test_conflict_overlap_detected() -> None:
     assert any(x.type == "overlap" for x in c)
 
 
+def test_confirm_replaces_prior_report_events_for_same_decision(tmp_path: Path) -> None:
+    settings = Settings(foresight_user_id="u_rep", foresight_data_dir=tmp_path)
+    decision_id = "dec-abc"
+    intent = CalendarIntent(
+        intent_type="schedule_tasks",
+        source="decision_report",
+        decision_id=decision_id,
+        confidence=0.9,
+    )
+    draft = build_draft_from_intent(
+        intent,
+        settings=settings,
+        user_id="u_rep",
+        existing_events=[],
+        tasks=[
+            CalendarTask(
+                id="t1",
+                title="Ship MVP",
+                duration_minutes=60,
+                priority="high",
+                source="decision_report",
+                decision_id=decision_id,
+            )
+        ],
+        user_timezone="UTC",
+        now=datetime(2026, 5, 11, 8, 0, tzinfo=timezone.utc),
+    )
+    first, _ = confirm_draft(
+        settings=settings,
+        user_id="u_rep",
+        draft_id=draft.draft_id,
+        selected_event_ids=None,
+        edits=None,
+    )
+    assert len(first) == 1
+
+    draft2 = build_draft_from_intent(
+        intent,
+        settings=settings,
+        user_id="u_rep",
+        existing_events=list_events(settings, "u_rep"),
+        tasks=[
+            CalendarTask(
+                id="t2",
+                title="Review plan",
+                duration_minutes=45,
+                priority="medium",
+                source="decision_report",
+                decision_id=decision_id,
+            )
+        ],
+        user_timezone="UTC",
+        now=datetime(2026, 5, 11, 8, 0, tzinfo=timezone.utc),
+    )
+    second, _ = confirm_draft(
+        settings=settings,
+        user_id="u_rep",
+        draft_id=draft2.draft_id,
+        selected_event_ids=None,
+        edits=None,
+    )
+    assert len(second) == 1
+    stored = list_events(settings, "u_rep")
+    assert len(stored) == 1
+    assert stored[0].decision_id == decision_id
+
+
 def test_confirm_persists_event(tmp_path: Path) -> None:
     settings = Settings(foresight_user_id="u_cal", foresight_data_dir=tmp_path)
     intent = CalendarIntent(intent_type="create_event", title="X", duration_minutes=30, source="manual", confidence=0.9)

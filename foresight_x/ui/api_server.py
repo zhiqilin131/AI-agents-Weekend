@@ -57,6 +57,7 @@ from foresight_x.perception.personalized_clarify import (
 )
 from foresight_x.resilience.runtime import current_run_events, resilience_health_report
 from foresight_x.profile.merge import (
+    append_memory_facts,
     append_profile_memory_records,
     delete_memory_fact_by_id,
     delete_priority_line_by_id,
@@ -116,7 +117,12 @@ from foresight_x.chat import (
 )
 from foresight_x.chat.decision_trigger import evaluate_decision_trigger, preview_will_auto_start_decision
 from foresight_x.chat.manual_decision_mode import build_manual_decision_confirmation
-from foresight_x.chat.thread_title import apply_title_for_first_user_message
+from foresight_x.chat.thread_title import (
+    apply_title_for_first_user_message,
+    apply_title_from_wellbeing_intake,
+    is_placeholder_thread_title,
+    maybe_refresh_thread_title,
+)
 from foresight_x.chat.option_coach import build_option_chat_prompt
 from foresight_x.chat.pending_action import (
     clear_pending_action,
@@ -352,7 +358,9 @@ def _sse_chunk(obj: dict) -> str:
 
 
 def _refine_thread_title_first_turn(thread: dict[str, Any], user_message: str, llm: Any | None) -> str | None:
-    title = apply_title_for_first_user_message(thread, user_message, llm=llm)
+    from foresight_x.chat.thread_title import refine_thread_title_first_turn
+
+    title = refine_thread_title_first_turn(thread, user_message, llm=llm)
     if title:
         save_thread(thread)
     return title
@@ -360,7 +368,7 @@ def _refine_thread_title_first_turn(thread: dict[str, Any], user_message: str, l
 
 def _thread_title_sse_fields(thread: dict[str, Any]) -> dict[str, str]:
     t = str(thread.get("title") or "").strip()
-    if t and t != "New chat":
+    if t and not is_placeholder_thread_title(t):
         return {"thread_title": t}
     return {}
 
@@ -1346,8 +1354,14 @@ def run_decision_alias(body: RunRequest, request: Request):
 
 @app.get("/api/profile")
 def get_profile() -> dict:
+    from foresight_x.profile.memory_timestamp_backfill import backfill_memory_fact_timestamps
+
     settings = _settings_for_active_user()
-    p = load_user_profile(settings).model_dump(mode="json")
+    prof = load_user_profile(settings)
+    prof, _ts_changed = backfill_memory_fact_timestamps(prof)
+    if _ts_changed:
+        save_user_profile(prof, settings=settings)
+    p = prof.model_dump(mode="json")
     mfs = p.get("memory_facts") or []
     p["memory_facts"] = [x for x in mfs if (x or {}).get("status", "active") != "deprecated"]
     if not p.get("slime_profile"):
@@ -1464,6 +1478,7 @@ def put_profile(body: UserProfile) -> dict:
             "priorities": u,
             "inferred_priorities": i,
             "about_me": body.about_me,
+            "preferred_name": (body.preferred_name or "").strip()[:48],
             "constraints": list(body.constraints),
             "values": merged_values,
             "timezone": merged_tz[:80],
@@ -1474,6 +1489,21 @@ def put_profile(body: UserProfile) -> dict:
     from foresight_x.profile.onboarding_sync import hydrate_profile_from_onboarding
 
     merged = hydrate_profile_from_onboarding(merged)
+    pn = (merged.preferred_name or "").strip()
+    if pn and merged.slime_profile:
+        sp = merged.slime_profile
+        cur = merge_slime_persona_defaults(sp.persona)
+        if (cur.user_nickname or "").strip() != pn:
+            merged = merged.model_copy(
+                update={
+                    "slime_profile": sp.model_copy(
+                        update={
+                            "persona": cur.model_copy(update={"user_nickname": pn[:24]}),
+                            "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        }
+                    )
+                }
+            )
     path = save_user_profile(merged, settings=settings)
     return {"ok": True, "path": str(path)}
 
@@ -2222,6 +2252,19 @@ class UnifiedChatRequest(BaseModel):
 
 class ShadowThreadCreateRequest(BaseModel):
     title: str | None = None
+    slime_type: str | None = Field(default="generalized", max_length=32)
+
+
+class ShadowThreadPatchRequest(BaseModel):
+    slime_type: str | None = Field(default=None, max_length=32)
+
+
+class WellbeingIntakeRequest(BaseModel):
+    mood_score: int = Field(ge=0, le=10)
+    primary_concern: str = Field(min_length=1, max_length=500)
+    session_goal: str = Field(min_length=1, max_length=500)
+    optional_note: str = Field(default="", max_length=500)
+    support_preference: str = Field(default="mixed", max_length=32)
 
 
 class ShadowThreadTitleRequest(BaseModel):
@@ -2570,29 +2613,20 @@ def _maybe_slime_buddy_turn_params(
     *,
     intent_probe: str,
     chat_intent_label: str,
+    user_message: str = "",
+    llm_model: str | None = None,
 ) -> dict[str, Any]:
-    """Use Slime Buddy synthesis when this chat thread was created from Slime Voice."""
-    if str(thread.get("source") or "") != "slime_voice":
-        return {}
-    eff = get_effective_slime_persona(settings)
-    slime_lane = classify_slime_intent(intent_probe)
-    slime_lane = merge_with_decision_intent(slime_lane, chat_intent_label == "decision_candidate")
-    self_model = get_effective_slime_self_model(settings.foresight_user_id, settings=settings)
-    identity_pack = build_slime_self_identity_prompt(self_model, eff.persona)
-    style_pack = build_slime_persona_prompt(
-        eff.persona,
-        "shadow_chat",
-        slime_name=eff.name,
-        user_ref=eff.user_nickname_for_address,
-        slime_profile_saved=eff.profile_saved,
+    """Slime-type synthesis for generalized / wellbeing threads (and legacy slime_voice)."""
+    from foresight_x.slime.turn_params import build_slime_turn_kwargs
+
+    return build_slime_turn_kwargs(
+        settings,
+        thread,
+        intent_probe=intent_probe,
+        chat_intent_label=chat_intent_label,
+        user_message=user_message,
+        llm_model=llm_model,
     )
-    addendum = f"{identity_pack}\n\n--- Persona style ---\n{style_pack}"
-    hint = slime_lane.intent if slime_lane.intent != "general_chat" else None
-    return {
-        "slime_voice_style_addendum": addendum,
-        "synthesis_frame": "slime_buddy",
-        "slime_intent_hint": hint,
-    }
 
 
 def _finalize_shadow_thread_turn(thread: dict, *, settings: Any) -> None:
@@ -2641,16 +2675,45 @@ def shadow_chat_threads() -> dict:
 def create_shadow_chat_thread(body: ShadowThreadCreateRequest | None = None) -> dict:
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
-    t = create_thread(user_id=uid, title=(body.title if body else None))
+    slime_type = (body.slime_type if body else None) or "generalized"
+    t = create_thread(user_id=uid, title=(body.title if body else None), slime_type=slime_type)
     return {"thread": t}
 
 
 @app.get("/api/shadow-chat/threads/{thread_id}")
 def get_shadow_chat_thread(thread_id: str) -> dict:
+    from foresight_x.slime.therapy_session import ensure_therapy_report_artifact
+
     settings = _settings_for_active_user()
     uid = settings.foresight_user_id
     t = _load_thread_or_404(thread_id, uid=uid)
+    if ensure_therapy_report_artifact(t):
+        save_thread(t)
+    try:
+        chat_pm = _resolved_chat_model(settings, "shadow_chat", None, profile=load_user_profile(settings))
+        ctx_title, _ = _build_context(settings, llm_model=chat_pm)
+        if maybe_refresh_thread_title(t, llm=ctx_title.llm):
+            save_thread(t)
+    except Exception:
+        _log.debug("thread title refresh failed", exc_info=True)
     return {"thread": _shadow_response_thread(t)}
+
+
+@app.patch("/api/shadow-chat/threads/{thread_id}")
+def patch_shadow_chat_thread(thread_id: str, body: ShadowThreadPatchRequest) -> dict:
+    from foresight_x.slime.identity import normalize_slime_type
+
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = _load_thread_or_404(thread_id, uid=uid)
+    if body.slime_type is not None:
+        existing = normalize_slime_type(str(thread.get("slime_type") or "")) or "generalized"
+        st = normalize_slime_type(body.slime_type)
+        if not st:
+            raise HTTPException(status_code=400, detail="invalid_slime_type")
+        if st != existing:
+            raise HTTPException(status_code=400, detail="slime_type_immutable")
+    return {"thread": _shadow_response_thread(thread)}
 
 
 @app.post("/api/shadow-chat/threads/{thread_id}/title")
@@ -2696,6 +2759,111 @@ def set_shadow_report_context(thread_id: str, body: ShadowReportContextRequest) 
         }
     save_thread(thread)
     return {"ok": True, "thread": _load_thread_or_404(thread_id, uid=uid)}
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/wellbeing-intake")
+def post_wellbeing_intake(thread_id: str, body: WellbeingIntakeRequest) -> dict:
+    """Structured Rimumu check-in — stored on thread + profile memory."""
+    from foresight_x.slime.identity import normalize_slime_type
+    from foresight_x.slime.therapy_session import save_wellbeing_intake
+
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = _load_thread_or_404(thread_id, uid=uid)
+    st = normalize_slime_type(str(thread.get("slime_type") or ""))
+    if st != "wellbeing":
+        raise HTTPException(status_code=400, detail="wellbeing_intake_requires_wellbeing_slime")
+    session = save_wellbeing_intake(
+        thread,
+        mood_score=body.mood_score,
+        primary_concern=body.primary_concern,
+        session_goal=body.session_goal,
+        optional_note=body.optional_note,
+        support_preference=body.support_preference,
+    )
+    from foresight_x.profile.wellbeing_memory import (
+        append_wellbeing_checkin_memory,
+        memory_saved_payload_from_events,
+    )
+
+    prof = load_user_profile(settings)
+    prof, mem_events = append_wellbeing_checkin_memory(
+        prof,
+        mood_score=int(session.get("mood_score") or body.mood_score),
+        primary_concern=str(session.get("primary_concern") or body.primary_concern),
+        session_goal=str(session.get("session_goal") or body.session_goal),
+        optional_note=str(session.get("optional_note") or body.optional_note or ""),
+        thread_id=thread_id,
+        support_preference=str(session.get("support_preference") or body.support_preference or "mixed"),
+    )
+    memory_saved = memory_saved_payload_from_events(mem_events)
+    save_user_profile(prof, settings=settings)
+    try:
+        chat_pm = _resolved_chat_model(settings, "shadow_chat", None, profile=prof)
+        ctx_title, _ = _build_context(settings, llm_model=chat_pm)
+        apply_title_from_wellbeing_intake(thread, llm=ctx_title.llm)
+    except Exception:
+        _log.debug("wellbeing intake title refine failed", exc_info=True)
+    save_thread(thread)
+    return {
+        "ok": True,
+        "wellbeing_session": session,
+        "therapy_session": session,
+        "memory_saved": memory_saved,
+    }
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/therapy/start")
+def post_therapy_start(thread_id: str) -> dict:
+    from foresight_x.slime.identity import normalize_slime_type
+    from foresight_x.slime.therapy_session import start_therapy
+
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = _load_thread_or_404(thread_id, uid=uid)
+    if normalize_slime_type(str(thread.get("slime_type") or "")) != "wellbeing":
+        raise HTTPException(status_code=400, detail="therapy_requires_wellbeing_slime")
+    try:
+        session = start_therapy(thread)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "intake_required":
+            raise HTTPException(status_code=400, detail="therapy_intake_required") from exc
+        if code == "therapy_already_ended":
+            raise HTTPException(status_code=400, detail="therapy_already_ended") from exc
+        raise HTTPException(status_code=400, detail=code) from exc
+    save_thread(thread)
+    return {"ok": True, "therapy_session": session, "thread": _shadow_response_thread(thread)}
+
+
+@app.post("/api/shadow-chat/threads/{thread_id}/therapy/end")
+def post_therapy_end(thread_id: str) -> dict:
+    from foresight_x.slime.identity import normalize_slime_type
+    from foresight_x.slime.therapy_report import generate_therapy_report
+    from foresight_x.slime.therapy_session import attach_therapy_report_artifact, end_therapy, therapy_status
+
+    settings = _settings_for_active_user()
+    uid = settings.foresight_user_id
+    thread = _load_thread_or_404(thread_id, uid=uid)
+    if normalize_slime_type(str(thread.get("slime_type") or "")) != "wellbeing":
+        raise HTTPException(status_code=400, detail="therapy_requires_wellbeing_slime")
+    if therapy_status(thread) != "active":
+        raise HTTPException(status_code=400, detail="therapy_not_active")
+    chat_pm = _resolved_chat_model(settings, "shadow_chat", None, profile=load_user_profile(settings))
+    ctx, _ = _build_context(settings, llm_model=chat_pm)
+    report = generate_therapy_report(thread, llm=ctx.llm)
+    try:
+        session = end_therapy(thread, report=report)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    attach_therapy_report_artifact(thread, report)
+    save_thread(thread)
+    return {
+        "ok": True,
+        "therapy_session": session,
+        "therapy_report": report,
+        "thread": _shadow_response_thread(thread),
+    }
 
 
 @app.post("/api/shadow-chat/threads/{thread_id}/messages")
@@ -2777,6 +2945,12 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         clear_pending_action(thread, resolution="answered")
     intent_probe = effective_msg.strip() if effective_msg.strip() != msg.strip() else msg
     intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
+    from foresight_x.chat.conversation_service import (
+        _intent_without_decision_for_wellbeing,
+        _slime_type_for_thread,
+    )
+
+    intent = _intent_without_decision_for_wellbeing(_slime_type_for_thread(thread), intent)
     trigger_eval = evaluate_decision_trigger(
         thread=thread,
         user_action=request_action,
@@ -2871,7 +3045,33 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
             thread,
             intent_probe=intent_probe,
             chat_intent_label=intent.intent,
+            user_message=msg,
+            llm_model=chat_pm,
         )
+        from foresight_x.slime.turn_params import pop_wellbeing_route, wellbeing_safety_short_circuit
+        from foresight_x.slime.wellbeing_router import build_safety_escalation_reply
+
+        if wellbeing_safety_short_circuit(thread, msg):
+            assistant_text = build_safety_escalation_reply()
+            append_message(
+                thread,
+                role="assistant",
+                content=assistant_text,
+                mode=mode,
+                intent="wellbeing_safety_escalation",
+                memory_used=False,
+            )
+            _finalize_shadow_thread_turn(thread, settings=settings)
+            return {
+                "thread": _shadow_response_thread(thread, last_user_message=msg),
+                "suggestion": None,
+                "pending_action": thread.get("pending_action"),
+                "decision_trace": None,
+                "profile_updates": [],
+                "thread_context_kept": False,
+            }
+        turn_kw = dict(buddy_kw)
+        wellbeing_route = pop_wellbeing_route(turn_kw)
         try:
             out = run_shadow_turn(
                 msgs,
@@ -2881,7 +3081,7 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
                 working_summary=str(thread.get("working_summary") or ""),
                 temporary_context_prompt=format_temporary_context_prompt(thread),
                 llm_model=chat_pm,
-                **buddy_kw,
+                **turn_kw,
             )
         except Exception:
             if tx is not None:
@@ -2891,15 +3091,26 @@ def post_shadow_chat_message(thread_id: str, body: ShadowThreadMessageRequest, r
         thread_context_kept = bool(out.thread_only_items)
         profile_updates = [x for x in (out.profile_record_texts or []) if _should_store_profile_fact(x)]
         profile_update_details = list(out.profile_memory_events or [])
+        assistant_text = out.reply.strip()
         append_message(
             thread,
             role="assistant",
-            content=out.reply.strip(),
+            content=assistant_text,
             mode=mode,
             intent=intent.intent,
             memory_used=bool(out.used_memory_facts),
             profile_updated=bool(profile_updates),
         )
+        from foresight_x.slime.wellbeing_session import record_wellbeing_turn
+        from foresight_x.slime.identity import resolve_slime_type_from_thread
+
+        if resolve_slime_type_from_thread(thread) == "wellbeing":
+            record_wellbeing_turn(
+                thread,
+                user_message=msg,
+                route=wellbeing_route,
+                assistant_preview=assistant_text,
+            )
         if profile_updates:
             thread.setdefault("memory_events", []).append(
                 {
@@ -3009,8 +3220,11 @@ def stream_shadow_chat_message(
             message = body.message.strip()
             effective_message = merge_clarification_answers(message, body.clarification_answers)
 
+            from foresight_x.slime.identity import slime_supports_decision_mode as _slime_decision_ok
+
             if (
                 bool(body.manual_decision_mode)
+                and _slime_decision_ok(thread=thread)
                 and request_action == "send_message"
                 and message
                 and not body.clarification_answers
@@ -3106,7 +3320,18 @@ def stream_shadow_chat_message(
                 else message
             )
             intent = detect_chat_intent(intent_probe, thread.get("messages", [])[-8:])
-            retrieval_mode = "chat_deep" if intent.intent == "decision_candidate" else "chat_fast"
+            from foresight_x.chat.conversation_service import (
+                _intent_without_decision_for_wellbeing,
+                _slime_type_for_thread,
+            )
+
+            thread_slime_type = _slime_type_for_thread(thread)
+            intent = _intent_without_decision_for_wellbeing(thread_slime_type, intent)
+            retrieval_mode = (
+                "chat_fast"
+                if thread_slime_type == "wellbeing"
+                else ("chat_deep" if intent.intent == "decision_candidate" else "chat_fast")
+            )
 
             trigger_eval = evaluate_decision_trigger(
                 thread=thread,
@@ -3172,6 +3397,34 @@ def stream_shadow_chat_message(
 
             user_row = append_message(thread, role="user", content=effective_message, mode=mode, intent=intent.intent)
             user_msg_id = str(user_row.get("id") or "")
+
+            from foresight_x.slime.turn_params import wellbeing_safety_short_circuit
+            from foresight_x.slime.wellbeing_router import build_safety_escalation_reply
+
+            if wellbeing_safety_short_circuit(thread, effective_message):
+                safety_text = build_safety_escalation_reply()
+                append_message(
+                    thread,
+                    role="assistant",
+                    content=safety_text,
+                    mode=mode,
+                    intent="wellbeing_safety_escalation",
+                    memory_used=False,
+                    metadata_extra={"wellbeing_protocol": "safety_escalation"},
+                )
+                _finalize_shadow_thread_turn(thread, settings=settings)
+                yield _sse_chunk({"type": "status", "status": "responding", "label": "Safety support"})
+                for chunk in _chunk_text(safety_text):
+                    yield _sse_chunk({"type": "delta", "content": chunk})
+                yield _sse_chunk(
+                    {
+                        "type": "done",
+                        "thread_id": thread["thread_id"],
+                        "message": thread.get("messages", [])[-1],
+                        "suggestion": None,
+                    }
+                )
+                return
 
             ctx, _ = _build_context(settings, llm_model=chat_pm_outer)
             refined_title = _refine_thread_title_first_turn(thread, effective_message, ctx.llm)
@@ -3296,7 +3549,13 @@ def stream_shadow_chat_message(
                 thread,
                 intent_probe=intent_probe,
                 chat_intent_label=intent.intent,
+                user_message=effective_message,
+                llm_model=chat_pm_outer,
             )
+            from foresight_x.slime.turn_params import pop_wellbeing_route
+
+            turn_kw = dict(buddy_kw)
+            wellbeing_route = pop_wellbeing_route(turn_kw)
             out = run_shadow_turn(
                 msgs,
                 settings=settings,
@@ -3306,7 +3565,7 @@ def stream_shadow_chat_message(
                 working_summary=str(thread.get("working_summary") or ""),
                 temporary_context_prompt=format_temporary_context_prompt(thread),
                 llm_model=chat_pm_outer,
-                **buddy_kw,
+                **turn_kw,
             )
             append_temporary_context_items(thread, out.thread_only_items)
             t_after_reply = datetime.now(timezone.utc)
@@ -3335,6 +3594,16 @@ def stream_shadow_chat_message(
                 memory_used=bool(out.used_memory_facts),
                 profile_updated=bool(profile_updates),
             )
+            from foresight_x.slime.identity import resolve_slime_type_from_thread
+            from foresight_x.slime.wellbeing_session import record_wellbeing_turn
+
+            if resolve_slime_type_from_thread(thread) == "wellbeing":
+                record_wellbeing_turn(
+                    thread,
+                    user_message=effective_message,
+                    route=wellbeing_route,
+                    assistant_preview=text,
+                )
             if profile_updates:
                 thread.setdefault("memory_events", []).append(
                     {
@@ -4338,6 +4607,7 @@ def _run_slime_voice_pipeline(
     on_text_delta: Callable[[str], None] | None = None,
     on_stream_event: Callable[[dict[str, Any]], None] | None = None,
     manual_decision_mode: bool = False,
+    slime_type: str | None = None,
 ) -> dict[str, Any]:
     from foresight_x.chat.conversation_service import (
         ensure_slime_voice_thread,
@@ -4389,7 +4659,7 @@ def _run_slime_voice_pipeline(
                     ruc_local = raw_r
             except json.JSONDecodeError:
                 ruc_local = {}
-        thread_local = ensure_slime_voice_thread(uid_local, thread_id)
+        thread_local = ensure_slime_voice_thread(uid_local, thread_id, slime_type=slime_type)
         resolved_tid_local = str(thread_local.get("thread_id") or "")
         return uid_local, sp_local, ruc_local, thread_local, resolved_tid_local
 
@@ -4415,6 +4685,11 @@ def _run_slime_voice_pipeline(
                 "language": tr.language,
             }
         )
+
+    from foresight_x.slime.identity import slime_supports_decision_mode
+
+    if manual_decision_mode and not slime_supports_decision_mode(thread=thread):
+        manual_decision_mode = False
 
     if manual_decision_mode:
         profile = load_user_profile(settings)
@@ -4485,7 +4760,7 @@ def _run_slime_voice_pipeline(
     early_intent = ""
     early_tool = ""
     early_text: str | None = None
-    preflight = maybe_slime_voice_preflight_reply(transcript, settings=settings)
+    preflight = maybe_slime_voice_preflight_reply(transcript, settings=settings, thread=thread)
     if preflight is not None:
         early_intent, early_text = preflight
         early_tool = early_intent
@@ -4569,10 +4844,13 @@ def _run_slime_voice_pipeline(
             }
         return body_id
 
+    from foresight_x.slime.identity import resolve_slime_type_from_thread
+
     ctx = SlimeVoiceContext(
         user_id=uid,
         current_route=current_route,
         thread_id=resolved_tid,
+        slime_type=resolve_slime_type_from_thread(thread),
         slime_profile=sp,
         recent_ui_context=ruc,
     )
@@ -4761,6 +5039,7 @@ def _run_slime_voice_pipeline(
             "timing": timing,
             "voice_ui": voice_ui,
             "evidence_items": evidence_items,
+            **_thread_title_sse_fields(thread),
         }
 
     tool_executables = {
@@ -4818,6 +5097,11 @@ def _run_slime_voice_pipeline(
             mode="normal",
             metadata_extra={"interaction_source": "slime_voice", "modality": "voice"},
         )
+        try:
+            ctx_voice_title, _ = _build_context(settings, llm_model=llm_model)
+            _refine_thread_title_first_turn(thread, transcript, ctx_voice_title.llm)
+        except Exception:
+            _log.debug("voice thread title refine failed", exc_info=True)
         append_message(
             thread,
             role="assistant",
@@ -4903,6 +5187,7 @@ def _run_slime_voice_pipeline(
             "spoken_text": assistant_text,
             "spoken_sequence": [assistant_text],
             "thread_id": resolved_tid,
+            "thread_title": str(thread.get("title") or "").strip() or None,
             "intent": route.intent,
             "decision_suggestion": None,
             "memory_updates": saved_texts,
@@ -5036,6 +5321,7 @@ async def slime_voice_command(
     recording_ms: float | None = Form(default=None),
     vad_endpoint_ms: float | None = Form(default=None),
     manual_decision_mode: bool = Form(default=False),
+    slime_type: str | None = Form(default=None),
 ) -> JSONResponse:
     """Push-to-talk: local ASR (default faster-whisper) + GPT-4o-mini tool routing."""
     settings = _settings_for_active_user()
@@ -5075,6 +5361,7 @@ async def slime_voice_command(
             None,
             None,
             bool(manual_decision_mode),
+            slime_type,
         )
     except ValueError as e:
         if tx is not None:
@@ -5115,6 +5402,7 @@ async def slime_voice_command_stream(
     recording_ms: float | None = Form(default=None),
     vad_endpoint_ms: float | None = Form(default=None),
     manual_decision_mode: bool = Form(default=False),
+    slime_type: str | None = Form(default=None),
 ) -> StreamingResponse | JSONResponse:
     settings = _settings_for_active_user()
     t_read0 = time.perf_counter()
@@ -5173,6 +5461,7 @@ async def slime_voice_command_stream(
                 _emit_text_delta,
                 _emit_stream_event,
                 bool(manual_decision_mode),
+                slime_type,
             )
         )
         try:

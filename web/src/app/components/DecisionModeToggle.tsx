@@ -1,5 +1,6 @@
 import { Scale } from 'lucide-react';
 import { BuddyTooltip } from '../../features/slime/BuddyTooltip';
+import { getSlimeIdentity, type SlimeType } from '../../features/slime/slimeIdentity';
 import { cn } from './ui/utils';
 
 export function DecisionModeToggle({
@@ -8,13 +9,17 @@ export function DecisionModeToggle({
   onToggle,
   className = '',
   testId = 'decision-mode-toggle',
+  slimeType = 'generalized',
 }: {
   active: boolean;
   disabled?: boolean;
   onToggle: () => void;
   className?: string;
   testId?: string;
+  slimeType?: SlimeType;
 }) {
+  const theme = getSlimeIdentity(slimeType).theme;
+
   return (
     <BuddyTooltip content="Turn on before you speak or send — your message becomes a decision question; confirm with Yes to generate the report.">
       <button
@@ -31,10 +36,29 @@ export function DecisionModeToggle({
           disabled && 'cursor-not-allowed opacity-50',
           className,
         )}
+        style={
+          active
+            ? {
+                borderColor: theme.border,
+                background: `linear-gradient(135deg, ${theme.background}, ${theme.surface})`,
+                color: theme.heading,
+                boxShadow: `0 10px 24px ${theme.glow}`,
+              }
+            : {
+                borderColor: `${theme.border}99`,
+                color: theme.heading,
+              }
+        }
       >
-        <Scale className={cn('h-3.5 w-3.5', active ? 'text-sky-600' : 'text-indigo-500')} aria-hidden />
+        <Scale className="h-3.5 w-3.5" style={{ color: theme.primary }} aria-hidden />
         <span className="hidden sm:inline">{active ? 'Decision on' : 'Decision'}</span>
-        {active ? <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500" aria-hidden /> : null}
+        {active ? (
+          <span
+            className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full"
+            style={{ backgroundColor: theme.primary }}
+            aria-hidden
+          />
+        ) : null}
       </button>
     </BuddyTooltip>
   );

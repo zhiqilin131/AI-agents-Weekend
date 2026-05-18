@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Sparkles, X } from 'lucide-react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { useAuth } from '../../../auth/AuthContext';
 import { useSlimeCredits } from '../credits/SlimeCreditsContext';
 import { MainNavButtons } from '../MainNavButtons';
@@ -53,15 +53,33 @@ import {
 import { SLIME_VOICE_CHAT_PREFILL_KEY } from '../../../utils/slimeVoiceActions';
 import { EXECUTION_PENDING_CALENDAR_FEEDBACK_KEY } from '../../../utils/executionStorageKeys';
 import { unlockSlimeAudioContext } from '../../../utils/slimeAudioContext';
+import { getSlimeIdentity, slimeSupportsDecisionMode, type SlimeType } from '../../../features/slime/slimeIdentity';
+import { slimeTypeFromThread } from '../../../utils/patchThreadSlimeType';
+import { RimumuWellbeingIntakeDialog } from '../../../features/slime/RimumuWellbeingIntakeDialog';
+import { PickSlimeForNewChatDialog } from '../../../features/slime/PickSlimeForNewChatDialog';
+import { TherapySessionDock } from '../../../features/slime/TherapySessionDock';
+import { TherapyReportPanel } from '../../../features/slime/TherapyReportPanel';
+import type { TherapyReport } from '../../../features/slime/therapySession';
+import { therapyReportFromMessages } from '../../../features/slime/therapySession';
+import { sortThreadsByRecent } from '../../../features/slime/buddyThreadSort';
 
 export function ShadowChatShell({
   initialThreadId = null,
   initialOpenReportId = null,
+  initialSlimeType = 'generalized',
 }: {
   initialThreadId?: string | null;
   initialOpenReportId?: string | null;
+  initialSlimeType?: SlimeType;
 } = {}) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeSlimeType, setActiveSlimeType] = useState<SlimeType>(initialSlimeType);
+  const [activeThread, setActiveThread] = useState<ShadowThread | null>(null);
+  const [pickSlimeOpen, setPickSlimeOpen] = useState(false);
+  const [wellbeingIntakeOpen, setWellbeingIntakeOpen] = useState(false);
+  const [therapyReportOpen, setTherapyReportOpen] = useState(false);
+  const [therapyReport, setTherapyReport] = useState<TherapyReport | null>(null);
   const { session } = useAuth();
   const { showInsufficient, refresh: refreshCredits } = useSlimeCredits();
   const slimeModels = useSlimeModelCatalog();
@@ -153,7 +171,7 @@ export function ShadowChatShell({
     const res = await apiFetch('/api/shadow-chat/threads');
     if (!res.ok) return;
     const data = (await res.json()) as { threads: ShadowThread[] };
-    setThreads(data.threads || []);
+    setThreads(sortThreadsByRecent(data.threads || []));
     setThreadsLoaded(true);
   }, []);
 
@@ -161,7 +179,7 @@ export function ShadowChatShell({
     const trimmed = title.trim();
     if (!threadId || !trimmed) return;
     setThreads((prev) =>
-      prev.map((t) => (t.thread_id === threadId ? { ...t, title: trimmed } : t)),
+      sortThreadsByRecent(prev.map((t) => (t.thread_id === threadId ? { ...t, title: trimmed } : t))),
     );
   }, []);
 
@@ -228,6 +246,36 @@ export function ShadowChatShell({
     }
 
     setActiveThreadId(tid);
+    setActiveThread(data.thread);
+    setThreads((prev) =>
+      sortThreadsByRecent(
+        prev.map((t) =>
+          t.thread_id === tid
+            ? {
+                ...t,
+                title: data.thread.title || t.title,
+                updated_at: data.thread.updated_at || t.updated_at,
+                message_count: data.thread.messages?.length ?? t.message_count,
+                slime_type: data.thread.slime_type ?? data.thread.slimeType ?? t.slime_type,
+              }
+            : t,
+        ),
+      ),
+    );
+    const loadedSlimeType = slimeTypeFromThread(data.thread);
+    setActiveSlimeType(loadedSlimeType);
+    if (!slimeSupportsDecisionMode(loadedSlimeType)) {
+      setDecisionModeManual(false);
+    }
+    const intakeDone =
+      data.thread.therapy_session?.intake_complete ?? data.thread.wellbeing_session?.intake_complete;
+    if (loadedSlimeType === 'wellbeing' && !intakeDone) {
+      setWellbeingIntakeOpen(true);
+    }
+    const existingReport =
+      (data.thread.therapy_session?.report as TherapyReport | undefined) ??
+      therapyReportFromMessages(data.thread.messages);
+    if (existingReport) setTherapyReport(existingReport);
     const msgs = normalizeThreadMessages(data.thread.messages || []);
     setMessages(msgs);
     const pa = data.thread.pending_action;
@@ -241,17 +289,42 @@ export function ShadowChatShell({
     }
   };
 
-  const newChat = async (opts?: { fromAuto?: boolean }) => {
-    if (autoCreateThreadRef.current && !opts?.fromAuto) return;
+  const createChatWithSlime = async (slimeType: SlimeType) => {
     const res = await apiFetch('/api/shadow-chat/threads', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        slime_type: slimeType,
+        title: slimeType === 'wellbeing' ? 'Therapy session' : undefined,
+      }),
     });
     if (!res.ok) return;
     const data = (await res.json()) as { thread: ShadowThread };
-    await refreshThreads();
+    const createdThread: ShadowThread = {
+      ...data.thread,
+      slime_type: data.thread.slime_type ?? data.thread.slimeType ?? slimeType,
+      created_at: data.thread.created_at || new Date().toISOString(),
+      updated_at: data.thread.updated_at || data.thread.created_at || new Date().toISOString(),
+    };
+    setThreads((prev) =>
+      sortThreadsByRecent([
+        createdThread,
+        ...prev.filter((t) => t.thread_id !== createdThread.thread_id),
+      ]),
+    );
     await loadThread(data.thread.thread_id);
+    if (slimeType === 'wellbeing') {
+      setWellbeingIntakeOpen(true);
+    }
+  };
+
+  const newChat = (opts?: { fromAuto?: boolean }) => {
+    if (autoCreateThreadRef.current && !opts?.fromAuto) return;
+    if (opts?.fromAuto) {
+      void createChatWithSlime(initialSlimeType);
+      return;
+    }
+    setPickSlimeOpen(true);
   };
 
   const deleteProfileMemoryFromToast = useCallback(
@@ -476,7 +549,9 @@ export function ShadowChatShell({
             client_turn_seq: streamSeq,
             credit_request_id: creditReq,
             ...(modelOptionId ? { model_option_id: modelOptionId } : {}),
-            ...(opts?.manualDecisionMode ? { manual_decision_mode: true } : {}),
+            ...(opts?.manualDecisionMode && slimeSupportsDecisionMode(activeSlimeType)
+              ? { manual_decision_mode: true }
+              : {}),
           }),
         });
       } catch (e) {
@@ -942,6 +1017,17 @@ export function ShadowChatShell({
   }, [pendingAction, isReportGenerating, hasReportArtifact, reportOpen, reportComplete]);
   const suggestion = useMemo(() => pendingActionToSuggestion(dockPendingAction), [dockPendingAction]);
 
+  const slimeIdent = getSlimeIdentity(activeSlimeType);
+
+  const handleThreadUpdated = useCallback((thread: ShadowThread) => {
+    setActiveThread(thread);
+    const rep =
+      (thread.therapy_session?.report as TherapyReport | undefined) ??
+      therapyReportFromMessages(thread.messages);
+    if (rep) setTherapyReport(rep);
+    setMessages(normalizeThreadMessages(thread.messages || []));
+  }, []);
+
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-[#fff5fb] via-[#f5f3ff] to-[#f0f9ff] px-4 py-6">
       <div className="mx-auto max-w-[1500px]">
@@ -955,7 +1041,8 @@ export function ShadowChatShell({
             <ChatSidebar
               threads={threads}
               activeThreadId={activeThreadId}
-              onNewChat={() => void newChat()}
+              slimeType={activeSlimeType}
+              onNewChat={() => newChat()}
               onSelectThread={(id) => void loadThread(id)}
               onDeleteThread={async (id) => {
                 await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -973,7 +1060,23 @@ export function ShadowChatShell({
                 <div ref={chatContentRef}>
                   <ChatMessageList
                     messages={messages}
+                    slimeType={activeSlimeType}
                     onOpenReportArtifact={onOpenReportArtifact}
+                    onOpenTherapyReportArtifact={
+                      activeSlimeType === 'wellbeing'
+                        ? (embedded) => {
+                            const r =
+                              embedded ??
+                              therapyReport ??
+                              therapyReportFromMessages(messages) ??
+                              (activeThread?.therapy_session?.report as TherapyReport | undefined);
+                            if (r) {
+                              setTherapyReport(r);
+                              setTherapyReportOpen(true);
+                            }
+                          }
+                        : undefined
+                    }
                     onReviseArtifact={onReviseFromArtifactOrPanel}
                     onArtifactExecutionCalendar={openExecutionCalendar}
                     onSuggestionChip={(label) => setInputBootstrap(label)}
@@ -1141,7 +1244,8 @@ export function ShadowChatShell({
                 ) : null}
                 <ShadowChatComposerDock
                   disabled={sending || !activeThreadId}
-                  decisionModeActive={decisionModeManual}
+                  slimeType={activeSlimeType}
+                  decisionModeActive={slimeSupportsDecisionMode(activeSlimeType) && decisionModeManual}
                   onToggleDecisionMode={() => setDecisionModeManual((v) => !v)}
                   modelOptionId={modelOptionId || slimeModels.defaultModel || ''}
                   onModelChange={setModelOptionId}
@@ -1162,13 +1266,30 @@ export function ShadowChatShell({
             <AgentPresence3DPanel
               status={agentStatus}
               timeline={timeline}
-              suggestion={suggestion}
+              suggestion={activeSlimeType === 'generalized' ? suggestion : null}
               generateReportDisabled={sending || (hasClarificationPending && pendingClarifyAction?.kind === 'report')}
               onGenerateReport={() => void onGenerateDecisionReport()}
               reportOverlaySession={
                 reportOpen
                   ? { streaming: reportStream.isStreaming, progressStep: reportStream.progressStep }
                   : null
+              }
+              slimeType={activeSlimeType}
+              therapyDock={
+                activeSlimeType === 'wellbeing' ? (
+                  <TherapySessionDock
+                    threadId={activeThreadId}
+                    thread={activeThread}
+                    disabled={sending}
+                    onThreadUpdated={handleThreadUpdated}
+                    onOpenReport={(r) => {
+                      setTherapyReport(r);
+                      setTherapyReportOpen(true);
+                    }}
+                    onOpenCheckIn={() => setWellbeingIntakeOpen(true)}
+                    onTherapyEnded={(r) => setTherapyReport(r)}
+                  />
+                ) : undefined
               }
             />
           </div>
@@ -1213,6 +1334,29 @@ export function ShadowChatShell({
         onDismiss={dismissProfileMemoryToast}
         onDelete={deleteProfileMemoryFromToast}
         onEdit={openProfileMemoryEditor}
+      />
+      <PickSlimeForNewChatDialog
+        open={pickSlimeOpen}
+        onClose={() => setPickSlimeOpen(false)}
+        onPick={(type) => {
+          setPickSlimeOpen(false);
+          void createChatWithSlime(type);
+        }}
+      />
+      {activeThreadId ? (
+        <RimumuWellbeingIntakeDialog
+          open={wellbeingIntakeOpen && activeSlimeType === 'wellbeing'}
+          threadId={activeThreadId}
+          onClose={() => setWellbeingIntakeOpen(false)}
+          onComplete={() => {
+            void loadThread(activeThreadId, { preservePendingSuggestion: true });
+          }}
+        />
+      ) : null}
+      <TherapyReportPanel
+        open={therapyReportOpen}
+        report={therapyReport}
+        onClose={() => setTherapyReportOpen(false)}
       />
     </div>
   );

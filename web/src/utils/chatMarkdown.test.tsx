@@ -14,4 +14,31 @@ describe('renderChatMarkdown', () => {
     expect(html).toContain('Should I sleep tonight?');
     expect(html).not.toContain('&gt; Should');
   });
+
+  it('renders SOAP-style section labels and calendar hints', () => {
+    const sample = [
+      '**Subjective:** Feeling overwhelmed about exams.',
+      '',
+      '**Plan:**',
+      '- Journaling for 10 minutes',
+      '- *Calendar hint: Tomorrow morning before breakfast.*',
+    ].join('\n');
+    const html = renderToStaticMarkup(<>{renderChatMarkdown(sample)}</>);
+    expect(html).toContain('<strong');
+    expect(html).toContain('Subjective:');
+    expect(html).not.toContain('**Subjective:**');
+    expect(html).toContain('<em');
+    expect(html).toContain('Calendar hint:');
+    expect(html).not.toContain('*Calendar hint:');
+  });
+
+  it('renders markdown bullet lists', () => {
+    const html = renderToStaticMarkup(
+      <>{renderChatMarkdown('- First item\n- Second with **bold**')}</>,
+    );
+    expect(html).toContain('<ul');
+    expect(html).toContain('<li');
+    expect(html).toContain('<strong');
+    expect(html).not.toContain('**bold**');
+  });
 });

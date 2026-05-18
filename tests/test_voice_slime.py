@@ -793,30 +793,29 @@ def test_profile_update_requires_confirmation() -> None:
         arguments={"patch": {"name": "Mochi2"}},
         requires_confirmation=True,
     )
-    _tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="rename")
-    assert fe.get("type") == "confirm"
+    tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="rename")
+    assert tr.get("ok") is False
+    assert tr.get("error") == "personalization_disabled"
+    assert fe.get("type") == "none"
 
 
 def test_route_slime_voice_your_name_is_without_openai_key() -> None:
     settings = Settings(openai_api_key="")
     ctx = SlimeVoiceContext(user_id="demo_user")
     r = route_slime_voice_command("Okay, your name is Luna now.", ctx, settings=settings)
-    assert r.tool_name == "update_slime_profile"
-    assert r.arguments["patch"]["name"] == "Luna"
-    assert r.requires_confirmation is False
-    assert r.auto_apply_voice_rename is True
+    assert r.tool_name == "no_op"
+    assert r.auto_apply_voice_rename is False
 
 
 def test_route_slime_voice_chinese_rename_without_openai_key() -> None:
     settings = Settings(openai_api_key="")
     ctx = SlimeVoiceContext(user_id="demo_user")
     r = route_slime_voice_command("把你的名字改成团子", ctx, settings=settings)
-    assert r.tool_name == "update_slime_profile"
-    assert r.arguments["patch"]["name"] == "团子"
-    assert r.auto_apply_voice_rename is True
+    assert r.tool_name == "no_op"
+    assert r.auto_apply_voice_rename is False
 
 
-def test_deterministic_voice_rename_persists_without_confirm(tmp_path: Path) -> None:
+def test_voice_rename_patch_rejected_when_applied(tmp_path: Path) -> None:
     settings = Settings(
         foresight_user_id="u_voice_rename",
         foresight_data_dir=tmp_path,
@@ -836,19 +835,23 @@ def test_deterministic_voice_rename_persists_without_confirm(tmp_path: Path) -> 
         encoding="utf-8",
     )
     ctx = SlimeVoiceContext(user_id="u_voice_rename")
-    route = route_slime_voice_command("Your name is Pebble.", ctx, settings=settings)
-    assert route.auto_apply_voice_rename is True
+    route = SlimeVoiceRouteResult(
+        intent="profile_update",
+        tool_name="update_slime_profile",
+        arguments={"patch": {"name": "Pebble"}},
+        requires_confirmation=False,
+    )
     tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="Your name is Pebble.")
-    assert tr.get("ok") is True
-    assert fe.get("type") == "slime_profile_refresh"
+    assert tr.get("ok") is False
+    assert tr.get("error") == "personalization_disabled"
     from foresight_x.profile.store import load_user_profile
 
     loaded = load_user_profile(settings)
     assert loaded.slime_profile is not None
-    assert loaded.slime_profile.name == "Pebble"
+    assert loaded.slime_profile.name == "Mochi"
 
 
-def test_route_voice_slime_name_phrase_renames_slime_not_calendar(tmp_path: Path) -> None:
+def test_route_voice_slime_name_phrase_does_not_rename(tmp_path: Path) -> None:
     settings = Settings(
         foresight_user_id="u_voice_rename_slime_name_phrase",
         foresight_data_dir=tmp_path,
@@ -861,12 +864,11 @@ def test_route_voice_slime_name_phrase_renames_slime_not_calendar(tmp_path: Path
         ctx,
         settings=settings,
     )
-    assert route.tool_name == "update_slime_profile"
-    assert route.arguments["patch"]["name"] == "Adam"
-    assert route.auto_apply_voice_rename is True
+    assert route.tool_name == "no_op"
+    assert route.auto_apply_voice_rename is False
 
 
-def test_route_voice_from_now_on_slime_rename_persists_without_confirm(tmp_path: Path) -> None:
+def test_route_voice_from_now_on_slime_rename_blocked(tmp_path: Path) -> None:
     settings = Settings(
         foresight_user_id="u_voice_rename_phrase",
         foresight_data_dir=tmp_path,
@@ -887,21 +889,20 @@ def test_route_voice_from_now_on_slime_rename_persists_without_confirm(tmp_path:
     )
     ctx = SlimeVoiceContext(user_id="u_voice_rename_phrase")
     route = route_slime_voice_command("From now on, your name is Pebble.", ctx, settings=settings)
-    assert route.tool_name == "update_slime_profile"
-    assert route.auto_apply_voice_rename is True
-    tr, fe, _assistant = execute_slime_tool(
-        route,
-        ctx,
-        settings=settings,
-        transcript="From now on, your name is Pebble.",
-    )
-    assert tr.get("ok") is True
-    assert fe.get("type") == "slime_profile_refresh"
+    assert route.auto_apply_voice_rename is False
+    if route.tool_name == "update_slime_profile":
+        tr, fe, _assistant = execute_slime_tool(
+            route,
+            ctx,
+            settings=settings,
+            transcript="From now on, your name is Pebble.",
+        )
+        assert tr.get("ok") is False
     from foresight_x.profile.store import load_user_profile
 
     loaded = load_user_profile(settings)
     assert loaded.slime_profile is not None
-    assert loaded.slime_profile.name == "Pebble"
+    assert loaded.slime_profile.name == "Mochi"
 
 
 def test_route_slime_voice_rename_skips_when_call_me_present() -> None:
@@ -984,16 +985,15 @@ def test_profile_update_voice_only_merges_partial(tmp_path: Path) -> None:
         requires_confirmation=False,
     )
     tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="speak slower")
-    assert tr.get("ok") is True
-    assert fe.get("type") == "slime_profile_refresh"
+    assert tr.get("ok") is False
+    assert tr.get("error") == "personalization_disabled"
+    assert fe.get("type") == "none"
     from foresight_x.profile.store import load_user_profile
 
     loaded = load_user_profile(settings)
     assert loaded.slime_profile is not None
     assert loaded.slime_profile.voice is not None
-    assert abs(loaded.slime_profile.voice.rate - 0.82) < 0.001
-    assert abs(loaded.slime_profile.voice.pitch - 1.15) < 0.001
-    assert loaded.slime_profile.voice.preferred_voice_name == "Alex"
+    assert abs(loaded.slime_profile.voice.rate - 1.0) < 0.001
 
 
 def test_profile_update_top_level_role_sets_role_identity(tmp_path: Path) -> None:
@@ -1059,8 +1059,9 @@ def test_profile_update_minor_shape_returns_slime_profile_refresh(tmp_path: Path
         requires_confirmation=False,
     )
     tr, fe, _assistant = execute_slime_tool(route, ctx, settings=settings, transcript="be round")
-    assert tr.get("ok") is True
-    assert fe.get("type") == "slime_profile_refresh"
+    assert tr.get("ok") is False
+    assert tr.get("error") == "personalization_disabled"
+    assert fe.get("type") == "none"
 
 
 def test_profile_update_user_nickname_uses_persona_patch_requires_confirmation(tmp_path: Path) -> None:

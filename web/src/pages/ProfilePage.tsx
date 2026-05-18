@@ -18,6 +18,7 @@ import { Input } from '../app/components/ui/input';
 import { cn } from '../app/components/ui/utils';
 import { useAuth } from '../auth/AuthContext';
 import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
+import { formatProfileMemoryToastAt } from '../app/components/shadow/ProfileMemoryToastStack';
 
 function linesToList(text: string): string[] {
   return text
@@ -59,6 +60,21 @@ function isSlimeCompanionMemoryFact(f: MemoryFactRow): boolean {
   return ['slime_companion', 'buddy', 'companion', 'slime_buddy', 'companion_agent'].includes(sr);
 }
 
+function isWellbeingMemoryFact(f: MemoryFactRow): boolean {
+  if ((f.category || '').toLowerCase() === 'wellbeing') return true;
+  const domain = f.qualifiers?.memory_domain;
+  if (typeof domain === 'string' && domain.toLowerCase() === 'wellbeing') return true;
+  if ((f.text || '').toLowerCase().startsWith('[rimumu check-in]')) return true;
+  return false;
+}
+
+function wellbeingRecordLabel(f: MemoryFactRow): string {
+  const rt = f.qualifiers?.record_type;
+  if (rt === 'checkin') return 'Check-in';
+  if (rt === 'session_insight') return 'Session insight';
+  return 'Wellbeing';
+}
+
 const CHANNEL_LABEL: Record<string, string> = {
   profile: 'Profile',
   clarification: 'Clarification',
@@ -89,6 +105,7 @@ export default function ProfilePage() {
   const [clarificationRows, setClarificationRows] = useState<ProfileLineRow[]>([]);
   const [systemRows, setSystemRows] = useState<ProfileLineRow[]>([]);
   const [memoryFacts, setMemoryFacts] = useState<MemoryFactRow[]>([]);
+  const [preferredName, setPreferredName] = useState('');
   const [aboutMe, setAboutMe] = useState('');
   const [constraints, setConstraints] = useState('');
   const [values, setValues] = useState('');
@@ -102,6 +119,7 @@ export default function ProfilePage() {
     credits: true,
     priorities: true,
     memory: false,
+    wellbeing: true,
     legacy: false,
     context: false,
   });
@@ -193,6 +211,7 @@ export default function ProfilePage() {
         inferred_priorities?: string[];
         priority_lines?: ProfileLineRow[];
         memory_facts?: MemoryFactRow[];
+        preferred_name?: string;
         about_me: string;
         constraints: string[];
         values: string[];
@@ -218,6 +237,7 @@ export default function ProfilePage() {
         );
       }
       setMemoryFacts(Array.isArray(data.memory_facts) ? data.memory_facts : []);
+      setPreferredName((data.preferred_name ?? '').trim());
       setAboutMe(data.about_me ?? '');
       setConstraints(listToLines(data.constraints ?? []));
       setValues(listToLines(data.values ?? []));
@@ -239,6 +259,7 @@ export default function ProfilePage() {
       const body = {
         user_priorities: linesToList(userPriorities),
         priorities: linesToList(userPriorities),
+        preferred_name: preferredName.trim(),
         about_me: aboutMe.trim(),
         constraints: linesToList(constraints),
         values: linesToList(values),
@@ -302,7 +323,17 @@ export default function ProfilePage() {
     else await deleteMemoryFact(f.id);
   };
 
-  const userMemoryFacts = useMemo(() => memoryFacts.filter((f) => !isSlimeCompanionMemoryFact(f)), [memoryFacts]);
+  const wellbeingMemoryFacts = useMemo(
+    () =>
+      memoryFacts
+        .filter((f) => isWellbeingMemoryFact(f))
+        .sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || '')),
+    [memoryFacts],
+  );
+  const userMemoryFacts = useMemo(
+    () => memoryFacts.filter((f) => !isSlimeCompanionMemoryFact(f) && !isWellbeingMemoryFact(f)),
+    [memoryFacts],
+  );
   const slimeMemoryFacts = useMemo(() => memoryFacts.filter((f) => isSlimeCompanionMemoryFact(f)), [memoryFacts]);
 
   /** Priority lines from decision-run clarification — shown inside Structured memory, not a separate section. */
@@ -778,6 +809,11 @@ export default function ProfilePage() {
                                   {f.evidence ? (
                                     <p className="mt-1 text-[10px] italic text-violet-700/90">Evidence: {f.evidence}</p>
                                   ) : null}
+                                  {f.created_at ? (
+                                    <p className="mt-1.5 text-[10px] font-medium text-gray-500">
+                                      Recorded {formatProfileMemoryToastAt(f.created_at)}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 );
                               })}
@@ -843,7 +879,79 @@ export default function ProfilePage() {
               ) : null}
             </section>
 
-          <section id="profile-legacy" className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
+            <section
+              id="profile-wellbeing-memory"
+              className="rounded-xl border border-rose-100/90 bg-gradient-to-br from-rose-50/50 via-white/80 to-white/70 p-3 shadow-[0_8px_24px_rgba(244,114,182,0.08)] backdrop-blur-md md:rounded-2xl md:p-3.5"
+            >
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <label className="text-sm text-rose-950" style={{ fontWeight: 600 }}>
+                  Wellbeing (Rimumu)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => toggleSection('wellbeing')}
+                  className="shrink-0 rounded-full border border-rose-200 px-2.5 py-0.5 text-[11px] text-rose-900 md:px-3 md:py-1 md:text-xs"
+                >
+                  {openSections.wellbeing ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+              {openSections.wellbeing ? (
+                <>
+                  <p className="mb-2 text-[11px] leading-snug text-rose-900/75">
+                    Check-ins and key themes from therapy sessions with Rimumu — separate from general profile memory.
+                    Every entry is timestamped when saved.
+                  </p>
+                  {wellbeingMemoryFacts.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-rose-200 bg-white/60 px-2.5 py-2 text-xs text-rose-800/70">
+                      No wellbeing memories yet. Complete a check-in or talk with Rimumu in session to record them here.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {wellbeingMemoryFacts.map((f) => (
+                        <div
+                          key={f.id || `wb-${f.text}`}
+                          className="rounded-lg border border-rose-100 bg-white/90 px-2.5 py-2 text-sm text-rose-950"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <span className="inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-900">
+                                {wellbeingRecordLabel(f)}
+                              </span>
+                              <p className="mt-1 leading-snug">{f.text}</p>
+                            </div>
+                            {memoryEditMode && f.id ? (
+                              <button
+                                type="button"
+                                disabled={deletingId === f.id}
+                                onClick={() => void deleteMemoryFact(f.id!)}
+                                className="shrink-0 text-xs text-red-700 hover:underline disabled:opacity-40"
+                              >
+                                {deletingId === f.id ? '…' : 'Delete'}
+                              </button>
+                            ) : null}
+                          </div>
+                          {f.predicate && f.object_value ? (
+                            <p className="mt-1 text-[10px] font-mono text-rose-800/70">
+                              {(f.subject_ref || 'user').trim()} · {f.predicate} · {f.object_value}
+                            </p>
+                          ) : null}
+                          {f.evidence ? (
+                            <p className="mt-1 text-[10px] italic text-rose-800/80">Evidence: {f.evidence}</p>
+                          ) : null}
+                          <p className="mt-1.5 text-[10px] font-medium text-rose-900/65">
+                            {f.created_at
+                              ? `Recorded ${formatProfileMemoryToastAt(f.created_at)}`
+                              : 'Timestamp pending — reload profile to backfill'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </section>
+
+            <section id="profile-legacy" className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
             <div className="mb-1.5 flex items-center justify-between gap-2">
             <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
               Legacy system lines
@@ -894,6 +1002,21 @@ export default function ProfilePage() {
             </div>
             {openSections.context ? (
               <>
+            <div>
+            <label className="mb-1 block text-xs text-gray-700 md:text-sm" style={{ fontWeight: 500 }}>
+              Your name
+            </label>
+            <input
+              value={preferredName}
+              onChange={(e) => setPreferredName(e.target.value)}
+              className="w-full rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 text-sm md:rounded-2xl md:px-4"
+              placeholder="How should Mochi and Rimumu call you?"
+              maxLength={48}
+            />
+            <p className="mt-1 text-[10px] text-gray-500">
+              Slime companions greet you with this name when it is saved here.
+            </p>
+            </div>
             <div>
             <label className="mb-1 block text-xs text-gray-700 md:text-sm" style={{ fontWeight: 500 }}>
               Timezone (IANA)

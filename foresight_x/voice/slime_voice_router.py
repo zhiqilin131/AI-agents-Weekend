@@ -131,33 +131,8 @@ def _clean_extracted_slime_voice_name(fragment: str) -> str:
 
 
 def _try_slime_rename_voice_patch(transcript: str) -> dict[str, Any] | None:
-    """
-    Deterministic slime rename so Buddy works without the LLM router and common phrases still apply.
-    Skips user-nickname phrases (call me … / 叫我…).
-    """
-    raw = (transcript or "").strip()
-    if not raw or len(raw) > 200:
-        return None
-    low = raw.lower()
-    if any(
-        b in low
-        for b in (
-            "call me ",
-            "refer to me as",
-            "叫我",
-            "称呼我",
-            "my name is",
-        )
-    ):
-        return None
-    for rx in _RENAME_VOICE_PATTERNS:
-        m = rx.search(raw.strip())
-        if not m:
-            continue
-        name = _clean_extracted_slime_voice_name(m.group(1))
-        if not name or not is_safe_slime_display_name(name):
-            continue
-        return {"patch": {"name": name}}
+    """Slime display names are fixed (Mochi / Rimumu) — renaming is disabled."""
+    _ = transcript
     return None
 
 
@@ -205,6 +180,8 @@ def _quick_slime_color_theme_patch(transcript: str) -> dict[str, Any] | None:
     Deterministic routing for short spoken theme picks when the LLM router is flaky.
     Avoid stealing nickname/rename or meta questions (e.g. 'call me Mint').
     """
+    # Slime color is fixed per Slime type (generalized / wellbeing).
+    return None
     raw = (transcript or "").strip()
     if not raw or len(raw) > 96:
         return None
@@ -256,6 +233,9 @@ def _quick_slime_color_theme_patch(transcript: str) -> dict[str, Any] | None:
 
 def _quick_slime_voice_patch(transcript: str) -> dict[str, Any] | None:
     """Deterministic voice-name/speed commands so Slime Studio changes work without router LLM."""
+    # TTS voice selection is app-default only; users may still toggle enabled/rate via profile if needed.
+    if re.search(r"\b(preferred_voice|voice name|onyx|echo|fable|alloy|nova|shimmer)\b", (transcript or "").lower()):
+        return None
     raw = (transcript or "").strip()
     if not raw or len(raw) > 140:
         return None
@@ -400,6 +380,12 @@ def _looks_like_calendar_tool_request(transcript: str) -> bool:
     return has_cal and has_action
 
 
+def _context_is_wellbeing(ctx: SlimeVoiceContext) -> bool:
+    from foresight_x.slime.identity import normalize_slime_type
+
+    return normalize_slime_type(str(ctx.slime_type or "")) == "wellbeing"
+
+
 def _try_fast_decision_no_op(transcript: str) -> SlimeVoiceRouteResult | None:
     """Skip router LLM for explicit Decision Mode activation (still uses conversation_turn)."""
     raw = (transcript or "").strip()
@@ -417,7 +403,11 @@ def _try_fast_decision_no_op(transcript: str) -> SlimeVoiceRouteResult | None:
     )
 
 
-def _try_fast_conversational_no_op(transcript: str) -> SlimeVoiceRouteResult | None:
+def _try_fast_conversational_no_op(
+    transcript: str,
+    *,
+    wellbeing: bool = False,
+) -> SlimeVoiceRouteResult | None:
     """
     Skip the router LLM for obvious conversation/opinion turns.
     This still falls through to the full chat pipeline, so answer quality and memory retrieval stay unchanged.
@@ -449,17 +439,19 @@ def _try_fast_conversational_no_op(transcript: str) -> SlimeVoiceRouteResult | N
         )
     ) or any(marker in raw for marker in ("你觉得", "你怎么看", "你喜欢", "你更喜欢", "你认为"))
 
-    decision_like = bool(
-        is_explicit_decision_mode_command(raw)
-        or re.search(
-            r"\b("
-            r"should i|shall i|would you choose|help me choose|choose for me|"
-            r"pick one|pick for me|red or black|black or red|roulette|winning number"
-            r")\b",
-            low,
+    decision_like = False
+    if not wellbeing:
+        decision_like = bool(
+            is_explicit_decision_mode_command(raw)
+            or re.search(
+                r"\b("
+                r"should i|shall i|would you choose|help me choose|choose for me|"
+                r"pick one|pick for me|red or black|black or red|roulette|winning number"
+                r")\b",
+                low,
+            )
+            or any(marker in raw for marker in ("我该不该", "要不要", "帮我选", "帮我决定", "选哪个", "决策模式"))
         )
-        or any(marker in raw for marker in ("我该不该", "要不要", "帮我选", "帮我决定", "选哪个", "决策模式"))
-    )
 
     if not (opinion_like or decision_like):
         return None
@@ -567,6 +559,7 @@ class SlimeVoiceContext(BaseModel):
     user_id: str
     current_route: str | None = None
     thread_id: str | None = None
+    slime_type: str | None = None
     slime_profile: dict[str, Any] = Field(default_factory=dict)
     recent_ui_context: dict[str, Any] = Field(default_factory=dict)
 
@@ -721,11 +714,13 @@ def route_slime_voice_command(
     if fast_cal is not None:
         return fast_cal
 
-    fast_decision = _try_fast_decision_no_op(transcript.strip())
-    if fast_decision is not None:
-        return fast_decision
+    wellbeing = _context_is_wellbeing(user_context)
+    if not wellbeing:
+        fast_decision = _try_fast_decision_no_op(transcript.strip())
+        if fast_decision is not None:
+            return fast_decision
 
-    fast_convo = _try_fast_conversational_no_op(transcript.strip())
+    fast_convo = _try_fast_conversational_no_op(transcript.strip(), wellbeing=wellbeing)
     if fast_convo is not None:
         return fast_convo
 

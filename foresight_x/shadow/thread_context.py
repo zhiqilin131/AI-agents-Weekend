@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
-_SHADOW_ARTIFACT_TYPES = frozenset({"decision_report_artifact"})
+_SHADOW_ARTIFACT_TYPES = frozenset({"decision_report_artifact", "therapy_report_artifact"})
 
 
 class ChatMessageDict(TypedDict, total=False):

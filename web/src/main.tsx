@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createHashRouter, RouterProvider } from 'react-router';
+import { createHashRouter, Navigate, RouterProvider } from 'react-router';
 import HomePage from './pages/HomePage';
 import ResilienceReportPage from './pages/ResilienceReportPage';
 import UnifiedChatPage from './pages/UnifiedChatPage';
@@ -46,6 +46,7 @@ const router = createHashRouter([
       { path: '/profile', element: <ProfilePage />, errorElement: <AppErrorPage /> },
       { path: '/onboarding', element: <OnboardingPage />, errorElement: <AppErrorPage /> },
       { path: '/buddy', element: <SlimeCompanionPage />, errorElement: <AppErrorPage /> },
+      { path: '/care', element: <Navigate to="/chat?slime=wellbeing" replace />, errorElement: <AppErrorPage /> },
       { path: '/diary', element: <DiaryPage />, errorElement: <AppErrorPage /> },
       { path: '/execution', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },
       { path: '/execution/:decisionId', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },

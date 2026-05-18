@@ -34,6 +34,7 @@ class MemoryFactCategory(str, Enum):
     BEHAVIOR = "behavior"
     GOALS = "goals"
     CONSTRAINTS = "constraints"
+    WELLBEING = "wellbeing"
     OTHER = "other"
 
 
@@ -520,6 +521,8 @@ class UserProfile(BaseModel):
     # Legacy mirror of user_priorities for older JSON files; kept in sync on save.
     priorities: list[str] = Field(default_factory=list)
     about_me: str = ""
+    #: How Slime companions should address the user (e.g. first name). Distinct from slime persona nicknames.
+    preferred_name: str = Field(default="", max_length=48)
     constraints: list[str] = Field(default_factory=list)
     memory_facts: list[ProfileMemoryFact] = Field(
         default_factory=list,

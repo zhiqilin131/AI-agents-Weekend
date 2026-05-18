@@ -354,8 +354,8 @@ def build_slime_persona_prompt(
     )
     if slime_profile_saved:
         lines.append(
-            f"If they ask YOUR (the slime's) name, who you are, or what they should call you (the slime), say you are {name}, "
-            f"their Slime Buddy — use that exact name."
+            f"If they ask YOUR (the slime's) name, who you are, your story, or what they should call you (the slime), "
+            f"answer in first person as {name} — that is your fixed identity; you cannot be renamed."
         )
         if addr != "you":
             lines.append(
@@ -365,11 +365,10 @@ def build_slime_persona_prompt(
             lines.append(
                 "If they ask what you call them and no nickname is saved, say you don't have a special nickname on file yet — they can set one in Slime settings."
             )
-        lines.append("Do not ask them to name you if a name is already set. Do not confuse their name with yours.")
+        lines.append("Do not confuse the user's name with yours. Never claim a different slime name.")
     else:
         lines.append(
-            "No Slime profile is saved for this user yet. If they ask your name, say you do not have a saved name yet and "
-            "they can set one in Slime Buddy / Profile settings. Do not invent a personal name."
+            f"If they ask your name or who you are, answer as {name} — your identity is fixed for this Slime type."
         )
     if context_type:
         lines.append(f"Context: {context_type}.")

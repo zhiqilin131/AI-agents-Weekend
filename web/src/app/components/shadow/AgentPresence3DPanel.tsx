@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Sparkles } from 'lucide-react';
 import { Agent3DCompanion } from './Agent3DCompanion';
 import type { AgentStatus, ShadowSuggestion } from './types';
 import { BuddyTooltip } from '../../../features/slime/BuddyTooltip';
+import { getSlimeIdentity, type SlimeType } from '../../../features/slime/slimeIdentity';
 
 /** Short line under companion — plain language */
 const statusRibbon: Record<AgentStatus, string> = {
@@ -17,20 +18,6 @@ const statusRibbon: Record<AgentStatus, string> = {
   report_open: 'Report open alongside chat.',
   scheduling: 'Working with your calendar…',
   error: 'Something paused — you can try again.',
-};
-
-const statusHint: Record<AgentStatus, string> = {
-  idle: 'Standing by for your next request.',
-  reading_memory: "I'm reading relevant memory before responding.",
-  thinking: "I'm weighing options and trade-offs.",
-  responding: "I'm composing the response now.",
-  updating_profile: "I'm updating long-term profile signals.",
-  decision_detected: "I've detected a decision moment in your thread.",
-  report_generating: "I'm assembling the decision report trace.",
-  report_complete: 'The report is complete and ready to inspect.',
-  report_open: 'The report panel is open for review.',
-  scheduling: "I'm aligning available time blocks for execution.",
-  error: 'A recoverable issue happened. Retry when ready.',
 };
 
 export type ActivityStep = { label: string; state: 'done' | 'active' | 'pending' };
@@ -131,6 +118,8 @@ export function AgentPresence3DPanel({
   generateReportDisabled = false,
   forceFallback = false,
   reportOverlaySession = null,
+  slimeType = 'generalized',
+  therapyDock,
 }: {
   status: AgentStatus;
   timeline: string[];
@@ -141,8 +130,10 @@ export function AgentPresence3DPanel({
   forceFallback?: boolean;
   /** Decision-report overlay is open — keep a persistent session card until the user closes it */
   reportOverlaySession?: { streaming: boolean; progressStep: string } | null;
+  slimeType?: SlimeType;
+  /** Rimumu therapy controls (start / end / report) */
+  therapyDock?: ReactNode;
 }) {
-  const [tooltipOpen, setTooltipOpen] = useState(false);
   const [feedLines, setFeedLines] = useState<FeedLine[]>([]);
   const timeoutsRef = useRef<number[]>([]);
   const readingBurstRef = useRef(0);
@@ -236,26 +227,46 @@ export function AgentPresence3DPanel({
     !['report_generating', 'report_complete'].includes(status);
   const companionMode =
     status === 'idle' && suggestion?.type === 'decision_report' ? 'decision_detected' : status;
+  const ident = getSlimeIdentity(slimeType);
+
+  const companion = (
+    <Agent3DCompanion
+      mode={companionMode}
+      slimeType={slimeType}
+      disableSceneClick={false}
+      forceFallback={forceFallback}
+    />
+  );
 
   return (
     <aside
       data-agent-status={status}
-      className="rounded-3xl border border-white/90 bg-white/65 p-4 shadow-[0_10px_28px_rgba(99,102,241,0.10)] backdrop-blur-md"
+      className="rounded-3xl border p-4 shadow-[0_10px_28px_rgba(0,0,0,0.08)] backdrop-blur-md"
+      style={{
+        borderColor: ident.theme.border,
+        background: `linear-gradient(180deg, ${ident.theme.surface}ee 0%, rgba(255,255,255,0.72) 100%)`,
+      }}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-500">Shadow Chat</p>
+          <p
+            className="text-xs font-semibold uppercase tracking-wide"
+            style={{ color: ident.theme.primary }}
+          >
+            {ident.shortName}
+          </p>
         </div>
-        <span className="inline-flex h-2.5 w-2.5 rounded-full bg-indigo-500/90 shadow-[0_0_12px_rgba(99,102,241,0.9)]" />
+        <div className="flex items-center gap-2">
+          <span
+            className="inline-flex h-2.5 w-2.5 rounded-full shadow-[0_0_12px_currentColor]"
+            style={{ backgroundColor: ident.theme.accent, color: ident.theme.accent }}
+          />
+        </div>
       </div>
 
-      <div className="mt-3">
-        <Agent3DCompanion
-          mode={companionMode}
-          onToggleTooltip={() => setTooltipOpen((s) => !s)}
-          forceFallback={forceFallback}
-        />
-      </div>
+      <div className="mt-3">{companion}</div>
+
+      {therapyDock ? <div className="mt-3">{therapyDock}</div> : null}
 
       <div
         className="mt-3 min-h-[4.5rem] space-y-2"
@@ -281,12 +292,6 @@ export function AgentPresence3DPanel({
         />
         <p className="text-xs text-gray-500">{ribbon}</p>
       </div>
-
-      {tooltipOpen ? (
-        <div className="mt-2 rounded-xl border border-violet-100 bg-violet-50/70 px-3 py-2 text-xs text-violet-900">
-          {statusHint[status]}
-        </div>
-      ) : null}
 
       {reportOverlaySession ? (
         <div className="mt-4 rounded-xl border border-violet-200/90 bg-gradient-to-br from-violet-50/95 to-indigo-50/80 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.12)]">

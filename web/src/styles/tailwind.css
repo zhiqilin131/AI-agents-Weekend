@@ -168,16 +168,73 @@
   overflow: hidden;
 }
 
+.slime-studio-frame[data-slime-type='wellbeing'] {
+  background: linear-gradient(
+    165deg,
+    #fff8f6 0%,
+    #fcefea 38%,
+    #fae4e8 72%,
+    #fff5f7 100%
+  );
+}
+
+.slime-studio-frame[data-slime-type='generalized'] {
+  background: linear-gradient(165deg, #e8f2ff 0%, #d4e8ff 45%, #eef6ff 100%);
+}
+
 .slime-studio-advisor-wrap {
   position: absolute;
   left: 50%;
   top: 42%;
   z-index: 3;
-  width: 13.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14.5rem;
   height: 13.5rem;
   transform: translate(-50%, -50%) scale(0.86);
   animation: slime-studio-breathe 3.4s ease-in-out infinite;
-  transform-origin: 50% 78%;
+  transform-origin: center center;
+}
+
+.slime-studio-frame[data-slime-type='generalized'] .slime-studio-aura {
+  background:
+    radial-gradient(circle at 50% 45%, var(--slime-studio-glow, rgba(191, 219, 254, 0.45)), transparent 68%),
+    radial-gradient(circle at 42% 40%, color-mix(in srgb, var(--slime-studio-profile-b, #4f8ff7) 28%, transparent), transparent 58%);
+}
+
+.slime-studio-frame[data-slime-type='generalized'] .slime-studio-desk::after {
+  background: color-mix(in srgb, var(--slime-studio-profile-a, #2563eb) 22%, transparent);
+}
+
+.slime-studio-frame[data-slime-type='generalized'] .slime-studio-desk {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 16px 28px rgba(37, 99, 235, 0.11);
+}
+
+.slime-studio-frame[data-slime-type='wellbeing'] .slime-studio-aura {
+  background:
+    radial-gradient(circle at 50% 45%, var(--slime-studio-glow, rgba(240, 184, 196, 0.35)), transparent 68%),
+    radial-gradient(circle at 42% 40%, color-mix(in srgb, var(--slime-studio-profile-b, #f5d0d8) 32%, transparent), transparent 58%);
+}
+
+.slime-studio-frame[data-slime-type='wellbeing'] .slime-studio-desk {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), color-mix(in srgb, var(--slime-studio-desk, #fcefea) 78%, white)),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--slime-studio-profile-a, #e8a0b0) 24%, transparent),
+      transparent 52%,
+      color-mix(in srgb, var(--slime-studio-profile-b, #f5d0d8) 20%, transparent)
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 16px 28px rgba(232, 160, 176, 0.14);
+}
+
+.slime-studio-frame[data-slime-type='wellbeing'] .slime-studio-desk::after {
+  background: color-mix(in srgb, var(--slime-studio-profile-a, #e8a0b0) 32%, transparent);
 }
 
 .slime-studio-desk {
