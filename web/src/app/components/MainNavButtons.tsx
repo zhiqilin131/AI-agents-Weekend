@@ -104,7 +104,10 @@ export function MainNavButtons({
   const { pathname } = useLocation();
   const hideHome = isHomeNavRoute(pathname);
   // Avoid blocking chat/clarification controls near the bottom edge.
-  const suppressFloatingCorners = pathname.startsWith('/chat') || pathname.startsWith('/reflect');
+  const suppressFloatingCorners =
+    pathname.startsWith('/chat') ||
+    pathname.startsWith('/reflect') ||
+    pathname.startsWith('/buddy');
   const { session, signOut } = useAuth();
   const compact = variant === 'compact';
   const useTopbar = layout === 'topbar' && !compact;

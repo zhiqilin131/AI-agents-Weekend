@@ -59,8 +59,8 @@ describe('SlimeCompanionPage', () => {
       </MemoryRouter>,
     );
     expect(html).toContain('data-testid="slime-advisor"');
-    expect(html).toContain('data-testid="slime-buddy-open-chat"');
     expect(html).toContain('data-testid="buddy-recent-chat-panel"');
+    expect(html).not.toContain('data-testid="slime-buddy-open-chat"');
     expect(html).toContain('About');
     expect(html).toContain('Talk to Mochi');
     expect(html).toContain('data-testid="slime-decision-mode-toggle"');

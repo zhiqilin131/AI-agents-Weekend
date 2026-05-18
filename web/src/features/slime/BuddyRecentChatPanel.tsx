@@ -52,6 +52,8 @@ export type BuddyRecentChatPanelProps = {
   onSelectThread: (threadId: string) => void;
   onStartNewChat: () => void;
   onOpenFullChat: () => void;
+  /** When true, panel fills a parent fixed left rail instead of positioning itself. */
+  embedded?: boolean;
   className?: string;
 };
 
@@ -78,6 +80,7 @@ export function BuddyRecentChatPanel({
   onSelectThread,
   onStartNewChat,
   onOpenFullChat,
+  embedded = false,
   className,
 }: BuddyRecentChatPanelProps) {
   const ident = getSlimeIdentity('generalized');
@@ -131,9 +134,12 @@ export function BuddyRecentChatPanel({
       data-slime-avoid
       data-testid="buddy-recent-chat-panel"
       className={cn(
-        'pointer-events-auto fixed z-[72] flex flex-col transition-[width] duration-300 ease-out',
-        'left-3 top-[4.25rem] max-h-[calc(100dvh-5.5rem)] sm:left-4 sm:top-[4.5rem]',
-        collapsed ? 'w-11' : 'w-[min(17.5rem,calc(100vw-2rem))] sm:w-72',
+        'pointer-events-auto flex flex-col transition-[width] duration-300 ease-out',
+        embedded
+          ? 'relative z-auto min-h-0 w-full flex-1 max-h-full'
+          : 'fixed z-[72] left-3 top-[max(6.25rem,calc(env(safe-area-inset-top,0px)+5.5rem))] max-h-[calc(100dvh-max(6.25rem,calc(env(safe-area-inset-top,0px)+5.5rem))-env(safe-area-inset-bottom,0px))] sm:left-4',
+        !embedded && (collapsed ? 'w-11' : 'w-[min(17.5rem,calc(100vw-2rem))] sm:w-72'),
+        embedded && (collapsed ? 'w-11 self-start' : 'w-full'),
         className,
       )}
     >

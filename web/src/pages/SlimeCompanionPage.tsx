@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
-import { Ghost, MessageSquare, Pencil, Trash2 } from 'lucide-react';
+import { Ghost, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '../app/components/ui/utils';
 import type { SlimeAdvisorState } from '../app/components/report/SlimeAdvisor';
 import { ThreadActionDock } from '../app/components/shadow/ThreadActionDock';
@@ -20,10 +20,7 @@ import { BuddyRecentChatPanel } from '../features/slime/BuddyRecentChatPanel';
 import { BuddyRecentTherapyPanel } from '../features/slime/BuddyRecentTherapyPanel';
 import { TherapyReportPanel } from '../features/slime/TherapyReportPanel';
 import { RimumuWellbeingIntakeDialog } from '../features/slime/RimumuWellbeingIntakeDialog';
-import {
-  RimumuIntroductionDialog,
-  RimumuIntroductionTrigger,
-} from '../features/slime/RimumuIntroductionDialog';
+import { RimumuIntroductionDialog } from '../features/slime/RimumuIntroductionDialog';
 import type { TherapyReport } from '../features/slime/therapySession';
 import {
   canUseWellbeingBuddyVoice,
@@ -60,6 +57,7 @@ import {
   type SlimeType,
 } from '../features/slime/slimeIdentity';
 import { slimeTypeFromThread } from '../utils/patchThreadSlimeType';
+import { BUDDY_LEFT_RAIL_MAX_HEIGHT, BUDDY_TOPBAR_CLEARANCE } from '../features/slime/buddyLayout';
 
 /** Legacy single-key storage; per-user keys are ``${prefix}:${supabaseUserId}``. */
 const BUDDY_THREAD_STORAGE_PREFIX = 'slimeBuddyShadowThreadId';
@@ -588,6 +586,8 @@ export default function SlimeCompanionPage() {
   const buddyFlowModalOpen =
     buddyIntakeBlockingUi || rimumuIntroOpen || therapyReportOpen;
 
+  const buddyIdent = getSlimeIdentity(buddySlimeType);
+
   return (
     <motion.div className="relative min-h-[100dvh] min-w-0 overflow-x-clip bg-[radial-gradient(circle_at_50%_18%,rgba(255,255,255,0.9),transparent_25%),linear-gradient(135deg,#fff5fb_0%,#f7f2ff_46%,#e8f4ff_100%)]">
       <div className="pointer-events-none absolute inset-0 opacity-[0.58] bg-[radial-gradient(ellipse_at_50%_38%,rgba(139,92,246,0.18),transparent_58%),radial-gradient(circle_at_18%_72%,rgba(34,211,238,0.12),transparent_30%),radial-gradient(circle_at_82%_70%,rgba(244,114,182,0.10),transparent_32%)]" />
@@ -597,26 +597,72 @@ export default function SlimeCompanionPage() {
         <MainNavButtons layout="topbar" className="!mb-0" />
       </div>
 
-      <BuddyTooltip
-        side="bottom"
-        content={
-          panelOpen
-            ? 'Close Slime studio. Save from inside the panel if you want to keep changes.'
-            : `About ${getSlimeIdentity(buddySlimeType).displayName} — or double-click the slime to switch companion.`
-        }
+      <aside
+        data-slime-avoid
+        className={cn(
+          'pointer-events-auto fixed z-[58] flex flex-col gap-2',
+          'left-[max(0.75rem,env(safe-area-inset-left,0px))] sm:left-4',
+          'w-[min(17.5rem,calc(100vw-2rem-env(safe-area-inset-left,0px)))] sm:w-72',
+          buddyFlowModalOpen && 'pointer-events-none opacity-40',
+        )}
+        style={{ top: BUDDY_TOPBAR_CLEARANCE, maxHeight: BUDDY_LEFT_RAIL_MAX_HEIGHT }}
       >
-        <button
-          type="button"
-          data-slime-avoid
-          onClick={() => setPanelOpen((open) => !open)}
-          className="absolute right-3 top-[6rem] z-[60] inline-flex items-center gap-2 rounded-full border border-violet-200/70 bg-white/85 px-4 py-2 text-sm font-semibold text-violet-950 shadow-[0_6px_22px_rgba(79,70,229,0.10)] backdrop-blur-md transition hover:-translate-y-0.5 hover:border-violet-400 sm:right-4 sm:top-[6.4rem] md:top-[6.8rem]"
-          aria-expanded={panelOpen}
-          aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
+        <BuddyTooltip
+          side="right"
+          content={
+            panelOpen
+              ? 'Close Slime studio. Save from inside the panel if you want to keep changes.'
+              : `About ${buddyIdent.displayName} — or double-click the slime to switch companion.`
+          }
         >
-          <Ghost className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
-          {panelOpen ? 'Close' : 'About'}
-        </button>
-      </BuddyTooltip>
+          <button
+            type="button"
+            onClick={() => setPanelOpen((open) => !open)}
+            className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-2xl border px-3 py-2.5 text-xs font-semibold shadow-[0_8px_28px_rgba(0,0,0,0.06)] backdrop-blur-xl transition hover:brightness-[1.02]"
+            style={{
+              borderColor: buddyIdent.theme.border,
+              background: `linear-gradient(180deg, ${buddyIdent.theme.surface}f0, rgba(255,255,255,0.9))`,
+              color: buddyIdent.theme.primary,
+              boxShadow: `0 8px 28px ${buddyIdent.theme.glow}`,
+            }}
+            aria-expanded={panelOpen}
+            aria-label={panelOpen ? 'Close Slime studio' : 'Open Slime studio'}
+          >
+            <Ghost className="h-4 w-4 shrink-0" aria-hidden />
+            {panelOpen ? 'Close' : 'About'}
+          </button>
+        </BuddyTooltip>
+
+        {buddySlimeType === 'wellbeing' ? (
+          <BuddyRecentTherapyPanel
+            embedded
+            className={cn(buddyFlowModalOpen && 'opacity-40 pointer-events-none')}
+            activeThreadId={buddyThreadId}
+            storageUserId={authUserId}
+            refreshKey={buddyRecapRefresh}
+            onSelectThread={(id) => {
+              persistThreadId(id, 'wellbeing');
+              void loadBuddyThreadMeta(id, { syncCompanionFromThread: true });
+            }}
+            onStartNewTherapy={() => void startNewTherapy()}
+            onOpenFullChat={openBuddyChat}
+          />
+        ) : (
+          <BuddyRecentChatPanel
+            embedded
+            className={cn(buddyFlowModalOpen && 'opacity-40 pointer-events-none')}
+            activeThreadId={buddyThreadId}
+            storageUserId={authUserId}
+            refreshKey={buddyRecapRefresh}
+            onSelectThread={(id) => {
+              persistThreadId(id, 'generalized');
+              void loadBuddyThreadMeta(id, { syncCompanionFromThread: true });
+            }}
+            onStartNewChat={() => void startNewBuddyChat()}
+            onOpenFullChat={openBuddyChat}
+          />
+        )}
+      </aside>
 
       {buddySlimeType === 'wellbeing' ? (
         <aside
@@ -624,14 +670,10 @@ export default function SlimeCompanionPage() {
           className={cn(
             'pointer-events-none fixed z-[48] hidden sm:block',
             'right-[max(0.75rem,env(safe-area-inset-right,0px))]',
-            'top-[max(5.75rem,calc(env(safe-area-inset-top,0px)+4.75rem))]',
             'w-[min(17rem,calc(100vw-1.5rem-env(safe-area-inset-right,0px)))]',
             buddyFlowModalOpen && 'pointer-events-none opacity-40',
           )}
-          style={{
-            maxHeight:
-              'calc(100dvh - max(5.75rem, calc(env(safe-area-inset-top, 0px) + 4.75rem)) - env(safe-area-inset-bottom, 0px))',
-          }}
+          style={{ top: BUDDY_TOPBAR_CLEARANCE, maxHeight: BUDDY_LEFT_RAIL_MAX_HEIGHT }}
         >
           <div className="pointer-events-auto max-h-[inherit] overflow-y-auto overscroll-contain">
             <TherapyBuddyTopRail
@@ -654,79 +696,6 @@ export default function SlimeCompanionPage() {
           </div>
         </aside>
       ) : null}
-
-      {buddySlimeType === 'wellbeing' ? (
-        <BuddyRecentTherapyPanel
-          className={cn(
-            'z-[58]',
-            buddyFlowModalOpen && 'z-[40] opacity-40 pointer-events-none',
-          )}
-          activeThreadId={buddyThreadId}
-          storageUserId={authUserId}
-          refreshKey={buddyRecapRefresh}
-          onSelectThread={(id) => {
-            persistThreadId(id, 'wellbeing');
-            void loadBuddyThreadMeta(id, { syncCompanionFromThread: true });
-          }}
-          onStartNewTherapy={() => void startNewTherapy()}
-          onOpenFullChat={openBuddyChat}
-        />
-      ) : (
-        <BuddyRecentChatPanel
-          activeThreadId={buddyThreadId}
-          storageUserId={authUserId}
-          refreshKey={buddyRecapRefresh}
-          onSelectThread={(id) => {
-            persistThreadId(id, 'generalized');
-            void loadBuddyThreadMeta(id, { syncCompanionFromThread: true });
-          }}
-          onStartNewChat={() => void startNewBuddyChat()}
-          onOpenFullChat={openBuddyChat}
-        />
-      )}
-
-      {/* Bottom-left quick actions — below recent panel, clear of mic */}
-      <div
-        data-slime-avoid
-        className={cn(
-          'absolute bottom-6 left-4 z-[56] flex flex-col items-stretch gap-2 sm:bottom-8 sm:left-6',
-          buddyFlowModalOpen && 'pointer-events-none opacity-40',
-        )}
-      >
-        <motion.div className="flex flex-col gap-2 rounded-2xl border border-white/70 bg-white/75 p-2 shadow-sm backdrop-blur-md">
-        <BuddyTooltip content="Opens the full Chat workspace — a classic scrolling thread with richer tools than quick voice here.">
-          <button
-            type="button"
-            data-testid="slime-buddy-open-chat"
-            onClick={openBuddyChat}
-            aria-label={
-              buddyThreadId
-                ? 'Open Chat — continue this buddy conversation in the full workspace'
-                : 'Open Chat — traditional full-feature dialog'
-            }
-            className="inline-flex items-center gap-2 rounded-full border border-violet-200/80 bg-white/85 px-3.5 py-2 text-xs font-semibold text-violet-950 shadow-sm backdrop-blur-md transition hover:border-violet-400/80 hover:bg-white sm:text-sm"
-          >
-            <MessageSquare className="h-3.5 w-3.5 shrink-0 text-violet-600" aria-hidden />
-            Chat
-          </button>
-        </BuddyTooltip>
-        <img
-          src="/ForesightXLogoDark.svg"
-          alt=""
-          className="pointer-events-none h-8 w-auto max-w-[min(100vw-5rem,240px)] opacity-90 drop-shadow-sm sm:h-9"
-          decoding="async"
-          aria-hidden
-        />
-        {buddySlimeType === 'wellbeing' ? (
-          <BuddyTooltip content="How Rimumu works — evidence-informed psychology, session flow, and what she can help with.">
-            <RimumuIntroductionTrigger
-              className="w-full max-w-none justify-center"
-              onClick={() => setRimumuIntroOpen(true)}
-            />
-          </BuddyTooltip>
-        ) : null}
-        </motion.div>
-      </div>
 
       <motion.div className="relative flex min-h-[100dvh] w-full flex-col items-center px-4 pb-16 pt-24 sm:pb-20 sm:pt-28">
         <motion.div className="flex w-full max-w-5xl flex-col items-center">
