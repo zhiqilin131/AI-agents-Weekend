@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import foresight_x.retrieval.world_cache as world_cache_mod
 from llama_index.core.embeddings import MockEmbedding
 
 from foresight_x.config import Settings
@@ -117,7 +119,19 @@ def test_tavily_supplements_when_sparse(settings: Settings, embed_model: MockEmb
     assert not any("live web snippet about recruiting" in (f.text or "").lower() for f in ev.recent_events)
 
 
-def test_cached_tavily_fact_eligible_requires_query_signature_match() -> None:
+def test_cached_tavily_fact_eligible_requires_query_signature_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Freeze "now" so max_age_days checks do not drift as CI calendar dates advance.
+    class _FixedDateTime:
+        @staticmethod
+        def now(tz=None):
+            return datetime(2026, 5, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+        fromisoformat = staticmethod(datetime.fromisoformat)
+
+    monkeypatch.setattr(world_cache_mod, "datetime", _FixedDateTime)
+
     md = {
         "from_tavily": True,
         "tavily_query_sig": "abc123",
