@@ -46,10 +46,10 @@ export function SlimeLandingCta({ onClick, className, profile }: Props) {
             } as CSSProperties
           }
           className={cn(
-            'slime-cta-btn group relative inline-flex min-w-[12.5rem] items-center justify-center overflow-hidden',
+            'slime-cta-btn group relative inline-flex min-w-[12.5rem] items-center justify-center',
             'rounded-[1.85rem] border border-violet-200/45 px-10 py-4 text-lg',
-            'origin-center font-semibold tracking-tight backdrop-blur-[2px]',
-            'transition-[filter] duration-300 hover:brightness-[1.02] active:scale-[0.98]',
+            'font-semibold tracking-tight',
+            'transition-[filter,box-shadow] duration-300 hover:brightness-[1.03]',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f5f3ff]',
             labelTone(p),
           )}

@@ -3,68 +3,27 @@
 
 @import 'tw-animate-css';
 
-/* Landing “Slime Chat” CTA — single pill, continuous breathe: swell → rest (centered) */
+/* Landing “Slime Chat” CTA — subtle flat glow pulse */
 @keyframes slime-cta-breathe {
   0%,
   100% {
-    transform: scale(1);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.36),
-      inset 0 -1px 0 rgba(99, 102, 241, 0.05),
-      0 3px 12px rgba(99, 102, 241, 0.07),
-      0 1px 4px rgba(15, 23, 42, 0.035);
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.12);
   }
   50% {
-    transform: scale(1.15);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.48),
-      inset 0 -1px 0 rgba(99, 102, 241, 0.04),
-      0 8px 28px rgba(99, 102, 241, 0.14),
-      0 3px 10px rgba(15, 23, 42, 0.06);
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.18);
   }
 }
 
 .slime-cta-btn {
   animation: slime-cta-breathe 3.8s ease-in-out infinite;
-  will-change: transform, box-shadow;
+  will-change: box-shadow;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .slime-cta-btn {
     animation: none;
-    transform: none;
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.36),
-      inset 0 -1px 0 rgba(99, 102, 241, 0.05),
-      0 3px 12px rgba(99, 102, 241, 0.07),
-      0 1px 4px rgba(15, 23, 42, 0.035);
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.12);
   }
-}
-
-/* Light glass spec only — keep slime body colors visible (was ~0.95 and washed hues). */
-.slime-cta-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background:
-    radial-gradient(120% 80% at 22% 18%, rgba(255, 255, 255, 0.28) 0%, transparent 44%),
-    radial-gradient(90% 70% at 88% 92%, color-mix(in srgb, var(--slime-accent, #818cf8) 18%, transparent) 0%, transparent 46%);
-  pointer-events: none;
-  opacity: 0.32;
-}
-
-.slime-cta-btn::after {
-  content: '';
-  position: absolute;
-  left: 12%;
-  right: 12%;
-  bottom: 3px;
-  height: 2px;
-  border-radius: 9999px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
-  opacity: 0.45;
-  pointer-events: none;
 }
 
 @keyframes slime-studio-breathe {

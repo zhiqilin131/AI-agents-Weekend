@@ -41,7 +41,7 @@ export function SlimeModeSwitcher({
           aria-pressed={active}
         >
           <span
-            className="h-2 w-2 shrink-0 rounded-full shadow-[inset_0_1px_2px_rgba(255,255,255,0.35)]"
+            className="h-2 w-2 shrink-0 rounded-full"
             style={{
               background: `radial-gradient(circle at 30% 30%, ${getSlimeIdentity(type).theme.highlight}, ${dot})`,
             }}
