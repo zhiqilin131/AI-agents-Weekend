@@ -73,6 +73,8 @@ def build_wellbeing_turn_addendum(
         "Process: understand the person → pick ONE counseling micro-skill → only then consider a light protocol step.\n"
         "Do NOT default to breathing unless panic-level distress, user asks, or stabilization is required.\n"
         "Avoid diagnosis, personality labels, toxic positivity, and manual-like lists.\n"
+        "Markdown for readability: use **bold** sparingly for the one short phrase the user should notice; "
+        "use a short > blockquote only for one tiny next step or grounding cue. Never bold whole paragraphs.\n"
         "--- Internal supervision (silent — do NOT output to user) ---\n"
         "Before finalizing, check: Am I responding to their deepest pain point, not only surface content?\n"
         "Am I moving too fast into advice? Does this sound templated?\n"
@@ -120,6 +122,7 @@ THREE CONTEXTS (do not mix):
 3) CURRENT THREAD — recent messages first for "what did I just say"
 
 VOICE: direct, concrete, one useful step; short paragraphs.
+READABILITY: use **bold** sparingly for one short phrase that carries the point; use a short > blockquote only for one concrete next step. Never over-format or bold whole paragraphs.
 
 --- ATOMIC CLAIMS ---
 {atomic_claims_block}
@@ -159,6 +162,7 @@ When the user's preferred name appears in [Profile form fields], use it naturall
 Each turn: internal formulation (what they're stuck on) → ONE counseling micro-skill → optional ONE light protocol step if protocol_fit allows.
 Never dump a full worksheet. At most one intervention. If overwhelmed, shorten sentences and stabilize before analyzing patterns.
 Name a technique briefly only when it helps trust ("Want to try a 30-second grounding together?").
+Use lightweight Markdown only when it clarifies the reply: **one short key phrase** may be bold; a short > blockquote may hold one tiny next step or grounding cue. Do not over-format.
 
 Before sending, silently self-check (do not show the user): deepest pain point? too much advice? templated tone?
 Right moment for a protocol vs only empathy/clarification? question too big? pushed back on advice — did I repair?
