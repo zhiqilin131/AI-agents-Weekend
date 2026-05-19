@@ -94,17 +94,24 @@ export function MainNavButtons({
   variant = 'default',
   layout = 'classic',
   className,
+  hideSignOut = false,
 }: {
   variant?: 'default' | 'compact';
   layout?: 'classic' | 'topbar';
   /** Extra classes on the outer wrapper (e.g. margin). */
   className?: string;
+  /** Slime Buddy and similar surfaces manage account actions elsewhere. */
+  hideSignOut?: boolean;
 }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const hideHome = isHomeNavRoute(pathname);
   // Avoid blocking chat/clarification controls near the bottom edge.
-  const suppressFloatingCorners = pathname.startsWith('/chat') || pathname.startsWith('/reflect');
+  const suppressFloatingCorners =
+    pathname.startsWith('/chat') ||
+    pathname.startsWith('/reflect') ||
+    pathname.startsWith('/buddy');
+  const showPersonaSwitcher = !pathname.startsWith('/buddy');
   const { session, signOut } = useAuth();
   const compact = variant === 'compact';
   const useTopbar = layout === 'topbar' && !compact;
@@ -215,6 +222,7 @@ export function MainNavButtons({
           <>
             <div className="h-[74px] sm:h-[80px] md:h-[84px]" aria-hidden />
             <div
+              data-main-nav-topbar
               data-slime-avoid
               className="fixed left-1/2 top-3 z-[70] w-[min(1500px,calc(100vw-1.5rem))] -translate-x-1/2 sm:top-4 sm:w-[min(1500px,calc(100vw-2rem))] md:top-5"
             >
@@ -228,7 +236,7 @@ export function MainNavButtons({
                   </div>
                   <div className="flex min-w-0 items-center justify-end gap-2">
                     <SlimeCreditsChipNav withProfile />
-                    <PersonaSwitcher compact />
+                    {showPersonaSwitcher ? <PersonaSwitcher compact /> : null}
                   </div>
                 </div>
               </div>
@@ -239,7 +247,7 @@ export function MainNavButtons({
             <div className="flex shrink-0 items-center gap-2">
               {brandBtn}
               {homeBtn}
-              <PersonaSwitcher compact />
+              {showPersonaSwitcher ? <PersonaSwitcher compact /> : null}
             </div>
             <div className={scrollClass}>
               <div className="flex w-max flex-nowrap items-center justify-center gap-2 px-1">{navPills}</div>
@@ -288,7 +296,7 @@ export function MainNavButtons({
             </BuddyTooltip>
           ) : null}
         </div>
-      ) : isSupabaseEnvConfigured() && session && !suppressFloatingCorners ? (
+      ) : isSupabaseEnvConfigured() && session && !suppressFloatingCorners && !hideSignOut ? (
         <div
           className={cn(
             'pointer-events-none fixed z-[60]',

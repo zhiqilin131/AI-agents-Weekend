@@ -23,6 +23,10 @@ vi.mock('../app/components/credits/SlimeCreditsContext', () => ({
   SlimeCreditsProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
+vi.mock('../app/components/MainNavButtons', () => ({
+  MainNavButtons: () => null,
+}));
+
 vi.mock('../hooks/useSlimeProfile', () => ({
   DEFAULT_SLIME_PROFILE: {
     name: 'Mochi',
@@ -59,10 +63,16 @@ describe('SlimeCompanionPage', () => {
       </MemoryRouter>,
     );
     expect(html).toContain('data-testid="slime-advisor"');
-    expect(html).toContain('data-testid="slime-buddy-open-chat"');
     expect(html).toContain('data-testid="buddy-recent-chat-panel"');
-    expect(html).toContain('About');
+    expect(html).not.toContain('data-testid="slime-buddy-open-chat"');
+    expect(html).toContain('data-testid="buddy-left-rail"');
+    expect(html).toContain('data-testid="buddy-left-rail-actions"');
+    expect(html).toContain('data-testid="buddy-companion-switch"');
+    expect(html).toContain('Mochi');
+    expect(html).toContain('Rimumu');
     expect(html).toContain('Talk to Mochi');
     expect(html).toContain('data-testid="slime-decision-mode-toggle"');
+    expect(html).toContain('data-testid="buddy-voice-dock"');
+    expect(html).toMatch(/buddy-voice-dock[^>]*fixed/);
   });
 });

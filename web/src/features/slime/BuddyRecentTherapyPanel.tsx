@@ -18,13 +18,13 @@ function collapsedStorageKey(userId: string | null | undefined): string | null {
 
 function readCollapsedPreference(userId: string | null | undefined): boolean {
   const k = collapsedStorageKey(userId);
-  if (!k) return true;
+  if (!k) return false;
   try {
     const v = localStorage.getItem(k);
-    if (v === null) return true;
+    if (v === null) return false;
     return v === '1';
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -58,6 +58,8 @@ export type BuddyRecentTherapyPanelProps = {
   onSelectThread: (threadId: string) => void;
   onStartNewTherapy: () => void;
   onOpenFullChat: () => void;
+  /** When true, panel fills a parent fixed left rail instead of positioning itself. */
+  embedded?: boolean;
   className?: string;
 };
 
@@ -84,6 +86,7 @@ export function BuddyRecentTherapyPanel({
   onSelectThread,
   onStartNewTherapy,
   onOpenFullChat,
+  embedded = false,
   className,
 }: BuddyRecentTherapyPanelProps) {
   const ident = getSlimeIdentity('wellbeing');
@@ -140,9 +143,12 @@ export function BuddyRecentTherapyPanel({
       data-slime-avoid
       data-testid="buddy-recent-therapy-panel"
       className={cn(
-        'pointer-events-auto fixed z-[72] flex flex-col transition-[width] duration-300 ease-out',
-        'left-3 top-[4.25rem] max-h-[calc(100dvh-5.5rem)] sm:left-4 sm:top-[4.5rem]',
-        collapsed ? 'w-11' : 'w-[min(17.5rem,calc(100vw-2rem))] sm:w-72',
+        'pointer-events-auto flex flex-col transition-[width] duration-300 ease-out',
+        embedded
+          ? 'relative z-auto min-h-0 w-full flex-1 max-h-full'
+          : 'fixed z-[72] left-3 top-[max(6.25rem,calc(env(safe-area-inset-top,0px)+5.5rem))] max-h-[calc(100dvh-max(6.25rem,calc(env(safe-area-inset-top,0px)+5.5rem))-env(safe-area-inset-bottom,0px))] sm:left-4',
+        !embedded && (collapsed ? 'w-11' : 'w-[min(17.5rem,calc(100vw-2rem))] sm:w-72'),
+        embedded && (collapsed ? 'w-11 self-start' : 'w-full'),
         className,
       )}
     >

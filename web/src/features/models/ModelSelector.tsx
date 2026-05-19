@@ -31,6 +31,12 @@ type Props = {
   hideCompactHeader?: boolean;
   /** When ``hideCompactHeader``, accessible name for the trigger. */
   compactSelectAriaLabel?: string;
+  /** Optional SelectContent class override for specific stacking contexts. */
+  selectContentClassName?: string;
+  /** Optional preferred open side for SelectContent. */
+  selectContentSide?: 'top' | 'right' | 'bottom' | 'left';
+  /** Optional collision behavior override for SelectContent. */
+  selectContentAvoidCollisions?: boolean;
   className?: string;
   disabled?: boolean;
 };
@@ -49,6 +55,9 @@ export function ModelSelector({
   hint = 'Higher tiers use more credits per action. Default is the most efficient tier.',
   hideCompactHeader = false,
   compactSelectAriaLabel,
+  selectContentClassName,
+  selectContentSide,
+  selectContentAvoidCollisions,
   className,
   disabled = false,
 }: Props) {
@@ -173,7 +182,14 @@ export function ModelSelector({
         >
           <SelectValue placeholder="Model">{triggerLabel}</SelectValue>
         </SelectTrigger>
-        <SelectContent className="max-w-md rounded-xl border-indigo-100/80 bg-white/95 backdrop-blur-md">
+        <SelectContent
+          side={selectContentSide}
+          avoidCollisions={selectContentAvoidCollisions}
+          className={cn(
+            'max-w-md rounded-xl border-indigo-100/80 bg-white/95 backdrop-blur-md',
+            selectContentClassName,
+          )}
+        >
           {models.map((m) => (
             <SelectItem key={m.id} value={m.id} className="rounded-lg text-xs">
               <span className="font-medium text-slate-900">{m.display_name}</span>
