@@ -133,7 +133,7 @@ export function HomeRoamingSlime({ variant = 'home' }: { variant?: HomeRoamingSl
     if (navLockRef.current) return;
     navLockRef.current = true;
     setExcited(true);
-    window.setTimeout(() => navigate('/buddy?personalize=1'), 420);
+    window.setTimeout(() => navigate('/buddy'), 420);
   }, [navigate]);
 
   const tiltX = hovering ? (cursor.y - 0.5) * -6 : 0;

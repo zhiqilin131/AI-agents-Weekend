@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '../../app/components/ui/dialog';
 import { cn } from '../../app/components/ui/utils';
+import { BuddyRailButton } from './BuddyRailButton';
 import { getSlimeIdentity } from './slimeIdentity';
 
 const PROTOCOL_PILLARS = [
@@ -227,11 +228,27 @@ export function RimumuIntroductionDialog({ open, onOpenChange }: Props) {
 export function RimumuIntroductionTrigger({
   onClick,
   className,
+  variant = 'pill',
 }: {
   onClick: () => void;
   className?: string;
+  /** `rail` matches the fixed left-rail buttons on the Slime Buddy page. */
+  variant?: 'pill' | 'rail';
 }) {
   const ident = getSlimeIdentity('wellbeing');
+  if (variant === 'rail') {
+    return (
+      <BuddyRailButton
+        data-testid="rimumu-introduction-trigger"
+        icon={BookOpen}
+        label={`How ${ident.displayName} works`}
+        theme={ident.theme}
+        onClick={onClick}
+        className={className}
+        aria-label={`How ${ident.displayName} works — therapy flow and capabilities`}
+      />
+    );
+  }
   return (
     <button
       type="button"

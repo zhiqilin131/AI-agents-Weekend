@@ -17,13 +17,13 @@ function collapsedStorageKey(userId: string | null | undefined): string | null {
 
 function readCollapsedPreference(userId: string | null | undefined): boolean {
   const k = collapsedStorageKey(userId);
-  if (!k) return true;
+  if (!k) return false;
   try {
     const v = localStorage.getItem(k);
-    if (v === null) return true;
+    if (v === null) return false;
     return v === '1';
   } catch {
-    return true;
+    return false;
   }
 }
 
