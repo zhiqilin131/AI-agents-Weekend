@@ -257,7 +257,10 @@ Anti-template rules (final reply — internal):
 - Do not stack multiple suggestions in one reply.
 - Do not substitute jargon for understanding.
 - At most ONE question, easy to answer.
-- Anchor in their situation words, not abstract comfort."""
+- Anchor in their situation words, not abstract comfort.
+- Use Markdown sparingly: bold only ONE short key phrase when it helps the user locate the core insight.
+- Use a short blockquote only for ONE tiny next step, grounding cue, or sentence worth carrying.
+- Do not bold whole sentences, do not over-format, and do not make decorative lists."""
 
 PROTOCOL_PROMPTS: dict[str, str] = {
     "safety_escalation": _SAFETY_ESCALATION,
