@@ -74,3 +74,63 @@ export function ttsPrefetchMatchesFinal(prefetched: string, finalText: string): 
   if (pf.length >= 12 && fin.slice(0, pf.length) === pf) return true;
   return false;
 }
+
+const SENTENCE_END_RE = /[.!?。！？]$/;
+
+/** Sentence-boundary parts that are complete (trailing fragment without punctuation excluded). */
+export function completeSpeakableParts(text: string, maxParts = 24): string[] {
+  const parts = splitSpeakableParts(text, maxParts);
+  if (!parts.length) return [];
+  const last = parts[parts.length - 1];
+  if (last && !SENTENCE_END_RE.test(last)) {
+    return parts.slice(0, -1);
+  }
+  return parts;
+}
+
+/** Newly finished sentences since the last stream-TTS enqueue. */
+export function newlyCompleteSpeakableParts(
+  fullText: string,
+  queuedSentenceCount: number,
+  maxParts = 24,
+): { newParts: string[]; completeCount: number } {
+  const complete = completeSpeakableParts(fullText, maxParts);
+  const start = Math.max(0, queuedSentenceCount);
+  return { newParts: complete.slice(start), completeCount: complete.length };
+}
+
+/** Remaining speakable parts not yet queued (includes final fragment without punctuation). */
+export function unqueuedSpeakableParts(
+  fullText: string,
+  queuedSentenceCount: number,
+  maxParts = 24,
+): string[] {
+  return tailSpeakablePartsAfterQueue(fullText, queuedSentenceCount, maxParts);
+}
+
+/**
+ * Parts still needing playback after stream queue — uses complete-sentence indexing
+ * (not raw split index) so the last sentence is not replayed at turn end.
+ */
+export function tailSpeakablePartsAfterQueue(
+  fullText: string,
+  queuedCompleteCount: number,
+  maxParts = 24,
+): string[] {
+  const parts = splitSpeakableParts(fullText, maxParts);
+  const complete = completeSpeakableParts(fullText, maxParts);
+  const tail: string[] = [];
+  for (let i = Math.max(0, queuedCompleteCount); i < complete.length; i++) {
+    tail.push(complete[i]);
+  }
+  if (parts.length > complete.length) {
+    const fragment = parts.slice(complete.length).join(' ').trim();
+    if (fragment) tail.push(fragment);
+  }
+  return tail;
+}
+
+/** Stable key for deduping stream TTS sentence chunks. */
+export function speakPartDedupeKey(part: string): string {
+  return normalizeSpeechText(part).toLowerCase();
+}

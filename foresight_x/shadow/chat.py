@@ -260,7 +260,8 @@ class WellbeingBuddyChatTurn(BaseModel):
             "Rimumu's supportive reply. First person (I/me) only for Rimumu's companion role "
             "(e.g. «I'm here with you»). Reflect the USER in second person (you/your) or gentle paraphrase — "
             "never echo or parrot their sentence, and never restate their distress in first person as if it were yours. "
-            "Warm, one collaborative step or one question when appropriate. Not a therapist."
+            "Counseling-first: understand, then at most ONE micro-skill or light technique; do not stack advice. "
+            "If the user wants listening, do not sneak in worksheets. At most one easy question. Not a therapist."
         )
     )
     suggest_decision_navigation: bool = Field(

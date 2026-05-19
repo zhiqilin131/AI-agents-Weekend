@@ -464,6 +464,8 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(14px);
   transform-origin: -0.8rem 2.8rem;
+  --slime-bubble-tail-fill: rgba(255, 255, 255, 0.9);
+  --slime-bubble-tail-fill-soft: rgba(255, 255, 255, 0.72);
 }
 
 .slime-comic-bubble::before {
@@ -492,6 +494,32 @@
     0 8px 16px rgba(79, 70, 229, 0.08),
     -0.58rem 0.32rem 0 -0.11rem rgba(255, 255, 255, 0.62);
   transform: translateY(-50%);
+}
+
+.slime-comic-bubble-mouth-tail {
+  transform-origin: -3.2rem 5.25rem;
+  --slime-bubble-mouth-y: 10.9rem;
+}
+
+.slime-comic-bubble-mouth-tail::before {
+  left: -0.78rem;
+  top: calc(var(--slime-bubble-mouth-y) - 0.72rem);
+  width: 0.62rem;
+  height: 0.62rem;
+  background: var(--slime-bubble-tail-fill);
+}
+
+.slime-comic-bubble-mouth-tail::after {
+  left: -1.58rem;
+  top: var(--slime-bubble-mouth-y);
+  width: 0.42rem;
+  height: 0.42rem;
+  background: var(--slime-bubble-tail-fill);
+  box-shadow:
+    0 8px 16px rgba(79, 70, 229, 0.08),
+    -0.72rem -0.2rem 0 -0.04rem var(--slime-bubble-tail-fill),
+    -1.42rem -0.36rem 0 -0.11rem var(--slime-bubble-tail-fill-soft),
+    -2rem -0.48rem 0 -0.17rem rgba(255, 255, 255, 0.56);
 }
 
 .slime-comic-bubble-system {

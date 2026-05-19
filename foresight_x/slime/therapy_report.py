@@ -26,6 +26,23 @@ class TherapyReportLLMOutput(BaseModel):
     strengths_noticed: list[str] = Field(default_factory=list, max_length=6)
     reflective_prompts: list[str] = Field(default_factory=list, max_length=5)
     suggested_actions: list[TherapyActionSuggestion] = Field(default_factory=list, max_length=6)
+    what_felt_heaviest: str = Field(
+        default="",
+        max_length=500,
+        description="Plain-language recap of what weighed on them most",
+    )
+    pattern_noticed: str = Field(
+        default="",
+        max_length=500,
+        description="One non-label pattern from the thread (optional)",
+    )
+    what_helped_even_a_little: str = Field(default="", max_length=500)
+    one_sentence_reframe: str = Field(default="", max_length=300)
+    next_tiny_experiment: str = Field(
+        default="",
+        max_length=400,
+        description="Smallest self-directed try-before-next-session step",
+    )
     safety_note: str = Field(
         default="This is emotional support, not medical advice or a diagnosis. "
         "Reach out to a qualified professional or crisis line if you need clinical care."
@@ -72,20 +89,21 @@ def generate_therapy_report(thread: dict[str, Any], *, llm: Any) -> dict[str, An
     clinical = session.get("last_clinical") if isinstance(session.get("last_clinical"), dict) else {}
     prompt = f"""You are Rimumu, a gentle wellbeing support companion (NOT a clinician).
 
-Write a SOAP-style session summary report (plain language, not clinical jargon).
-Sections to cover in session_summary (use short headings in prose):
-- Subjective: what the user reported (their words)
-- Objective: observable patterns from the chat (tone, themes — no diagnosis)
-- Assessment: transdiagnostic formulation (processes like rumination, avoidance — not disorder labels)
-- Plan: 1–3 small self-directed next steps
+Write a user-readable session recap — warm, specific, like a thoughtful debrief (not a clinical chart).
+session_summary may use light SOAP structure in prose, but the report should feel human:
+- what_felt_heaviest: what weighed on them most (their words, no diagnosis)
+- pattern_noticed: at most ONE gentle pattern from this thread (no personality labels)
+- what_helped_even_a_little: any shift, skill, or moment of relief — honest if small
+- one_sentence_reframe: compassionate reframe in plain language
+- next_tiny_experiment: smallest try-before-next-session step (not a big homework list)
+- executive_summary: 2–4 sentences tying it together
 
 Rules:
 - Never diagnose, label disorders, or claim clinical authority.
-- Use warm, validating, autonomy-first language (CBT/ACT/BA-informed but plain).
-- Reference only what appears in the transcript and intake — do not invent facts.
-- Name protocols/skills used when evident (e.g. thought record, behavioral activation) without sounding like a manual.
-- suggested_actions must be small, concrete, self-directed steps (not medical orders).
-- calendar_hint: short natural-language scheduling phrase (e.g. "Tomorrow at 7pm for 30 minutes — gentle walk") for every suggested_action; required when the step is time-based.
+- Use warm, autonomy-first language; avoid jargon and worksheet tone.
+- Reference only transcript and intake — do not invent facts.
+- suggested_actions: small, concrete, self-directed (not medical orders).
+- calendar_hint on suggested_actions when time-based.
 
 --- Intake ---
 {intake_block}
@@ -110,6 +128,11 @@ Rules:
             themes_observed=[str(session.get("primary_concern") or "General wellbeing")[:80]],
             strengths_noticed=["You reached out and stayed engaged"],
             reflective_prompts=["What felt even slightly easier by the end?"],
+            what_felt_heaviest=str(session.get("primary_concern") or "What you carried into the session")[:200],
+            pattern_noticed="",
+            what_helped_even_a_little="Staying in the conversation and naming what mattered",
+            one_sentence_reframe="Showing up when things feel heavy is already a form of care.",
+            next_tiny_experiment="One five-minute pause at a time that usually feels rushed.",
             suggested_actions=[
                 TherapyActionSuggestion(
                     title="One small rest break",

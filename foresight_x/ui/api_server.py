@@ -4933,6 +4933,11 @@ def _run_slime_voice_pipeline(
     except Exception:
         ex_route.shutdown(wait=False, cancel_futures=True)
         raise
+    from foresight_x.slime.identity import normalize_slime_type, resolve_slime_type_from_thread
+    from foresight_x.voice.slime_voice_router import apply_wellbeing_voice_route_policy
+
+    if normalize_slime_type(resolve_slime_type_from_thread(thread)) == "wellbeing":
+        route = apply_wellbeing_voice_route_policy(route)
     route_ms = (time.perf_counter() - t_route0) * 1000
     if on_stream_event is not None:
         if route.tool_name == "search_memory":

@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
+import { BRAND_TAGLINE } from '../../brand';
 import { HomeRoamingSlime } from '../home/HomeRoamingSlime';
 
-const BRAND_SUBTITLE = 'Evidence-grounded decision agent';
+const BRAND_SUBTITLE = BRAND_TAGLINE;
 
 /** Shown on auth gate pages (login / register). */
 const APP_VERSION_DISPLAY = 'V1.0.0';

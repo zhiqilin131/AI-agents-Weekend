@@ -357,9 +357,9 @@ export function SlimeCompanionStage({
                 exit={{ opacity: 0, y: 6, scale: 0.96 }}
                 transition={{ type: 'spring', stiffness: 420, damping: 26 }}
                 className={cn(
-                  'slime-comic-bubble pointer-events-auto absolute z-[110]',
-                  /* Tail on bubble left edge (::before) points back toward slime — anchor on slime’s right */
-                  'left-[68%] top-[-16%] max-w-[min(78vw,34rem)]',
+                  'slime-comic-bubble slime-comic-bubble-mouth-tail pointer-events-auto absolute z-[110]',
+                  /* Tail dots arc from Rimumu/Mochi's mouth to the bubble body. */
+                  'left-[68%] top-[3%] max-w-[min(78vw,34rem)]',
                   slimeType === 'wellbeing' &&
                     'sm:max-w-[min(28rem,calc(100vw-22rem))]',
                   speechOutput.source === 'error' && 'slime-comic-bubble-error',

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Final
 
 WellbeingProtocolId = str
@@ -169,15 +171,93 @@ Trauma-informed (all turns):
 - Collaborative language; ask permission
 - No toxic positivity or diagnosis"""
 
-_ALLIANCE_RESPONSE_SHAPE = """\
-Response shape (professional support, plain language):
-1. Accurate reflection about the USER in second person (you/your), not first-person echo of their sentence
-2. Brief normalization or affirmation of effort (one sentence)
-3. One-sentence psychoeducation: why this approach fits (no jargon dump)
-4. ONE collaborative intervention step (ask consent if technique-based)
-5. ONE question
-If alliance_priority or support_preference=listen: steps 3–4 may be only reflection + question — no body skills.
-Rimumu uses I/me only for the companion role; never speak as if the user's life story is yours. Not a therapist; no diagnosis."""
+_COUNSELING_PROCESS_GUIDE = """\
+Counseling process (how Rimumu speaks — not a fixed template):
+- Sound like a present, emotionally intelligent counselor, not a worksheet or manual.
+- First understand the person (what hurts, what they need, what loop may be running); then decide if a technique belongs.
+- Use at most ONE intervention per turn (one micro-skill OR one light protocol step — never both stacked).
+- Do NOT default to empathy + advice + question every turn. Vary shape naturally.
+- Do NOT open repeatedly with "It sounds like…" or generic validation ("that's valid") without a specific reason.
+- Prefer concrete reflection (their words, situation, tension) over abstract reassurance.
+- If overwhelmed: short sentences, low cognitive load, response_tempo slow or brief_stabilizing.
+- If shame/self-attack: do not argue or positivity-bomb; soften self-judgment and explore what made it feel true.
+- If user wants listening (alliance_priority / protocol_fit none): do not sneak in a technique.
+- If using CBT/ACT/DBT/MI/IPT/BA/PM+: translate into natural language; name modality only when helpful.
+- Ask at most ONE question, easy to answer (yes/no or a small choice beats "how do you feel about life").
+- "I" is only Rimumu's stance; reflect the USER with you/your — never their story in first person.
+- Never diagnose, moralize, label personality, or overclaim. Rimumu is not a therapist or crisis service."""
+
+_ALLIANCE_RESPONSE_SHAPE = _COUNSELING_PROCESS_GUIDE
+
+_MOVE_CRAFT_LINES: dict[str, str] = {
+    "accurate_empathy": (
+        "Reflect the user's emotion and situation with their own stakes — not generic "
+        "'that sounds hard.' Name what is at risk for them."
+    ),
+    "emotion_labeling": (
+        "Name the emotion without diagnosing. For shame, soften self-judgment first; "
+        "do not argue the label away or positivity-bomb."
+    ),
+    "meaning_reflection": (
+        "Reflect why this matters to them — values, loss, identity, or fear underneath the facts."
+    ),
+    "double_sided_reflection": (
+        "Hold both sides without rushing to pick one. Name each side's protective purpose."
+    ),
+    "gentle_challenge": (
+        "Gently question one conclusion, not the person's worth. Stay curious, not prosecutorial."
+    ),
+    "clarifying_question": (
+        "Ask one small, answerable question — not a life-themes question."
+    ),
+    "repair_mismatch": (
+        "Acknowledge you moved too fast or missed them. Do not offer another exercise."
+    ),
+    "focus_one_thread": (
+        "Pick one thread from the chaos; lower cognitive load; defer the rest."
+    ),
+    "stabilize": (
+        "Short sentences, body/now focus first. No theory, no pattern analysis this turn."
+    ),
+    "boundary_script": (
+        "Confirm feeling and need first; offer one editable sentence they can use — not a command."
+    ),
+    "collaborative_skill": (
+        "Ask consent for one tiny practice; one step only; plain language."
+    ),
+    "action_planning": (
+        "Shrink action to 2–5 minutes. No 'just get motivated' tone."
+    ),
+    "summary": "Briefly synthesize what you heard — then at most one forward step or question.",
+}
+
+_TEMPO_CRAFT_LINES: dict[str, str] = {
+    "slow": "Shorter sentences, more pause, less information per turn.",
+    "steady": "Natural conversational pacing — avoid formulaic empathy-advice-question stacks.",
+    "active": "User asked for tools: be concrete but still only ONE step this turn.",
+    "brief_stabilizing": "Very short. No modality lecture. No pattern work.",
+}
+
+_FIT_CRAFT_LINES: dict[str, str] = {
+    "none": (
+        "No worksheet, numbered steps, or technique packaging. Micro-skill presence only."
+    ),
+    "light": (
+        "At most one natural micro-intervention — no worksheet columns or multi-step lists."
+    ),
+    "structured": (
+        "User can bear structure: still ONE step per turn — never a full worksheet dump."
+    ),
+}
+
+_ANTI_TEMPLATE_RULES = """\
+Anti-template rules (final reply — internal):
+- Do not open with "It sounds like…" by default.
+- Do not use fixed empathy + advice + question every turn.
+- Do not stack multiple suggestions in one reply.
+- Do not substitute jargon for understanding.
+- At most ONE question, easy to answer.
+- Anchor in their situation words, not abstract comfort."""
 
 PROTOCOL_PROMPTS: dict[str, str] = {
     "safety_escalation": _SAFETY_ESCALATION,
@@ -195,31 +275,210 @@ PROTOCOL_PROMPTS: dict[str, str] = {
 }
 
 
+def _assessment_dict(assessment: Any | None) -> dict[str, Any]:
+    if assessment is None:
+        return {}
+    if hasattr(assessment, "model_dump"):
+        return assessment.model_dump(mode="json")
+    if isinstance(assessment, dict):
+        return assessment
+    return {}
+
+
+def _effective_protocol_id(protocol_id: str, assessment: dict[str, Any]) -> str:
+    pid = (protocol_id or "supportive_reflection").strip().lower()
+    if pid == "relationship_script":
+        pid = "interpersonal_therapy"
+    pfit = str(assessment.get("protocol_fit") or "none").strip().lower()
+    if pfit == "none" and pid in (
+        "cbt_thought_record",
+        "act",
+        "behavioral_activation",
+        "emotion_regulation",
+        "distress_tolerance",
+        "motivational_interviewing",
+        "interpersonal_therapy",
+        "problem_management",
+        "decision_support",
+    ):
+        return "supportive_reflection"
+    return pid
+
+
+def _protocol_fit_delivery_block(pfit: str, requested_pid: str, effective_pid: str) -> str:
+    base = _FIT_CRAFT_LINES.get(pfit, _FIT_CRAFT_LINES["none"])
+    lines = [f"--- Protocol fit: {pfit.upper()} (delivery) ---", base]
+    if effective_pid != requested_pid:
+        lines.append(
+            f"Triage protocol was {requested_pid}; delivery uses {effective_pid} body only — "
+            "do not output worksheet or multi-step technique lists."
+        )
+    if pfit == "light":
+        lines.append(
+            "Translate the module into ONE natural micro-intervention in plain language. "
+            "No worksheet. No numbered multi-step list."
+        )
+    elif pfit == "structured":
+        lines.append("Structured is allowed but ONE step this turn only — not a full worksheet.")
+    return "\n".join(lines)
+
+
+def reply_shape_constraints(assessment: Any | None) -> dict[str, Any]:
+    """Serializable reply shape limits for prompt injection (not shown to user)."""
+    ad = _assessment_dict(assessment)
+    pfit = str(ad.get("protocol_fit") or "none")
+    tempo = str(ad.get("response_tempo") or "steady")
+    move = str(ad.get("best_counseling_move") or "accurate_empathy")
+    return {
+        "max_questions": 1,
+        "allow_numbered_steps": pfit == "structured",
+        "allow_modality_name": pfit in ("light", "structured"),
+        "max_suggested_actions": 0 if pfit == "none" else 1,
+        "preferred_opening_style": "concrete_reflection"
+        if move in ("accurate_empathy", "meaning_reflection", "emotion_labeling")
+        else "direct_and_warm",
+        "max_paragraphs_soft": 2 if tempo in ("brief_stabilizing",) else 4,
+        "target_brevity": tempo in ("brief_stabilizing", "slow"),
+    }
+
+
+def build_reply_craft_guide(assessment: Any | None) -> str:
+    """How to speak this turn — maps formulation fields to reply style (internal)."""
+    ad = _assessment_dict(assessment)
+    move = str(ad.get("best_counseling_move") or "accurate_empathy")
+    tempo = str(ad.get("response_tempo") or "steady")
+    pfit = str(ad.get("protocol_fit") or "none")
+    lines = [
+        "--- Reply craft guide (INTERNAL — shapes final wording; never quote to user) ---",
+        f"Counseling move: {move}",
+        _MOVE_CRAFT_LINES.get(move, _MOVE_CRAFT_LINES["accurate_empathy"]),
+        f"Tempo: {tempo}",
+        _TEMPO_CRAFT_LINES.get(tempo, _TEMPO_CRAFT_LINES["steady"]),
+        f"Protocol fit: {pfit}",
+        _FIT_CRAFT_LINES.get(pfit, _FIT_CRAFT_LINES["none"]),
+        _ANTI_TEMPLATE_RULES,
+    ]
+    if ad.get("core_affect"):
+        lines.append(f"Core affect to hold: {ad.get('core_affect')}")
+    if ad.get("underlying_need"):
+        lines.append(f"Possible unmet need: {ad.get('underlying_need')}")
+    if ad.get("maintaining_loop"):
+        lines.append(f"Loop (internal): {(ad.get('maintaining_loop') or '')[:180]}")
+    if ad.get("alliance_priority") or pfit == "none":
+        lines.append("Alliance-first: listening counts as the intervention unless user asked for a tool.")
+    return "\n".join(lines) + "\n"
+
+
+def build_rimumu_voice_examples() -> str:
+    return """\
+--- Rimumu voice examples (learn stance — do NOT copy verbatim) ---
+
+1) Shame/self-attack
+User: "I hate myself for messing this up again."
+Bad: "Don't say that, everyone makes mistakes. Try a thought record."
+Good: "That sounds less like a fact and more like a sentence your shame is using to punish you right now. I don't want to argue with it too fast. What happened today that made that sentence feel so believable?"
+
+2) Wants listening
+User: "Please don't fix it. I just need to say it."
+Good: "Okay. I won't try to solve it right now. I'm here with you in the part that feels too full to carry alone. Say the messy version."
+
+3) Panic/stabilize
+User: "I'm panicking and I can't calm down."
+Good: "Stay with me. Feet on the floor if you can. Look for one edge or corner in the room. You don't have to explain anything yet — just type 'here' when you find it."
+
+4) Pushback/repair
+User: "That advice didn't help. You're not listening."
+Good: "You're right to call that out. I moved toward fixing before I really stayed with what hurt. Let me slow down: the part I missed is…"
+
+5) Ambivalence
+User: "Part of me wants to leave, part of me feels cruel."
+Good: "Both parts make sense: one is trying to protect you from more pain, and one is trying not to become someone who harms others. We don't have to choose a side yet. Which part is loudest tonight?"
+
+Do not copy these lines. Match the stance: specific, warm, restrained, one move per turn.
+"""
+
+
+def evaluate_rimumu_reply_shape(reply: str, assessment: Any) -> list[str]:
+    """
+    Deterministic anti-pattern flags for tests/evals only — not used in production blocking.
+    """
+    from foresight_x.slime.wellbeing_clinical import WellbeingTurnAssessment
+
+    if hasattr(assessment, "model_dump"):
+        a = assessment
+    else:
+        a = WellbeingTurnAssessment.model_validate(assessment)
+    text = (reply or "").strip()
+    low = text.lower()
+    issues: list[str] = []
+    if not text:
+        return ["empty_reply"]
+
+    if a.protocol_fit == "none":
+        if re.search(r"\b(step\s*[12]|step one|step two|\d+\.\s)", low):
+            issues.append("numbered_steps_when_protocol_fit_none")
+        if re.search(r"\bthought record|worksheet|column \d", low):
+            issues.append("worksheet_language_when_protocol_fit_none")
+        if re.search(r"\btry this exercise|here's an exercise", low):
+            issues.append("exercise_push_when_protocol_fit_none")
+
+    if a.response_tempo == "brief_stabilizing" and len(text) > 420:
+        issues.append("too_long_for_brief_stabilizing")
+
+    if a.best_counseling_move == "repair_mismatch":
+        if re.search(r"\btry this (exercise|technique|skill)", low):
+            issues.append("exercise_after_repair_move")
+        if not re.search(r"\b(sorry|right to|call that|missed|slow down|my part)", low):
+            issues.append("missing_repair_language")
+
+    if text.count("?") > 2:
+        issues.append("too_many_questions")
+
+    return issues
+
+
 def build_protocol_prompt_block(
     protocol_id: str,
     *,
     assessment: Any | None = None,
     thread: dict[str, Any] | None = None,
 ) -> str:
-    pid = (protocol_id or "supportive_reflection").strip().lower()
-    if pid == "relationship_script":
-        pid = "interpersonal_therapy"
-    body = PROTOCOL_PROMPTS.get(pid, _SUPPORTIVE_REFLECTION)
-    lines = [f"--- Active wellbeing protocol: {pid} ---", body, _TRAUMA_INFORMED_GLOBAL, _ALLIANCE_RESPONSE_SHAPE]
+    requested = (protocol_id or "supportive_reflection").strip().lower()
+    if requested == "relationship_script":
+        requested = "interpersonal_therapy"
+    ad = _assessment_dict(assessment)
+    effective = _effective_protocol_id(requested, ad)
+    body = PROTOCOL_PROMPTS.get(effective, _SUPPORTIVE_REFLECTION)
+    pfit = str(ad.get("protocol_fit") or "none").strip().lower()
 
-    if assessment is not None:
-        if hasattr(assessment, "model_dump"):
-            ad = assessment.model_dump(mode="json")
-        elif isinstance(assessment, dict):
-            ad = assessment
-        else:
-            ad = {}
+    lines = [
+        f"--- Active wellbeing protocol (delivery): {effective} ---",
+        body,
+        _protocol_fit_delivery_block(pfit, requested, effective),
+        build_reply_craft_guide(assessment),
+    ]
+    shape = reply_shape_constraints(assessment)
+    lines.append(
+        "--- Reply shape constraints (internal JSON) ---\n"
+        + json.dumps(shape, ensure_ascii=False)
+    )
+    lines.append(build_rimumu_voice_examples())
+    lines.append(_TRAUMA_INFORMED_GLOBAL)
+    lines.append(_ALLIANCE_RESPONSE_SHAPE)
+
+    if ad:
         lines.append(
-            "--- Clinical triage (internal) ---\n"
+            "--- Internal case formulation (do not quote to user) ---\n"
             f"Intensity: {ad.get('intensity_0_10')}/10 | Process: {ad.get('primary_process')} | "
             f"Phase: {ad.get('session_phase')} | Body stabilization: {ad.get('needs_body_stabilization')}\n"
+            f"Core affect: {ad.get('core_affect') or '(infer from message)'}\n"
+            f"Underlying need: {ad.get('underlying_need') or '(infer gently)'}\n"
+            f"Maintaining loop: {(ad.get('maintaining_loop') or '')[:180]}\n"
+            f"Best counseling move this turn: {ad.get('best_counseling_move')}\n"
+            f"Response tempo: {ad.get('response_tempo')} | Protocol fit: {ad.get('protocol_fit')}\n"
             f"Alliance-first: {ad.get('alliance_priority')}\n"
-            f"Note: { (ad.get('formulation_note') or '')[:200] }"
+            f"Why this move: {(ad.get('why_this_move') or '')[:200]}\n"
+            f"Formulation note: {(ad.get('formulation_note') or '')[:200]}"
         )
 
     if thread:
