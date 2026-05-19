@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
@@ -18,6 +18,13 @@ import type { ShadowSuggestion } from '../app/components/shadow/types';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../app/components/ui/sheet';
 import { BuddyRecentChatPanel } from '../features/slime/BuddyRecentChatPanel';
 import { BuddyRecentTherapyPanel } from '../features/slime/BuddyRecentTherapyPanel';
+import { BuddyLongThreadBanner } from '../features/slime/BuddyLongThreadBanner';
+import {
+  buddyThreadMessageCount,
+  dismissLongThreadBanner,
+  isBuddyThreadLong,
+  isLongThreadBannerDismissed,
+} from '../features/slime/buddyThreadLimits';
 import { TherapyReportPanel } from '../features/slime/TherapyReportPanel';
 import { RimumuWellbeingIntakeDialog } from '../features/slime/RimumuWellbeingIntakeDialog';
 import {
@@ -126,6 +133,7 @@ export default function SlimeCompanionPage() {
   const [flaggedEvidenceIds, setFlaggedEvidenceIds] = useState<Set<string>>(() => new Set());
   const [buddyThreadId, setBuddyThreadId] = useState<string | null>(null);
   const [buddyActiveThread, setBuddyActiveThread] = useState<ShadowThread | null>(null);
+  const [dismissedLongHintFor, setDismissedLongHintFor] = useState<string | null>(null);
   const [buddySlimeType, setBuddySlimeType] = useState<SlimeType>(() =>
     readBuddyCompanionPref(authUserId),
   );
@@ -285,6 +293,15 @@ export default function SlimeCompanionPage() {
       : null;
   const wellbeingVoiceGated =
     buddySlimeType === 'wellbeing' && !canUseWellbeingBuddyVoice(buddyActiveThread);
+
+  const buddyMessageCount = buddyThreadMessageCount(buddyActiveThread);
+  const showLongThreadBanner = useMemo(() => {
+    const tid = buddyThreadId?.trim();
+    if (!tid || buddyActiveThread?.thread_id !== tid) return false;
+    if (dismissedLongHintFor === tid) return false;
+    if (isLongThreadBannerDismissed(authUserId, tid)) return false;
+    return isBuddyThreadLong(buddyActiveThread);
+  }, [authUserId, buddyActiveThread, buddyThreadId, dismissedLongHintFor]);
 
   useEffect(() => {
     if (buddySlimeType !== 'wellbeing' || !buddyActiveThread?.thread_id) return;
@@ -736,6 +753,24 @@ export default function SlimeCompanionPage() {
             Talk with {getSlimeIdentity(buddySlimeType).displayName}
           </h1>
         </motion.div>
+        {showLongThreadBanner ? (
+          <BuddyLongThreadBanner
+            className="relative z-30 mb-3 w-full max-w-2xl"
+            slimeType={buddySlimeType}
+            messageCount={buddyMessageCount}
+            onStartFresh={() => {
+              if (buddySlimeType === 'wellbeing') void startNewTherapy();
+              else void startNewBuddyChat();
+            }}
+            onDismiss={() => {
+              const tid = buddyThreadId?.trim();
+              if (tid) {
+                dismissLongThreadBanner(authUserId, tid);
+                setDismissedLongHintFor(tid);
+              }
+            }}
+          />
+        ) : null}
         <motion.div
           className={cn(
             'relative h-[min(72vh,680px)] w-full max-w-5xl shrink-0 rounded-[32px]',
