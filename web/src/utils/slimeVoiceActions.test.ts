@@ -3,6 +3,7 @@ import {
   SLIME_VOICE_CALENDAR_DRAFT_KEY,
   SLIME_VOICE_CHAT_PREFILL_KEY,
   applySlimeVoiceFrontendAction,
+  isWellbeingBlockedVoiceNavigation,
   normalizeVoiceSlimePatch,
 } from './slimeVoiceActions';
 import { CALENDAR_AGENT_SESSION_DRAFT_KEY } from './executionStorageKeys';
@@ -52,6 +53,19 @@ describe('slimeVoiceActions', () => {
   it('rejects non-root paths', () => {
     const navigate = vi.fn();
     applySlimeVoiceFrontendAction(navigate, { type: 'navigate', route: '//evil' });
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('blocks wellbeing navigation to Shadow Chat', () => {
+    const navigate = vi.fn();
+    expect(
+      isWellbeingBlockedVoiceNavigation('wellbeing', { type: 'navigate', route: '/chat' }),
+    ).toBe(true);
+    applySlimeVoiceFrontendAction(
+      navigate,
+      { type: 'navigate', route: '/chat' },
+      { wellbeing: true },
+    );
     expect(navigate).not.toHaveBeenCalled();
   });
 

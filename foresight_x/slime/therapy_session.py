@@ -245,9 +245,16 @@ def build_wellbeing_session_prompt_block(thread: dict[str, Any] | None) -> str:
         "--- Wellbeing course session (continuity) ---",
         "Treat this as an ongoing support series with the same human — reference prior turns in THIS thread.",
         "Be professional and warm: structured, evidence-informed, never diagnostic.",
-        "Alliance-first: not every turn needs a technique. One protocol step when intervention fits.",
+        "Alliance-first: not every turn needs a technique. One counseling move or one light protocol step when fit is real.",
         "Do NOT repeat the same body skill (breathing, 5-4-3-2-1) unless user asks or panic-level distress.",
         "Reflect the user in second person (you/your) — never parrot or echo their message verbatim.",
+        "Pattern noticing (this thread only): if the same theme or loop appears repeatedly, you may gently say "
+        "«I'm noticing a possible loop…» — describe behavior/situation, not personality labels "
+        "(never «you are avoidant/anxious»). At most ONE pattern per turn.",
+        "If intensity is high (≥7), skip complex pattern analysis — stabilize or stay present first.",
+        "If your last turn offered multiple techniques and the user did not engage, repair the mismatch "
+        "(acknowledge, slow down, ask what would help) instead of pushing another skill.",
+        "If the user shows new insight, help them name and hold it — do not immediately pivot topics.",
     ]
     st = str(session.get("status") or "not_started")
     if st == "active":
@@ -289,6 +296,20 @@ def build_wellbeing_session_prompt_block(thread: dict[str, Any] | None) -> str:
         last_p = (session.get("last_protocol") or "").strip()
         if last_p and last_p != "safety_escalation":
             lines.append(f"Previous protocol step: {last_p} — build on it or transition deliberately.")
+        last_clinical = session.get("last_clinical")
+        if isinstance(last_clinical, dict):
+            loop = (last_clinical.get("maintaining_loop") or "").strip()
+            if loop:
+                lines.append(f"Last formulation loop (internal): {loop[:200]}")
+            move = (last_clinical.get("best_counseling_move") or "").strip()
+            if move:
+                lines.append(f"Last counseling move: {move}")
+            streak = int(session.get("technique_turn_streak") or 0)
+            if streak >= 2:
+                lines.append(
+                    "Technique streak is high — prioritize listening, meaning reflection, or repair; "
+                    "protocol_fit should be none unless user asks for a tool."
+                )
         notes = session.get("episode_notes") or []
         if notes:
             recent = [n.get("user", "") for n in notes[-3:] if isinstance(n, dict)]
@@ -301,7 +322,8 @@ def build_wellbeing_session_prompt_block(thread: dict[str, Any] | None) -> str:
         lines.append("Intake not completed — offer a brief structured check-in before protocol depth.")
 
     lines.append(
-        "Close loops: name what changed since last message, one concrete skill or reflection, one next step."
+        "Close loops when appropriate: name what shifted, one concrete reflection or tiny next step — "
+        "not every turn needs a homework assignment."
     )
     return "\n".join(lines) + "\n"
 

@@ -175,6 +175,55 @@ export function TherapyReportPanel({ open, report, onClose }: Props) {
               />
             </section>
 
+            {report.what_felt_heaviest?.trim() ? (
+              <section className="mt-4 rounded-2xl border border-rose-50 bg-rose-50/30 p-4">
+                <h3 className="text-sm font-semibold text-rose-950">What felt heaviest</h3>
+                <MarkdownContent
+                  content={report.what_felt_heaviest}
+                  className="mt-2 text-sm leading-relaxed text-rose-950/85"
+                />
+              </section>
+            ) : null}
+
+            {report.pattern_noticed?.trim() ? (
+              <section className="mt-4">
+                <h3 className="text-sm font-semibold text-gray-900">Pattern noticed</h3>
+                <MarkdownContent
+                  content={report.pattern_noticed}
+                  className="mt-2 text-sm leading-relaxed text-gray-700"
+                />
+              </section>
+            ) : null}
+
+            {report.what_helped_even_a_little?.trim() ? (
+              <section className="mt-4">
+                <h3 className="text-sm font-semibold text-gray-900">What helped, even a little</h3>
+                <MarkdownContent
+                  content={report.what_helped_even_a_little}
+                  className="mt-2 text-sm leading-relaxed text-gray-700"
+                />
+              </section>
+            ) : null}
+
+            {report.one_sentence_reframe?.trim() ? (
+              <section className="mt-4 rounded-xl border border-rose-100 bg-white px-4 py-3">
+                <h3 className="text-sm font-semibold text-rose-950">A gentle reframe</h3>
+                <p className="mt-2 text-sm italic leading-relaxed text-rose-900/90">
+                  {report.one_sentence_reframe}
+                </p>
+              </section>
+            ) : null}
+
+            {report.next_tiny_experiment?.trim() ? (
+              <section className="mt-4">
+                <h3 className="text-sm font-semibold text-gray-900">Tiny experiment for next time</h3>
+                <MarkdownContent
+                  content={report.next_tiny_experiment}
+                  className="mt-2 text-sm leading-relaxed text-gray-700"
+                />
+              </section>
+            ) : null}
+
             {report.themes_observed?.length ? (
               <section className="mt-4">
                 <h3 className="text-sm font-semibold text-gray-900">Themes</h3>

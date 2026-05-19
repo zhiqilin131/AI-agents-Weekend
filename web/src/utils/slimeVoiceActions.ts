@@ -11,12 +11,28 @@ export type SlimeVoiceFrontendAction = {
   payload?: Record<string, unknown>;
 };
 
+const WELLBEING_BLOCKED_VOICE_PATHS = new Set(['/chat', '/reflect']);
+
+/** Rimumu therapy voice must not jump to Shadow Chat mid-session. */
+export function isWellbeingBlockedVoiceNavigation(
+  slimeType: string | undefined,
+  action: SlimeVoiceFrontendAction | undefined | null,
+): boolean {
+  if (slimeType !== 'wellbeing' || action?.type !== 'navigate') return false;
+  const path = (action.route || '').trim().split('?')[0] ?? '';
+  return WELLBEING_BLOCKED_VOICE_PATHS.has(path);
+}
+
 /** Apply safe server-suggested navigation + stash payloads for destination pages. */
 export function applySlimeVoiceFrontendAction(
   navigate: NavigateFunction,
   action: SlimeVoiceFrontendAction | undefined | null,
+  options?: { wellbeing?: boolean },
 ): void {
   if (!action?.type) return;
+  if (isWellbeingBlockedVoiceNavigation(options?.wellbeing ? 'wellbeing' : undefined, action)) {
+    return;
+  }
   const path = (action.route || '').trim();
   const payload = action.payload;
 

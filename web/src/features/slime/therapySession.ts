@@ -31,6 +31,12 @@ export type TherapyReport = {
   strengths_noticed?: string[];
   reflective_prompts?: string[];
   suggested_actions?: TherapyActionSuggestion[];
+  /** User-readable recap fields (optional for older reports) */
+  what_felt_heaviest?: string;
+  pattern_noticed?: string;
+  what_helped_even_a_little?: string;
+  one_sentence_reframe?: string;
+  next_tiny_experiment?: string;
 };
 
 export function therapySessionFromThread(

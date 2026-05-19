@@ -25,6 +25,7 @@ import { consumeOnboardingJustFinished, nowIso, shouldShowOnboarding } from '../
 import type { UserProfile } from '../features/onboarding/types';
 import { useAuth } from '../auth/AuthContext';
 import { isSupabaseEnvConfigured } from '../auth/RequireAuthLayout';
+import { BRAND_TAGLINE, BRAND_TAGLINE_STYLE } from '../app/brand';
 
 const PIPELINE_STAGES = ['enhance', 'perceive', 'retrieve', 'infer', 'simulate', 'evaluate', 'finalize'] as const;
 
@@ -676,8 +677,8 @@ export default function HomePage() {
         <h1 className="text-3xl md:text-4xl text-gray-900 tracking-tight" style={{ fontWeight: 700, letterSpacing: '-0.03em' }}>
           Foresight-<span className="text-purple-600">X</span>
         </h1>
-        <p className="text-sm md:text-base text-gray-500 mt-1" style={{ fontWeight: 400 }}>
-          Evidence-grounded decision agent
+        <p className="text-base md:text-lg text-gray-500/90 mt-1" style={BRAND_TAGLINE_STYLE}>
+          {BRAND_TAGLINE}
         </p>
       </header>
 
@@ -814,8 +815,8 @@ export default function HomePage() {
                   <h1 className="mb-4 text-6xl text-gray-900 tracking-tight sm:mb-5 sm:text-7xl" style={{ fontWeight: 700, letterSpacing: '-0.04em' }}>
                     Foresight-<span className="text-purple-600">X</span>
                   </h1>
-                  <p className="text-lg text-gray-500 sm:text-xl" style={{ fontWeight: 400 }}>
-                    Evidence-grounded decision agent
+                  <p className="text-xl text-gray-500/90 sm:text-2xl mt-1" style={BRAND_TAGLINE_STYLE}>
+                    {BRAND_TAGLINE}
                   </p>
                 </div>
 

@@ -117,9 +117,9 @@ export default function ProfilePage() {
   const [selectedMemoryCat, setSelectedMemoryCat] = useState<string>('');
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     credits: true,
-    priorities: true,
+    priorities: false,
     memory: false,
-    wellbeing: true,
+    wellbeing: false,
     legacy: false,
     context: false,
   });
@@ -683,7 +683,7 @@ export default function ProfilePage() {
             >
             <div className="mb-1.5 flex items-center justify-between gap-2">
             <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
-              Your priorities (one per line)
+              Your priorities
             </label>
             <button type="button" onClick={() => toggleSection('priorities')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
               {openSections.priorities ? 'Collapse' : 'Expand'}

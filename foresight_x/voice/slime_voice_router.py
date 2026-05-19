@@ -386,6 +386,78 @@ def _context_is_wellbeing(ctx: SlimeVoiceContext) -> bool:
     return normalize_slime_type(str(ctx.slime_type or "")) == "wellbeing"
 
 
+_WELLBEING_BLOCKED_NAV_PATHS: frozenset[str] = frozenset({"/chat", "/reflect"})
+
+
+def _wellbeing_blocks_voice_tool(tool_name: str, arguments: dict[str, Any]) -> bool:
+    """Wellbeing voice stays in-session — no Shadow Chat / decision-report navigation."""
+    if tool_name in ("open_shadow_chat", "open_decision_report_flow"):
+        return True
+    if tool_name == "navigate":
+        from foresight_x.voice.slime_tools import ROUTE_TO_PATH
+
+        route = str(arguments.get("route") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        path = ROUTE_TO_PATH.get(route, "")
+        return path in _WELLBEING_BLOCKED_NAV_PATHS
+    return False
+
+
+def apply_wellbeing_voice_route_policy(route: SlimeVoiceRouteResult) -> SlimeVoiceRouteResult:
+    """Rewrite navigation tools to conversation_turn (no_op) for Rimumu / wellbeing voice."""
+    if route.tool_name == "no_op" or not _wellbeing_blocks_voice_tool(route.tool_name, route.arguments):
+        return route
+    _log.info(
+        "wellbeing voice blocked tool=%s → no_op (stay in therapy session)",
+        route.tool_name,
+    )
+    return SlimeVoiceRouteResult(
+        intent="general_chat",
+        tool_name="no_op",
+        arguments={
+            "reason": "wellbeing_stay_in_session",
+            "blocked_tool": route.tool_name,
+        },
+        requires_confirmation=False,
+        assistant_hint=route.assistant_hint,
+    )
+
+
+def _try_fast_wellbeing_continue_no_op(transcript: str) -> SlimeVoiceRouteResult | None:
+    """
+    Short affirmations / technique acceptance during wellbeing voice — stay on conversation_turn.
+    Avoids router LLM misrouting "yes let's do grounding" to open_shadow_chat.
+    """
+    raw = (transcript or "").strip()
+    if not raw or len(raw) > 240:
+        return None
+    if _looks_like_tool_or_retrieval_request(raw) or _looks_like_calendar_tool_request(raw):
+        return None
+    low = raw.lower()
+    affirmation = bool(
+        re.match(
+            r"^(yes|yeah|yep|yup|ok|okay|sure|please|let's do|lets do|let us do|go ahead|"
+            r"sounds good|that sounds good|i'm in|im in|do it|let's try|lets try)\b",
+            low,
+        )
+        or re.match(r"^(好|好的|可以|行|来吧|愿意|做一下|想做)\b", raw)
+    )
+    technique = bool(
+        re.search(
+            r"\b(grounding|breathing|breath|technique|exercise|calm me|help me calm|"
+            r"呼吸|放松|冷静|冥想|练习)\b",
+            low,
+        )
+    )
+    if not (affirmation or (technique and len(raw) <= 120)):
+        return None
+    return SlimeVoiceRouteResult(
+        intent="general_chat",
+        tool_name="no_op",
+        arguments={"reason": "wellbeing_continue"},
+        requires_confirmation=False,
+    )
+
+
 def _try_fast_decision_no_op(transcript: str) -> SlimeVoiceRouteResult | None:
     """Skip router LLM for explicit Decision Mode activation (still uses conversation_turn)."""
     raw = (transcript or "").strip()
@@ -651,6 +723,15 @@ Context JSON:
 {context_json}
 """
 
+_ROUTER_PROMPT_WELLBEING_SUFFIX = """
+
+WELLBEING / RIMUMU (slime_type=wellbeing) — CRITICAL:
+- User is in a live therapy voice session on /buddy. NEVER use open_shadow_chat, open_decision_report_flow, or navigate to chat/reflect.
+- Affirmations ("yes", "ok", "let's do the grounding/breathing exercise") → no_op only; the conversation pipeline will guide the exercise in voice.
+- Grounding, breathing, CBT/ACT skills are delivered HERE — not by opening Shadow Chat.
+- Only no_op, search_memory, or search_calendar when clearly requested; default to no_op for emotional support turns.
+"""
+
 
 def route_slime_voice_command(
     transcript: str,
@@ -715,6 +796,10 @@ def route_slime_voice_command(
         return fast_cal
 
     wellbeing = _context_is_wellbeing(user_context)
+    if wellbeing:
+        wb_fast = _try_fast_wellbeing_continue_no_op(transcript.strip())
+        if wb_fast is not None:
+            return wb_fast
     if not wellbeing:
         fast_decision = _try_fast_decision_no_op(transcript.strip())
         if fast_decision is not None:
@@ -736,6 +821,8 @@ def route_slime_voice_command(
     llm = build_openai_llm(settings, temperature=0.1, model=llm_model)
     ctx_json = _routing_context_json(user_context)
     prompt = _ROUTER_PROMPT.format(transcript=transcript.strip()[:4000], context_json=ctx_json)
+    if wellbeing:
+        prompt = prompt + _ROUTER_PROMPT_WELLBEING_SUFFIX
     t0 = time.perf_counter()
     try:
         raw = structured_predict(llm, _LLMRoute, prompt)
@@ -776,10 +863,13 @@ def route_slime_voice_command(
         "open_shadow_chat": "chat",
         "no_op": "unknown",
     }
-    return SlimeVoiceRouteResult(
+    routed = SlimeVoiceRouteResult(
         intent=intent_map.get(raw.tool_name, "unknown"),
         tool_name=raw.tool_name,
         arguments=dict(raw.arguments or {}),
         requires_confirmation=bool(raw.requires_confirmation),
         assistant_hint=raw.assistant_hint,
     )
+    if wellbeing:
+        return apply_wellbeing_voice_route_policy(routed)
+    return routed

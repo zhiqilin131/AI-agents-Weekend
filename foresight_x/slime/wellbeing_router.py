@@ -28,9 +28,30 @@ def build_safety_escalation_reply() -> str:
     return SAFETY_ESCALATION_REPLY
 
 
+def _breathing_is_panic_not_medical(low: str) -> bool:
+    """Panic/anxiety 'can't breathe' — stabilize, do not crisis-escalate."""
+    if not re.search(r"\b(can't breathe|cannot breathe|cant breathe|hard to breathe)\b", low):
+        return False
+    if re.search(
+        r"\b(chest pain|heart attack|stroke|choking|turning blue|lips blue|allergic reaction|"
+        r"anaphylaxis|medical emergency)\b",
+        low,
+    ):
+        return False
+    return bool(
+        re.search(
+            r"\b(panic|panicking|anxiety|anxious|freaking out|spiral|spiraling|attack|"
+            r"hyperventilat|dissociat)\b",
+            low,
+        )
+    )
+
+
 def is_safety_escalation_message(text: str) -> bool:
     low = (text or "").lower()
     if not low.strip():
+        return False
+    if _breathing_is_panic_not_medical(low):
         return False
     patterns = (
         r"\b(kill myself|killing myself|end my life|suicide|suicidal)\b",
@@ -40,10 +61,12 @@ def is_safety_escalation_message(text: str) -> bool:
         r"\b(hurt (him|her|them|someone)|kill (him|her|them|someone))\b",
         r"\b(overdose|od[' ]?d|took too many pills)\b",
         r"\b(hallucinat|hearing voices|seeing things|psychosis|losing touch with reality)\b",
-        r"\b(medical emergency|can't breathe|chest pain|stroke|heart attack)\b",
+        r"\b(medical emergency|chest pain|stroke|heart attack)\b",
         r"\b(domestic violence|sexual assault|rape|being abused|abusive partner)\b",
         r"\b(eating disorder).{0,40}\b(faint|hospital|can't eat|starving)\b",
         r"\b(i want to hurt myself)\b",
+        # can't breathe without panic context — treat as possible medical (escalate)
+        r"\b(can't breathe|cannot breathe|cant breathe)\b",
     )
     return any(re.search(p, low) for p in patterns)
 

@@ -33,7 +33,15 @@ import { ModelSelector } from '../models/ModelSelector';
 import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
 import { BuddyTooltip } from './BuddyTooltip';
 import { calendarMutationKindFromTranscript } from './slimeVoiceIntentGuards';
-import { groupSpeakableParts, normalizeSpeechText, splitSpeakableParts } from './slimeTtsChunks';
+import {
+  completeSpeakableParts,
+  groupSpeakableParts,
+  newlyCompleteSpeakableParts,
+  normalizeSpeechText,
+  speakPartDedupeKey,
+  splitSpeakableParts,
+  tailSpeakablePartsAfterQueue,
+} from './slimeTtsChunks';
 import { normalizeTtsVoiceName } from '../../utils/ttsVoices';
 import { getSlimeIdentity, slimeSupportsDecisionMode, ttsVoiceForSlimeType } from './slimeIdentity';
 import { SLIME_CTA_BTN_CLASS, slimeCtaButtonStyle } from './slimeCtaButton';
@@ -364,6 +372,30 @@ function isVoiceRequestCancellable(s: VoiceAgentState): boolean {
   );
 }
 
+/** Post-capture pipeline only — hide while idle/listening/recording before send. */
+function isVoicePipelineActiveState(s: VoiceAgentState): boolean {
+  return (
+    s === 'auto_stopping' ||
+    s === 'transcribing' ||
+    s === 'searching_memory' ||
+    s === 'synthesizing' ||
+    s === 'thinking' ||
+    s === 'preparing_voice' ||
+    s === 'speaking' ||
+    s === 'executing_tool'
+  );
+}
+
+function voicePipelineDisplayState(
+  voiceState: VoiceAgentState,
+  buddyAudioPlaying: boolean,
+): VoiceAgentState {
+  if (buddyAudioPlaying && !isVoicePipelineActiveState(voiceState)) {
+    return 'speaking';
+  }
+  return voiceState;
+}
+
 function speechPhaseLabel(phase: VoiceRecorderSpeechPhase, recording: boolean): string | null {
   if (!recording) return null;
   if (phase === 'waiting_speech') return 'Listening…';
@@ -487,7 +519,6 @@ export function SlimeVoiceAgent({
     },
   });
   const [voiceState, setVoiceState] = useState<VoiceAgentState>('idle');
-  const [transcriptPreview, setTranscriptPreview] = useState<string | null>(null);
   const [lastReplyText, setLastReplyText] = useState<string | null>(null);
   const [ttsHint, setTtsHint] = useState<string | null>(null);
   const [latencyHint, setLatencyHint] = useState<string | null>(null);
@@ -505,6 +536,15 @@ export function SlimeVoiceAgent({
   const buddyTtsLoadPendingRef = useRef(false);
   /** Bumps when a new TTS request or recording session invalidates in-flight playback. */
   const ttsGenRef = useRef(0);
+  /** Stream TTS: sentences already queued for playback this turn. */
+  const streamQueuedCountRef = useRef(0);
+  const streamTtsActiveRef = useRef(false);
+  const streamPlayChainRef = useRef<Promise<void>>(Promise.resolve());
+  const streamPrefetchRef = useRef<Map<string, Promise<Blob | null>>>(new Map());
+  const streamChunkIndexRef = useRef(0);
+  /** Normalized sentence keys already handed to the stream TTS queue this turn. */
+  const streamQueuedPartKeysRef = useRef<Set<string>>(new Set());
+  const lastStreamedReplyRef = useRef('');
   const speechUtteranceRef = useRef(0);
   /** Prevents stream/TTS races from replacing a full bubble with a shorter streamed prefix. */
   const lastBubbleTextRef = useRef('');
@@ -604,11 +644,22 @@ export function SlimeVoiceAgent({
     setBuddyAudioPlaying(false);
   }, []);
 
+  const resetStreamTtsState = useCallback(() => {
+    streamQueuedCountRef.current = 0;
+    streamTtsActiveRef.current = false;
+    streamPlayChainRef.current = Promise.resolve();
+    streamPrefetchRef.current.clear();
+    streamChunkIndexRef.current = 0;
+    streamQueuedPartKeysRef.current.clear();
+    lastStreamedReplyRef.current = '';
+  }, []);
+
   const cancelBuddyAudio = useCallback(() => {
     ttsGenRef.current += 1;
     buddyTtsLoadPendingRef.current = false;
+    resetStreamTtsState();
     releaseBuddyAudioPlayback();
-  }, [releaseBuddyAudioPlayback]);
+  }, [releaseBuddyAudioPlayback, resetStreamTtsState]);
 
   useEffect(() => () => cancelBuddyAudio(), [cancelBuddyAudio]);
 
@@ -694,83 +745,121 @@ export function SlimeVoiceAgent({
       displayText = spokenText,
     ): Promise<boolean> => {
       if (gen !== ttsGenRef.current) return false;
-      let started = false;
-      const startOutput = () => {
-        if (gen !== ttsGenRef.current || started) return;
-        started = true;
-        setVoiceState('speaking');
-        if (!opts?.suppressBubble && displayText.trim()) {
-          showSpeechOutput(displayText, {
-            speaking: true,
-            source: opts?.source,
-            evidenceItems: opts?.evidenceItems,
-          });
-        }
-        opts?.onStart?.();
-      };
-      const completeOutput = () => {
-        if (gen === ttsGenRef.current && displayText.trim() && !opts?.suppressSpeakingEnd) {
-          showSpeechOutput(displayText, {
-            speaking: false,
-            source: opts?.source,
-            evidenceItems: opts?.evidenceItems,
-          });
-        }
-        onComplete();
-      };
-      buddyTtsLoadPendingRef.current = false;
-      setBuddyAudioPlaying(true);
-      const finishOutput = () => {
-        if (opts?.sequenceHasMore) {
-          releaseBuddyAudioPlayback();
-        } else {
-          cancelBuddyAudio();
-          if (gen === ttsGenRef.current) setVoiceState('idle');
-        }
-        completeOutput();
-      };
-      const webOk = await playMp3BlobWithWebAudio(blob, {
-        onStart: startOutput,
-        onEnded: finishOutput,
-        trackSource: (node) => {
-          buddyWebAudioSourceRef.current = node;
-        },
-      });
-      if (gen !== ttsGenRef.current) return false;
-      if (webOk) return true;
 
-      const url = URL.createObjectURL(blob);
-      buddyObjectUrlRef.current = url;
-      const audio = new Audio();
-      buddyAudioRef.current = audio;
-      audio.setAttribute('playsinline', 'true');
-      audio.preload = 'auto';
-      audio.src = url;
-      audio.onended = finishOutput;
-      audio.onerror = () => {
-        if (opts?.sequenceHasMore) {
+      return new Promise<boolean>((resolve) => {
+        let started = false;
+        let settled = false;
+        const settle = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          resolve(ok);
+        };
+
+        const startOutput = () => {
+          if (gen !== ttsGenRef.current || started) return;
+          started = true;
+          setVoiceState('speaking');
+          if (!opts?.suppressBubble && displayText.trim()) {
+            showSpeechOutput(displayText, {
+              speaking: true,
+              source: opts?.source,
+              evidenceItems: opts?.evidenceItems,
+            });
+          }
+          opts?.onStart?.();
+        };
+
+        const completeOutput = () => {
+          if (gen === ttsGenRef.current && displayText.trim() && !opts?.suppressSpeakingEnd) {
+            showSpeechOutput(displayText, {
+              speaking: false,
+              source: opts?.source,
+              evidenceItems: opts?.evidenceItems,
+            });
+          }
+          onComplete();
+          settle(true);
+        };
+
+        const failOutput = () => {
+          onComplete();
+          settle(false);
+        };
+
+        buddyTtsLoadPendingRef.current = false;
+        setBuddyAudioPlaying(true);
+
+        const finishOutput = () => {
+          if (gen !== ttsGenRef.current) {
+            releaseBuddyAudioPlayback();
+            settle(false);
+            return;
+          }
+          if (opts?.sequenceHasMore) {
+            releaseBuddyAudioPlayback();
+          } else {
+            cancelBuddyAudio();
+            if (gen === ttsGenRef.current) setVoiceState('idle');
+          }
+          completeOutput();
+        };
+
+        void (async () => {
+          if (gen !== ttsGenRef.current) {
+            settle(false);
+            return;
+          }
+          // Stop any stray source before starting (stream queue runs one clip at a time).
           releaseBuddyAudioPlayback();
-        } else {
-          cancelBuddyAudio();
-          setVoiceState('idle');
-        }
-        setTtsHint('Could not play audio — check API / OPENAI_API_KEY, or try again.');
-        opts?.onMayHaveBlocked?.();
-        completeOutput();
-      };
-      try {
-        await audio.play();
-        startOutput();
-        return true;
-      } catch {
-        cancelBuddyAudio();
-        if (gen !== ttsGenRef.current) return false;
-        setVoiceState('idle');
-        setTtsHint('Could not play TTS audio — tap again after interacting with the page.');
-        opts?.onMayHaveBlocked?.();
-        completeOutput();
-        return false;
-      }
+
+          const webOk = await playMp3BlobWithWebAudio(blob, {
+            onStart: startOutput,
+            onEnded: finishOutput,
+            trackSource: (node) => {
+              buddyWebAudioSourceRef.current = node;
+            },
+          });
+          if (gen !== ttsGenRef.current) {
+            settle(false);
+            return;
+          }
+          if (webOk) return;
+
+          const url = URL.createObjectURL(blob);
+          buddyObjectUrlRef.current = url;
+          const audio = new Audio();
+          buddyAudioRef.current = audio;
+          audio.setAttribute('playsinline', 'true');
+          audio.preload = 'auto';
+          audio.src = url;
+          audio.onended = finishOutput;
+          audio.onerror = () => {
+            if (opts?.sequenceHasMore) {
+              releaseBuddyAudioPlayback();
+            } else {
+              cancelBuddyAudio();
+              setVoiceState('idle');
+            }
+            setTtsHint('Could not play audio — check API / OPENAI_API_KEY, or try again.');
+            opts?.onMayHaveBlocked?.();
+            failOutput();
+          };
+          try {
+            await audio.play();
+            startOutput();
+          } catch {
+            cancelBuddyAudio();
+            if (gen !== ttsGenRef.current) {
+              settle(false);
+              return;
+            }
+            setVoiceState('idle');
+            setTtsHint('Could not play TTS audio — tap again after interacting with the page.');
+            opts?.onMayHaveBlocked?.();
+            failOutput();
+          }
+        })();
+      });
     },
     [cancelBuddyAudio, releaseBuddyAudioPlayback, showSpeechOutput],
   );
@@ -952,6 +1041,134 @@ export function SlimeVoiceAgent({
       playIndex(0);
     },
     [cancelBuddyAudio, fetchTtsBlob, isCalendarVariant, playTtsBlob, runTts, showSpeechOutput],
+  );
+
+  const appendStreamPlaybackFinish = useCallback(
+    (displayText: string, opts?: RunTtsOptions) => {
+      const gen = ttsGenRef.current;
+      streamPlayChainRef.current = streamPlayChainRef.current.then(async () => {
+        if (gen !== ttsGenRef.current) return;
+        buddyTtsLoadPendingRef.current = false;
+        setBuddyAudioPlaying(false);
+        if (displayText.trim()) {
+          showSpeechOutput(displayText, {
+            speaking: false,
+            source: opts?.source ?? 'assistant',
+            evidenceItems: opts?.evidenceItems,
+          });
+        }
+        if (gen === ttsGenRef.current) setVoiceState('idle');
+        opts?.onComplete?.();
+      });
+    },
+    [showSpeechOutput],
+  );
+
+  const enqueueStreamSpeakPart = useCallback(
+    (part: string, displayText: string, opts: RunTtsOptions | undefined) => {
+      const trimmed = part.trim();
+      if (!trimmed) return;
+      const dedupeKey = speakPartDedupeKey(trimmed);
+      if (streamQueuedPartKeysRef.current.has(dedupeKey)) return;
+      streamQueuedPartKeysRef.current.add(dedupeKey);
+      const voiceOff = slimeProfile.voice?.enabled === false;
+      const useTts = opts?.force === true || !voiceOff;
+      if (!useTts) return;
+
+      const buddyUnifiedReveal = !isCalendarVariant;
+      const gen = ttsGenRef.current;
+      const idx = streamChunkIndexRef.current;
+      streamChunkIndexRef.current += 1;
+      const key = `stream-${gen}-${idx}`;
+      const notifyCredits = idx === 0;
+      streamPrefetchRef.current.set(key, fetchTtsBlob(trimmed, key, notifyCredits));
+
+      streamPlayChainRef.current = streamPlayChainRef.current.then(async () => {
+        if (gen !== ttsGenRef.current) return;
+        try {
+          const pref = streamPrefetchRef.current.get(key);
+          const blob = pref ? await pref : await fetchTtsBlob(trimmed, key, false);
+          streamPrefetchRef.current.delete(key);
+          if (!blob || gen !== ttsGenRef.current) return;
+          if (idx === 0) {
+            buddyTtsLoadPendingRef.current = true;
+            if (buddyUnifiedReveal) {
+              setVoiceState('speaking');
+            } else {
+              setVoiceState('preparing_voice');
+            }
+          }
+          await playTtsBlob(
+            blob,
+            gen,
+            trimmed,
+            {
+              ...opts,
+              suppressBubble: buddyUnifiedReveal || idx > 0,
+              keepSpeakingState: buddyUnifiedReveal,
+              suppressSpeakingEnd: true,
+              sequenceHasMore: true,
+              skipCancel: true,
+            },
+            () => {
+              /* next sentence runs after playTtsBlob resolves (audio ended) */
+            },
+            displayText,
+          );
+        } catch {
+          setTtsHint('TTS voice was unavailable — check API / credits, then try again.');
+        }
+      });
+    },
+    [fetchTtsBlob, isCalendarVariant, playTtsBlob, showSpeechOutput, slimeProfile.voice],
+  );
+
+  const feedStreamingVoiceTts = useCallback(
+    (fullText: string, opts?: RunTtsOptions) => {
+      const normalized = normalizeSpeechText(fullText);
+      if (!normalized) return;
+      const { newParts, completeCount } = newlyCompleteSpeakableParts(
+        normalized,
+        streamQueuedCountRef.current,
+      );
+      if (!newParts.length) return;
+      streamQueuedCountRef.current = completeCount;
+      streamTtsActiveRef.current = true;
+      unlockSlimeAudioContext();
+      if (!isCalendarVariant) {
+        showSpeechOutput(normalized, {
+          speaking: true,
+          source: opts?.source ?? 'assistant',
+          utteranceId: speechUtteranceRef.current,
+        });
+      }
+      for (const part of newParts) {
+        enqueueStreamSpeakPart(part, normalized, opts);
+      }
+    },
+    [enqueueStreamSpeakPart, isCalendarVariant, showSpeechOutput],
+  );
+
+  const finishStreamVoicePlayback = useCallback(
+    async (finalText: string, opts?: RunTtsOptions) => {
+      const normalized = normalizeSpeechText(finalText);
+      if (!streamTtsActiveRef.current) {
+        opts?.onComplete?.();
+        return;
+      }
+      const tail = tailSpeakablePartsAfterQueue(normalized, streamQueuedCountRef.current);
+      streamQueuedCountRef.current = completeSpeakableParts(normalized).length;
+      for (const part of tail) {
+        enqueueStreamSpeakPart(part, normalized, opts);
+      }
+      appendStreamPlaybackFinish(normalized, opts);
+      try {
+        await streamPlayChainRef.current;
+      } finally {
+        resetStreamTtsState();
+      }
+    },
+    [appendStreamPlaybackFinish, enqueueStreamSpeakPart, resetStreamTtsState],
   );
 
   const mergeCalendarEvent = useCallback(
@@ -1172,7 +1389,6 @@ export function SlimeVoiceAgent({
       if (updatedTitle && data.thread_id) {
         onThreadTitleUpdated?.(updatedTitle, data.thread_id);
       }
-      setTranscriptPreview(data.transcript || null);
       const assistant = (data.assistant_text || '').trim();
       const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
 
@@ -1234,7 +1450,9 @@ export function SlimeVoiceAgent({
 
       if (fe?.type === 'show_calendar_draft' && fe.route) {
         cancelBuddyAudio();
-        applySlimeVoiceFrontendAction(navigate, fe as SlimeVoiceFrontendAction);
+        applySlimeVoiceFrontendAction(navigate, fe as SlimeVoiceFrontendAction, {
+          wellbeing: slimeType === 'wellbeing',
+        });
         setPendingConfirm(null);
         setPendingCalendar(null);
         setPendingCalendarMutation(null);
@@ -1264,10 +1482,9 @@ export function SlimeVoiceAgent({
       setPendingConfirm(null);
       setPendingCalendar(null);
       setPendingCalendarMutation(null);
-      setVoiceState('executing_tool');
 
       if (fe?.type === 'navigate') {
-        applySlimeVoiceFrontendAction(navigate, fe);
+        applySlimeVoiceFrontendAction(navigate, fe, { wellbeing: slimeType === 'wellbeing' });
       }
 
       if (!hasDecisionSuggestion) {
@@ -1279,11 +1496,20 @@ export function SlimeVoiceAgent({
           : toSpeak;
       const voiceText = (assistant || speakBody || toSpeak).trim();
       if (voiceText) {
-        playFinalVoiceText(voiceText, {
-          ...ttsCommon,
-          displayText: voiceText,
-          source: 'assistant',
-        });
+        if (streamTtsActiveRef.current) {
+          const streamFlushText = normalizeSpeechText(lastStreamedReplyRef.current || voiceText);
+          await finishStreamVoicePlayback(streamFlushText, {
+            ...ttsCommon,
+            displayText: voiceText,
+            source: 'assistant',
+          });
+        } else {
+          playFinalVoiceText(voiceText, {
+            ...ttsCommon,
+            displayText: voiceText,
+            source: 'assistant',
+          });
+        }
       } else if (assistant) {
         showSpeechOutput(assistant, {
           speaking: false,
@@ -1310,18 +1536,15 @@ export function SlimeVoiceAgent({
           });
         }
       }
-      const phases = data.voice_ui?.memory_phases ?? [];
-      const hadServerMemorySearch =
-        phases.includes('searching_memory') ||
-        data.tool_call?.name === 'search_memory' ||
-        evidenceItems.length > 0;
-      if (hadServerMemorySearch && evidenceItems.length > 0) {
-        setVoiceState('synthesizing');
-      }
       onMemoryEvidenceItemsChange?.(evidenceItems);
       // Retrieval toast replaces the save toast when both fire in one turn — prefer the save notice.
       if (evidenceItems.length > 0 && !savedMemoryThisTurn) {
         onMemoryEvidenceRetrieved?.(evidenceItems.length);
+      }
+      if (!voiceText) {
+        buddyTtsLoadPendingRef.current = false;
+        setBuddyAudioPlaying(false);
+        setVoiceState('idle');
       }
     },
     [
@@ -1334,6 +1557,7 @@ export function SlimeVoiceAgent({
       onDecisionSuggestion,
       cancelBuddyAudio,
       playFinalVoiceText,
+      finishStreamVoicePlayback,
       showSpeechOutput,
       runTts,
       navigate,
@@ -1391,6 +1615,7 @@ export function SlimeVoiceAgent({
       speechUtteranceRef.current += 1;
       lastBubbleTextRef.current = '';
       cancelBuddyAudio();
+      resetStreamTtsState();
       setVoiceState('thinking');
       if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
       if (verySlowHintTimerRef.current != null) window.clearTimeout(verySlowHintTimerRef.current);
@@ -1452,18 +1677,21 @@ export function SlimeVoiceAgent({
             else if (status === 'searching_memory') setVoiceState('searching_memory');
             else if (status === 'thinking') setVoiceState('thinking');
           } else if (type === 'transcript_ready') {
-            const transcript = String(ev.transcript || '').trim();
-            if (transcript) setTranscriptPreview(transcript);
             unlockSlimeAudioContext();
           } else if (type === 'text_delta') {
             const delta = String(ev.delta || '');
             if (!delta.trim()) return;
             streamedText = streamedText ? `${streamedText}${delta}` : delta;
+            lastStreamedReplyRef.current = streamedText;
             const draft = normalizeSpeechText(streamedText);
+            feedStreamingVoiceTts(streamedText, { force: true, source: 'assistant' });
             if (draft && isCalendarVariant) {
               onCalendarStatusLine?.(draft);
               setStreamDraftReply(draft);
-              setVoiceState('preparing_voice');
+            } else if (draft && streamTtsActiveRef.current) {
+              setVoiceState((s) =>
+                s === 'speaking' || s === 'preparing_voice' ? s : 'preparing_voice',
+              );
             }
           } else if (type === 'error') {
             streamError = String(ev.message || 'voice_stream_failed');
@@ -1498,6 +1726,7 @@ export function SlimeVoiceAgent({
         setLatencyHint(null);
         setStreamDraftReply(null);
         await handleVoiceResponse(finalData);
+        voiceRequestAbortRef.current = null;
         onConversationUpdated?.(finalData.thread_id);
       } catch (e) {
         if (slowHintTimerRef.current != null) window.clearTimeout(slowHintTimerRef.current);
@@ -1521,13 +1750,18 @@ export function SlimeVoiceAgent({
       currentRoute,
       threadId,
       slimeProfile,
+      slimeType,
       showInsufficient,
       voiceModelOptionId,
       showSpeechOutput,
       handleVoiceResponse,
+      feedStreamingVoiceTts,
       onConversationUpdated,
+      onCalendarStatusLine,
+      isCalendarVariant,
       unlockSlimeAudioContext,
       cancelBuddyAudio,
+      resetStreamTtsState,
       decisionModeActive,
     ],
   );
@@ -1554,7 +1788,6 @@ export function SlimeVoiceAgent({
     cancelVoiceRequest();
     cancelBuddyAudio();
     ttsGenRef.current += 1;
-    setTranscriptPreview(null);
     setLastReplyText(null);
     clearSpeechOutput();
     setPendingConfirm(null);
@@ -1618,12 +1851,11 @@ export function SlimeVoiceAgent({
       : 'absolute left-1/2 w-[min(92vw,500px)] -translate-x-1/2';
   const showVoiceDockMeta =
     !isCalendarVariant &&
-    Boolean(transcriptPreview || (lastReplyText && !recording && voiceState === 'idle'));
-  const showVoiceDockStatus =
+    Boolean(lastReplyText && !recording && voiceState === 'idle');
+  const showVoicePipelineBar =
     !isCalendarVariant &&
-    !recording &&
-    voiceState !== 'idle' &&
-    Boolean(statusLabel(voiceState));
+    (isVoicePipelineActiveState(voiceState) || buddyAudioPlaying);
+  const pipelineUiState = voicePipelineDisplayState(voiceState, buddyAudioPlaying);
   const showVoiceCancel = !recording && isVoiceRequestCancellable(voiceState);
   const showBuddyReplayButton =
     showBuddyInlineControls && Boolean(lastReplyText) && !recording && voiceState === 'idle' && !streamDraftReply;
@@ -1812,7 +2044,7 @@ export function SlimeVoiceAgent({
             showBuddyInlineControls
               ? 'gap-3 border-transparent bg-transparent p-0 shadow-none backdrop-blur-0'
               : 'gap-2 rounded-[26px] border border-white/55 bg-white/38 px-3 py-3 shadow-[0_18px_52px_rgba(124,58,237,0.12)] backdrop-blur-xl',
-            !showVoiceDockMeta && !showVoiceDockStatus && !showBuddyInlineControls &&
+            !showVoiceDockMeta && !showVoicePipelineBar && !showBuddyInlineControls &&
               'w-auto rounded-full border-transparent bg-transparent px-2 py-2 shadow-none backdrop-blur-0',
             !isCalendarVariant &&
               decisionModeActive &&
@@ -1822,17 +2054,6 @@ export function SlimeVoiceAgent({
         >
           {showBuddyInlineControls ? (
             <div className="absolute bottom-full left-1/2 z-10 mb-2 flex -translate-x-1/2 flex-col items-center gap-2">
-              {showVoiceDockMeta ? (
-                <div className="flex items-center justify-center gap-2">
-                  {transcriptPreview ? (
-                    <div className="min-w-0 max-w-[min(66vw,360px)] rounded-full border border-white/65 bg-white/62 px-3 py-1.5 text-center text-[11px] leading-snug text-slate-600 shadow-sm backdrop-blur-md">
-                      <span className="font-semibold text-violet-900">You said</span>
-                      <span className="mx-1 text-violet-300">•</span>
-                      <span className="line-clamp-1 align-bottom">{transcriptPreview}</span>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
               {recording && speechPhaseLabel(speechPhase, recording) ? (
                 <p className="whitespace-nowrap text-center text-xs font-medium text-cyan-900/90">{speechPhaseLabel(speechPhase, recording)}</p>
               ) : null}
@@ -1841,14 +2062,6 @@ export function SlimeVoiceAgent({
 
           {!showBuddyInlineControls && showVoiceDockMeta ? (
             <div className="relative z-10 flex w-full items-center justify-center gap-2">
-              {transcriptPreview ? (
-                <div className="min-w-0 max-w-[min(66vw,360px)] rounded-full border border-white/65 bg-white/62 px-3 py-1.5 text-center text-[11px] leading-snug text-slate-600 shadow-sm backdrop-blur-md">
-                  <span className="font-semibold text-violet-900">You said</span>
-                  <span className="mx-1 text-violet-300">•</span>
-                  <span className="line-clamp-1 align-bottom">{transcriptPreview}</span>
-                </div>
-              ) : null}
-
               {isCalendarVariant && streamDraftReply && !recording ? (
                 <motion.div
                   initial={{ opacity: 0, y: 4 }}
@@ -2043,34 +2256,33 @@ export function SlimeVoiceAgent({
               </button>
             </BuddyTooltip>
           ) : null}
-          {showVoiceDockStatus || showBuddyInlineControls ? (
+          {showVoicePipelineBar ? (
             <motion.div
-              className={cn(
-                'relative z-10 w-full overflow-hidden rounded-full border border-white/55 bg-white/32 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]',
-                !showVoiceDockStatus && showBuddyInlineControls && 'border-transparent bg-transparent shadow-none',
-              )}
-              aria-label={showVoiceDockStatus ? statusLabel(voiceState) : undefined}
+              className="relative z-10 w-full overflow-hidden rounded-full border border-white/55 bg-white/32 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]"
+              aria-label={statusLabel(pipelineUiState) || 'Voice assistant processing'}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.2 }}
             >
-              {showVoiceDockStatus ? (
-                <>
-                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-white/45 via-violet-100/30 to-cyan-100/25" />
+              <>
+                <motion.div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-white/45 via-violet-100/30 to-cyan-100/25" />
+                <motion.div
+                  className="pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/75 to-transparent blur-sm"
+                  animate={{ x: ['0%', '420%'] }}
+                  transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
+                />
+                <motion.div className="relative mx-4 mb-1.5 mt-1 h-1 rounded-full bg-slate-200/70">
                   <motion.div
-                    className="pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/75 to-transparent blur-sm"
-                    animate={{ x: ['0%', '420%'] }}
-                    transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
+                    className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-300 via-cyan-300 to-violet-500 shadow-[0_0_16px_rgba(139,92,246,0.45)]"
+                    initial={false}
+                    animate={{ width: `${voiceStatusProgress(pipelineUiState)}%` }}
+                    transition={{ type: 'spring', stiffness: 150, damping: 24 }}
                   />
-                  <div className="relative mx-4 mb-1.5 mt-1 h-1 rounded-full bg-slate-200/70">
-                    <motion.div
-                      className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-300 via-cyan-300 to-violet-500 shadow-[0_0_16px_rgba(139,92,246,0.45)]"
-                      initial={false}
-                      animate={{ width: `${voiceStatusProgress(voiceState)}%` }}
-                      transition={{ type: 'spring', stiffness: 150, damping: 24 }}
-                    />
-                  </div>
-                </>
-              ) : null}
+                </motion.div>
+              </>
               <div className="relative grid grid-cols-5 gap-1">
-                {voiceStatusSteps(showVoiceDockStatus ? voiceState : 'idle').map((step) => (
+                {voiceStatusSteps(pipelineUiState).map((step) => (
                   <div key={step.key} className="flex min-w-0 flex-col items-center gap-1">
                     <motion.span
                       className={cn(

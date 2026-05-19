@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   firstSpeakableChunk,
   firstSpeakableSentence,
+  newlyCompleteSpeakableParts,
   remainderAfterSpokenPrefix,
   groupSpeakableParts,
   splitSpeakableParts,
   ttsPrefetchMatchesFinal,
+  tailSpeakablePartsAfterQueue,
+  unqueuedSpeakableParts,
 } from './slimeTtsChunks';
 
 describe('slimeTtsChunks', () => {
@@ -52,5 +55,29 @@ describe('slimeTtsChunks', () => {
     const pref = 'Rose is your girlfriend and';
     const fin = 'Rose is your girlfriend and you plan October visits.';
     expect(ttsPrefetchMatchesFinal(pref, fin)).toBe(true);
+  });
+
+  it('newlyCompleteSpeakableParts waits for punctuation', () => {
+    const partial = 'Stay with me. Feet on the floor';
+    expect(newlyCompleteSpeakableParts(partial, 0).newParts).toEqual(['Stay with me.']);
+    const more = `${partial} if you can.`;
+    expect(newlyCompleteSpeakableParts(more, 1).newParts).toEqual(['Feet on the floor if you can.']);
+  });
+
+  it('unqueuedSpeakableParts includes trailing fragment at end', () => {
+    const full = 'First sentence. Second without end';
+    expect(unqueuedSpeakableParts(full, 1)).toEqual(['Second without end']);
+  });
+
+  it('tailSpeakablePartsAfterQueue does not repeat already-queued complete sentences', () => {
+    const full =
+      'One. Two. Three. Four. Five. It might help shift some of that weight, even just a little.';
+    const completeCount = 6;
+    expect(tailSpeakablePartsAfterQueue(full, completeCount)).toEqual([]);
+  });
+
+  it('tailSpeakablePartsAfterQueue returns only new complete plus trailing fragment', () => {
+    const full = 'Alpha. Beta. Gamma without end';
+    expect(tailSpeakablePartsAfterQueue(full, 2)).toEqual(['Gamma without end']);
   });
 });
