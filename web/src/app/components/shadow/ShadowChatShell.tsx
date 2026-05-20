@@ -138,6 +138,13 @@ export function ShadowChatShell({
   const streamTurnSeqRef = useRef(0);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  const activeThreadIdRef = useRef<string | null>(null);
+  const loadThreadSeqRef = useRef(0);
+  const threadLoadInflightRef = useRef(new Map<string, Promise<ShadowThread | null>>());
+  const lastAppliedThreadRef = useRef<{ id: string; sig: string } | null>(null);
+  const [threadSwitching, setThreadSwitching] = useState(false);
   const [inputBootstrap, setInputBootstrap] = useState<string | null>(null);
   const [decisionModeManual, setDecisionModeManual] = useState(false);
   const reportStream = useDecisionReportStream();
@@ -185,9 +192,28 @@ export function ShadowChatShell({
       return [...s, x].slice(-6);
     });
 
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
+
+  const threadContentSignature = (thread: ShadowThread): string => {
+    const msgs = thread.messages || [];
+    const last = msgs[msgs.length - 1];
+    return `${msgs.length}:${String(last?.id ?? '')}:${thread.updated_at ?? ''}`;
+  };
+
   const applyLoadedThread = useCallback(
     (thread: ShadowThread, opts?: { preservePendingSuggestion?: boolean }) => {
       const tid = thread.thread_id;
+      const sig = threadContentSignature(thread);
+      if (
+        lastAppliedThreadRef.current?.id === tid
+        && lastAppliedThreadRef.current.sig === sig
+        && activeThreadIdRef.current === tid
+      ) {
+        return;
+      }
+      lastAppliedThreadRef.current = { id: tid, sig };
       // Keep sidebar/header titles in sync with freshly loaded thread payload.
       setThreads((prev) => {
         const idx = prev.findIndex((t) => t.thread_id === tid);
@@ -262,11 +288,51 @@ export function ShadowChatShell({
     [clearAllProfileMemoryToasts, scheduleProfileMemoryToast],
   );
 
+  const fetchThreadDetail = useCallback(
+    async (id: string): Promise<ShadowThread | null> => {
+      const inflight = threadLoadInflightRef.current.get(id);
+      if (inflight) return inflight;
+      const loading = (async () => {
+        const res = await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`);
+        if (!res.ok) return null;
+        const data = (await res.json()) as { thread: ShadowThread };
+        writeUiDataCache(threadDetailCacheKey(data.thread.thread_id), data, UI_CACHE_TTL.shadowThreadDetailMs);
+        return data.thread;
+      })();
+      threadLoadInflightRef.current.set(id, loading);
+      try {
+        return await loading;
+      } finally {
+        threadLoadInflightRef.current.delete(id);
+      }
+    },
+    [threadDetailCacheKey],
+  );
+
+  const prefetchThread = useCallback(
+    (id: string) => {
+      if (!id || readUiDataCache<{ thread: ShadowThread }>(threadDetailCacheKey(id))) return;
+      void fetchThreadDetail(id);
+    },
+    [fetchThreadDetail, threadDetailCacheKey],
+  );
+
+  const prefetchRecentThreads = useCallback(
+    (list: ShadowThread[]) => {
+      for (const t of list.slice(0, 8)) {
+        if (t.thread_id) prefetchThread(t.thread_id);
+      }
+    },
+    [prefetchThread],
+  );
+
   const refreshThreads = useCallback(async () => {
     const cached = readUiDataCache<{ threads: ShadowThread[] }>(threadsCacheKey);
     if (cached?.threads) {
-      setThreads(sortThreadsByRecent(cached.threads || []));
+      const sorted = sortThreadsByRecent(cached.threads || []);
+      setThreads(sorted);
       setThreadsLoaded(true);
+      prefetchRecentThreads(sorted);
     }
     const res = await apiFetch('/api/shadow-chat/threads');
     if (!res.ok) {
@@ -276,18 +342,22 @@ export function ShadowChatShell({
       return;
     }
     const data = (await res.json()) as { threads: ShadowThread[] };
-    setThreads(sortThreadsByRecent(data.threads || []));
+    const sorted = sortThreadsByRecent(data.threads || []);
+    setThreads(sorted);
     setThreadsLoaded(true);
     writeUiDataCache(threadsCacheKey, data, UI_CACHE_TTL.shadowThreadsMs);
-  }, [threadsCacheKey]);
+    prefetchRecentThreads(sorted);
+  }, [threadsCacheKey, prefetchRecentThreads]);
 
   useEffect(() => {
     const cached = readUiDataCache<{ threads: ShadowThread[] }>(threadsCacheKey);
     if (cached?.threads) {
-      setThreads(sortThreadsByRecent(cached.threads || []));
+      const sorted = sortThreadsByRecent(cached.threads || []);
+      setThreads(sorted);
       setThreadsLoaded(true);
+      prefetchRecentThreads(sorted);
     }
-  }, [threadsCacheKey]);
+  }, [threadsCacheKey, prefetchRecentThreads]);
 
   const patchThreadTitle = useCallback((threadId: string, title: string) => {
     const trimmed = title.trim();
@@ -302,41 +372,70 @@ export function ShadowChatShell({
     if (el) el.scrollTop = el.scrollHeight;
   }, []);
 
-  const loadThread = async (
-    id: string,
-    opts?: { preservePendingSuggestion?: boolean },
-  ) => {
-    const cachedThread = readUiDataCache<{ thread: ShadowThread }>(threadDetailCacheKey(id));
-    if (cachedThread?.thread) {
-      applyLoadedThread(cachedThread.thread, opts);
-    }
-    const fetchThread = () => apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`);
-    let res = await fetchThread();
-    if (res.status === 404) {
-      // Guard against transient consistency hiccups (e.g. Supabase/local fallback jitter).
-      await refreshThreads();
-      await new Promise((resolve) => window.setTimeout(resolve, 120));
-      res = await fetchThread();
-    }
-    if (res.status === 404) {
-      const sp = new URLSearchParams(window.location.search);
-      if (sp.has('thread')) {
-        sp.delete('thread');
-        const q = sp.toString();
-        navigate(q ? `/chat?${q}` : '/chat', { replace: true });
+  const loadThread = useCallback(
+    async (id: string, opts?: { preservePendingSuggestion?: boolean }) => {
+      if (!id) return;
+      const seq = ++loadThreadSeqRef.current;
+      setActiveThreadId(id);
+
+      const cachedThread = readUiDataCache<{ thread: ShadowThread }>(threadDetailCacheKey(id));
+      if (cachedThread?.thread?.thread_id === id) {
+        applyLoadedThread(cachedThread.thread, opts);
+      } else {
+        setThreadSwitching(true);
+        setMessages([]);
+        if (!opts?.preservePendingSuggestion) {
+          setPendingAction(null);
+        }
+        const summary = threadsRef.current.find((t) => t.thread_id === id);
+        if (summary) {
+          setActiveSlimeType(slimeTypeFromThread(summary));
+        }
       }
-      setActiveThreadId(null);
-      await refreshThreads();
-      return;
-    }
-    if (!res.ok) {
-      pushTimeline(`Could not load chat (${res.status})`);
-      return;
-    }
-    const data = (await res.json()) as { thread: ShadowThread };
-    writeUiDataCache(threadDetailCacheKey(data.thread.thread_id), data, UI_CACHE_TTL.shadowThreadDetailMs);
-    applyLoadedThread(data.thread, opts);
-  };
+
+      const finishSwitch = () => {
+        if (loadThreadSeqRef.current === seq) setThreadSwitching(false);
+      };
+
+      try {
+        let thread = await fetchThreadDetail(id);
+        if (!thread) {
+          await refreshThreads();
+          await new Promise((resolve) => window.setTimeout(resolve, 120));
+          if (loadThreadSeqRef.current !== seq) return;
+          thread = await fetchThreadDetail(id);
+        }
+        if (!thread) {
+          if (loadThreadSeqRef.current !== seq) return;
+          const sp = new URLSearchParams(window.location.search);
+          if (sp.has('thread')) {
+            sp.delete('thread');
+            const q = sp.toString();
+            navigate(q ? `/chat?${q}` : '/chat', { replace: true });
+          }
+          setActiveThreadId(null);
+          lastAppliedThreadRef.current = null;
+          return;
+        }
+        if (loadThreadSeqRef.current !== seq || activeThreadIdRef.current !== id) return;
+        applyLoadedThread(thread, opts);
+      } catch {
+        if (loadThreadSeqRef.current === seq) {
+          pushTimeline('Could not load chat');
+        }
+      } finally {
+        finishSwitch();
+      }
+    },
+    [
+      applyLoadedThread,
+      fetchThreadDetail,
+      navigate,
+      pushTimeline,
+      refreshThreads,
+      threadDetailCacheKey,
+    ],
+  );
 
   const createChatWithSlime = async (slimeType: SlimeType) => {
     if (creatingNewChat) return;
@@ -1158,6 +1257,7 @@ export function ShadowChatShell({
               creatingNewChat={creatingNewChat}
               onNewChat={() => newChat()}
               onSelectThread={(id) => void loadThread(id)}
+              onPrefetchThread={prefetchThread}
               onDeleteThread={async (id) => {
                 await apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`, { method: 'DELETE' });
                 setActiveThreadId(null);
@@ -1171,7 +1271,22 @@ export function ShadowChatShell({
                 ref={chatScrollRef}
                 className="min-h-[58vh] max-h-[66vh] overflow-y-auto px-1 py-3 [overflow-anchor:none]"
               >
-                <div ref={chatContentRef}>
+                <div ref={chatContentRef} className="relative">
+                  {threadSwitching ? (
+                    <div
+                      className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-6"
+                      aria-live="polite"
+                      aria-busy="true"
+                    >
+                      <span className="inline-flex items-center gap-2 rounded-full border border-indigo-200/90 bg-white/95 px-3 py-1.5 text-xs font-medium text-indigo-900 shadow-sm">
+                        <span
+                          className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600"
+                          aria-hidden
+                        />
+                        Loading chat…
+                      </span>
+                    </div>
+                  ) : null}
                   <ChatMessageList
                     messages={messages}
                     slimeType={activeSlimeType}

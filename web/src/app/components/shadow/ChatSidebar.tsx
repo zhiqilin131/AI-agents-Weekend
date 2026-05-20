@@ -16,6 +16,7 @@ export function ChatSidebar({
   onNewChat,
   creatingNewChat = false,
   onSelectThread,
+  onPrefetchThread,
   onDeleteThread,
   slimeType = 'generalized',
 }: {
@@ -24,6 +25,7 @@ export function ChatSidebar({
   onNewChat: () => void;
   creatingNewChat?: boolean;
   onSelectThread: (id: string) => void;
+  onPrefetchThread?: (id: string) => void;
   onDeleteThread: (id: string) => void;
   slimeType?: SlimeType;
 }) {
@@ -187,6 +189,8 @@ export function ChatSidebar({
                 <button
                   type="button"
                   className="flex-1 truncate text-left text-sm text-gray-800"
+                  onMouseEnter={() => onPrefetchThread?.(t.thread_id)}
+                  onFocus={() => onPrefetchThread?.(t.thread_id)}
                   onClick={() => onSelectThread(t.thread_id)}
                 >
                   {threadDisplayTitle(t)}

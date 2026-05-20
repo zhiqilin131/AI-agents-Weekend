@@ -118,10 +118,11 @@ from foresight_x.chat import (
 from foresight_x.chat.decision_trigger import evaluate_decision_trigger, preview_will_auto_start_decision
 from foresight_x.chat.manual_decision_mode import build_manual_decision_confirmation
 from foresight_x.chat.thread_title import (
+    _first_user_message_content,
     apply_title_for_first_user_message,
     apply_title_from_wellbeing_intake,
     is_placeholder_thread_title,
-    maybe_refresh_thread_title,
+    thread_title_is_locked,
 )
 from foresight_x.chat.option_coach import build_option_chat_prompt
 from foresight_x.chat.pending_action import (
@@ -2727,13 +2728,12 @@ def get_shadow_chat_thread(thread_id: str) -> dict:
     t = _load_thread_or_404(thread_id, uid=uid)
     if ensure_therapy_report_artifact(t):
         save_thread(t)
-    try:
-        chat_pm = _resolved_chat_model(settings, "shadow_chat", None, profile=load_user_profile(settings))
-        ctx_title, _ = _build_context(settings, llm_model=chat_pm)
-        if maybe_refresh_thread_title(t, llm=ctx_title.llm):
-            save_thread(t)
-    except Exception:
-        _log.debug("thread title refresh failed", exc_info=True)
+    if not thread_title_is_locked(t):
+        try:
+            if _refine_thread_title_first_turn(t, _first_user_message_content(t), llm=None):
+                save_thread(t)
+        except Exception:
+            _log.debug("thread title bootstrap failed", exc_info=True)
     return {"thread": _shadow_response_thread(t)}
 
 

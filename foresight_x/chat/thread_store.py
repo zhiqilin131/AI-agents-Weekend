@@ -171,7 +171,9 @@ Return JSON with only: title
 
 _AUTOTITLE_LLM_ATTEMPTED_THREAD_IDS: set[str] = set()
 _TITLE_SOURCE_AUTO = "auto"
+_TITLE_SOURCE_FIRST_TURN = "first_user_turn"
 _TITLE_SOURCE_MANUAL = "manual"
+_TITLE_SOURCES_LOCKED = frozenset({_TITLE_SOURCE_FIRST_TURN, _TITLE_SOURCE_MANUAL})
 
 
 def _is_placeholder_title(title: str | None) -> bool:
@@ -324,12 +326,24 @@ def _maybe_autotitle_from_messages(thread: dict[str, Any]) -> bool:
 
 def _ensure_thread_title_source(thread: dict[str, Any]) -> None:
     src = str(thread.get("title_source") or "").strip().lower()
-    if src in {_TITLE_SOURCE_AUTO, _TITLE_SOURCE_MANUAL}:
+    if src in {_TITLE_SOURCE_AUTO, _TITLE_SOURCE_FIRST_TURN, _TITLE_SOURCE_MANUAL}:
         return
     if _is_placeholder_title(thread.get("title")):
         thread["title_source"] = _TITLE_SOURCE_AUTO
     else:
         thread["title_source"] = _TITLE_SOURCE_MANUAL
+
+
+def _thread_list_sort_key(row: dict[str, Any]) -> float:
+    raw = row.get("updated_at") or row.get("created_at") or ""
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sort_threads_newest_first(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(rows, key=_thread_list_sort_key, reverse=True)
 
 
 def _compute_best_title_from_messages(
@@ -442,7 +456,7 @@ def _local_create_thread(
 def _local_list_threads(*, user_id: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     d = _user_thread_dir(user_id)
-    for p in sorted(d.glob("*.json"), reverse=True):
+    for p in d.glob("*.json"):
         try:
             t = json.loads(p.read_text(encoding="utf-8"))
             slime = str(t.get("slime_type") or "generalized")
@@ -478,7 +492,7 @@ def _local_list_threads(*, user_id: str) -> list[dict[str, Any]]:
             )
         except Exception:
             continue
-    return sorted(out, key=lambda x: str(x.get("updated_at") or ""), reverse=True)
+    return _sort_threads_newest_first(out)
 
 
 def _local_load_thread(thread_id: str | None, *, user_id: str, allow_create: bool = True) -> dict[str, Any]:
@@ -873,19 +887,30 @@ def list_threads(*, user_id: str) -> list[dict[str, Any]]:
                 if first:
                     pseudo["messages"] = [{"role": "user", "content": first}]
                 title = sync_list_thread_title(pseudo, llm=None)
-                if title != str(r.get("title") or "").strip() and tid:
+                title_src = str(md.get("title_source") or _TITLE_SOURCE_AUTO).strip().lower()
+                if (
+                    title != str(r.get("title") or "").strip()
+                    and tid
+                    and title_src not in _TITLE_SOURCES_LOCKED
+                ):
                     try:
-                        client.table("threads").update({"title": title}).eq("id", tid).execute()
+                        patch: dict[str, Any] = {"title": title}
+                        if first and title_src == _TITLE_SOURCE_AUTO:
+                            patch["metadata"] = {**md, "title": title, "title_source": _TITLE_SOURCE_FIRST_TURN}
+                        client.table("threads").update(patch).eq("id", tid).execute()
                     except Exception:
                         _log.debug("supabase thread title persist failed", exc_info=True)
                 out.append(
                     {
                         "thread_id": tid,
                         "title": title,
-                        "title_source": (
-                            (r.get("metadata") or {}).get("title_source", _TITLE_SOURCE_AUTO)
-                            if isinstance(r.get("metadata"), dict)
-                            else _TITLE_SOURCE_AUTO
+                        "title_source": str(
+                            pseudo.get("title_source")
+                            or (
+                                (r.get("metadata") or {}).get("title_source", _TITLE_SOURCE_AUTO)
+                                if isinstance(r.get("metadata"), dict)
+                                else _TITLE_SOURCE_AUTO
+                            )
                         ),
                         "updated_at": r.get("updated_at") or r.get("created_at"),
                         "created_at": r.get("created_at"),
@@ -919,7 +944,7 @@ def list_threads(*, user_id: str) -> list[dict[str, Any]]:
                         ),
                     }
                 )
-            return out
+            return _sort_threads_newest_first(out)
         except Exception as exc:
             _handle_supabase_failure("list_threads", user_id, exc)
     else:

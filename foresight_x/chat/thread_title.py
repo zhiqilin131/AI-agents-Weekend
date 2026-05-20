@@ -20,6 +20,15 @@ _STRIP_PREFIXES = (
 
 _PLACEHOLDER_TITLES = frozenset({"new chat", "therapy session", "chat", ""})
 
+_TITLE_SOURCE_FIRST_TURN = "first_user_turn"
+_TITLE_SOURCE_MANUAL = "manual"
+_TITLE_SOURCES_LOCKED = frozenset({_TITLE_SOURCE_FIRST_TURN, _TITLE_SOURCE_MANUAL})
+
+
+def thread_title_is_locked(thread: dict[str, Any]) -> bool:
+    src = str(thread.get("title_source") or "").strip().lower()
+    return src in _TITLE_SOURCES_LOCKED
+
 
 class _ThreadTitleOut(BaseModel):
     title: str = Field(..., min_length=2, max_length=80)
@@ -248,6 +257,8 @@ def _title_matches_intake_category(thread: dict[str, Any], stored: str) -> bool:
 
 def title_needs_refresh(thread: dict[str, Any]) -> bool:
     """Whether stored title should be replaced with a summarized label."""
+    if thread_title_is_locked(thread):
+        return False
     stored = (thread.get("title") or "").strip()
     if is_placeholder_thread_title(stored):
         return True
@@ -298,6 +309,8 @@ def resolve_thread_title(thread: dict[str, Any], llm: Any | None = None) -> str:
     st = str(thread.get("slime_type") or "generalized").strip().lower()
     default = "Therapy session" if st == "wellbeing" else "New chat"
     stored = (thread.get("title") or "").strip() or default
+    if thread_title_is_locked(thread) and not is_placeholder_thread_title(stored):
+        return stored
     first = _first_user_message_content(thread)
     if first:
         obvious_bad = (
@@ -307,15 +320,13 @@ def resolve_thread_title(thread: dict[str, Any], llm: Any | None = None) -> str:
             or _title_is_verbatim_user_opener(stored, first)
             or _title_matches_intake_category(thread, stored)
         )
-        # List endpoints often run without an LLM. If a prior turn already produced a
-        # real summarized title, keep it instead of downgrading to the heuristic opener.
-        if not obvious_bad and thread.get("title_source") == "first_user_turn":
+        if not obvious_bad and not title_needs_refresh(thread):
             return stored
         if llm is None and not obvious_bad:
             return stored
-        if llm is not None or obvious_bad or not _stored_title_reflects_first_message(stored, first):
+        if llm is not None or obvious_bad:
             return summarize_thread_title(first, llm, slime_type=st)
-        return summarize_thread_title(first, llm, slime_type=st)
+        return stored
     return stored if not is_placeholder_thread_title(stored) else default
 
 
@@ -356,7 +367,7 @@ def refine_thread_title_first_turn(
         )
         if applied:
             return applied
-    return maybe_refresh_thread_title(thread, llm=llm)
+    return None
 
 
 def maybe_refresh_thread_title(
@@ -364,6 +375,8 @@ def maybe_refresh_thread_title(
     *,
     llm: Any | None = None,
 ) -> str | None:
+    if thread_title_is_locked(thread):
+        return None
     first = _first_user_message_content(thread)
     if not first and not title_needs_refresh(thread):
         return None
@@ -377,12 +390,17 @@ def maybe_refresh_thread_title(
 
 def sync_list_thread_title(thread: dict[str, Any], *, llm: Any | None = None) -> str:
     """Resolve display title for thread lists; mutates ``thread['title']`` when upgraded."""
-    display = resolve_thread_title(thread, llm)
+    st = str(thread.get("slime_type") or "generalized").strip().lower()
+    default = "Therapy session" if st == "wellbeing" else "New chat"
+    if thread_title_is_locked(thread):
+        stored = (thread.get("title") or "").strip()
+        return stored or default
+    display = resolve_thread_title(thread, llm=None)
     current = (thread.get("title") or "").strip()
     if display and display != current:
         thread["title"] = display
-        if llm is not None and not _title_is_verbatim_user_opener(display, _first_user_message_content(thread)):
-            thread["title_source"] = "first_user_turn"
+        if _first_user_message_content(thread):
+            thread["title_source"] = _TITLE_SOURCE_FIRST_TURN
     return display
 
 
@@ -422,6 +440,5 @@ def apply_title_for_first_user_message(
     if new_title == current:
         return None
     thread["title"] = new_title
-    if llm is not None and new_title != heuristic_thread_title(first_user):
-        thread["title_source"] = "first_user_turn"
+    thread["title_source"] = _TITLE_SOURCE_FIRST_TURN
     return new_title

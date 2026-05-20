@@ -17,7 +17,7 @@ function toStorageKey(key: string): string {
 
 export const UI_CACHE_TTL = {
   shadowThreadsMs: 90_000,
-  shadowThreadDetailMs: 60_000,
+  shadowThreadDetailMs: 300_000,
   historyTracesMs: 90_000,
 } as const;
 

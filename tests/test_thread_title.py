@@ -4,12 +4,15 @@ from unittest.mock import MagicMock
 
 from foresight_x.chat.thread_store import append_message, create_thread
 from foresight_x.chat.thread_title import (
+    _TITLE_SOURCE_FIRST_TURN,
     apply_title_for_first_user_message,
     apply_title_from_wellbeing_intake,
     heuristic_thread_title,
+    maybe_refresh_thread_title,
     refine_thread_title_first_turn,
     resolve_thread_title,
     summarize_thread_title,
+    sync_list_thread_title,
     title_needs_refresh,
 )
 
@@ -28,6 +31,7 @@ def test_apply_title_only_on_first_user_turn() -> None:
     assert t["title"] == "New chat"
     updated = apply_title_for_first_user_message(t, "Should I go to the gym?")
     assert updated is not None
+    assert t.get("title_source") == _TITLE_SOURCE_FIRST_TURN
     first = t["title"]
     assert first != "New chat"
     append_message(t, role="user", content="Another question", mode="normal")
@@ -153,3 +157,30 @@ def test_list_resolution_does_not_downgrade_summarized_title_without_llm() -> No
         "messages": [{"role": "user", "content": first}],
     }
     assert resolve_thread_title(thread, llm=None) == "Stress and sleep before exam"
+
+
+def test_locked_title_skips_maybe_refresh() -> None:
+    thread = {
+        "title": "Stable label",
+        "title_source": _TITLE_SOURCE_FIRST_TURN,
+        "slime_type": "generalized",
+        "messages": [
+            {"role": "user", "content": "Completely different topic now"},
+            {"role": "user", "content": "Second message"},
+        ],
+    }
+    assert title_needs_refresh(thread) is False
+    assert maybe_refresh_thread_title(thread, llm=MagicMock()) is None
+    assert sync_list_thread_title(thread) == "Stable label"
+    assert thread["title"] == "Stable label"
+
+
+def test_sync_list_does_not_mutate_locked_title() -> None:
+    thread = {
+        "title": "Exam stress",
+        "title_source": _TITLE_SOURCE_FIRST_TURN,
+        "slime_type": "wellbeing",
+        "messages": [{"role": "user", "content": "really stressed about exams"}],
+    }
+    assert sync_list_thread_title(thread) == "Exam stress"
+    assert thread["title"] == "Exam stress"
