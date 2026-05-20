@@ -45,7 +45,7 @@ export function ShadowChatComposerDock({
   useEffect(() => {
     const b = (bootstrapText || '').trim();
     if (!b) return;
-    setValue((prev) => (prev.trim() ? prev : b));
+    setValue(b);
     onBootstrapConsumed?.();
   }, [bootstrapText, onBootstrapConsumed]);
 
