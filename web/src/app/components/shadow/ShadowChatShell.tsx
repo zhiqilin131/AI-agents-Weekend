@@ -414,20 +414,9 @@ export function ShadowChatShell({
       void createChatWithSlime(initialSlimeType);
       return;
     }
-    // User explicitly asked for a fresh chat; show active draft in sidebar as feedback.
+    // User explicitly asked for a fresh chat — always choose Mochi vs Rimumu (therapy).
     setRevealDraftInSidebar(true);
-    // Keep the slime picker only when there is no existing draft/new-chat shell yet.
-    const activeIsDraft = Boolean(
-      activeThread && isDraftThread(activeThread, resolveThreadSlimeType(activeThread)),
-    );
-    const hasExistingDraftShell =
-      activeIsDraft ||
-      threads.some((thread) => isDraftThread(thread, resolveThreadSlimeType(thread)));
-    if (!hasExistingDraftShell) {
-      setPickSlimeOpen(true);
-      return;
-    }
-    void createChatWithSlime(activeSlimeType);
+    setPickSlimeOpen(true);
   };
 
   const deleteProfileMemoryFromToast = useCallback(
