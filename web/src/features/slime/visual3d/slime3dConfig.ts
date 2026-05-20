@@ -6,8 +6,9 @@
  * - unset in local dev → off (use `web/.env.development` with `VITE_SLIME_3D=1`)
  */
 export function parseSlime3DFlag(flag: string | undefined, isProd: boolean): boolean {
-  if (flag === '0' || flag === 'false') return false;
-  if (flag === '1' || flag === 'true') return true;
+  const f = flag?.trim();
+  if (f === '0' || f === 'false') return false;
+  if (f === '1' || f === 'true') return true;
   return isProd;
 }
 
