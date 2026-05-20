@@ -95,6 +95,7 @@ export function ShadowChatShell({
   const [threads, setThreads] = useState<ShadowThread[]>([]);
   const [threadsLoaded, setThreadsLoaded] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [revealDraftInSidebar, setRevealDraftInSidebar] = useState(false);
   const [messages, setMessages] = useState<ShadowMessage[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
   const [timeline, setTimeline] = useState<string[]>(['Ready']);
@@ -362,6 +363,8 @@ export function ShadowChatShell({
       void createChatWithSlime(initialSlimeType);
       return;
     }
+    // User explicitly asked for a fresh chat; show active draft in sidebar as feedback.
+    setRevealDraftInSidebar(true);
     // Keep the slime picker only when there is no existing draft/new-chat shell yet.
     const activeIsDraft = Boolean(
       activeThread && isDraftThread(activeThread, resolveThreadSlimeType(activeThread)),
@@ -405,6 +408,7 @@ export function ShadowChatShell({
       setActiveThreadId(null);
       setMessages([]);
       setThreadsLoaded(false);
+      setRevealDraftInSidebar(false);
       autoCreateThreadRef.current = false;
       setPendingAction(null);
       lastDecisionSuggestionRef.current = null;
@@ -839,8 +843,12 @@ export function ShadowChatShell({
   );
 
   const sidebarThreads = useMemo(
-    () => threads.filter((thread) => !isDraftThread(thread, resolveThreadSlimeType(thread))),
-    [threads],
+    () =>
+      threads.filter((thread) => {
+        if (!isDraftThread(thread, resolveThreadSlimeType(thread))) return true;
+        return revealDraftInSidebar && thread.thread_id === activeThreadId;
+      }),
+    [threads, revealDraftInSidebar, activeThreadId],
   );
 
   const beginDecisionReport = async (
