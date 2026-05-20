@@ -39,14 +39,12 @@ import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
 import { BuddyTooltip } from './BuddyTooltip';
 import { calendarMutationKindFromTranscript } from './slimeVoiceIntentGuards';
 import {
-  completeSpeakableParts,
   groupSpeakableParts,
-  newlyCompleteSpeakableParts,
   normalizeSpeechText,
-  speakPartDedupeKey,
+  resolveVoiceDisplayText,
   splitSpeakableParts,
-  tailSpeakablePartsAfterQueue,
 } from './slimeTtsChunks';
+import { StreamTtsLedger } from './slimeStreamTtsLedger';
 import { normalizeTtsVoiceName } from '../../utils/ttsVoices';
 import { getSlimeIdentity, slimeSupportsDecisionMode, ttsVoiceForSlimeType } from './slimeIdentity';
 import { SLIME_CTA_BTN_CLASS, slimeCtaButtonStyle } from './slimeCtaButton';
@@ -176,6 +174,7 @@ type RunTtsOptions = {
   /** More sequence chunks follow — keep gen alive, avoid idle flash between parts. */
   sequenceHasMore?: boolean;
   skipCancel?: boolean;
+
 };
 
 function mapVoiceToAdvisor(v: VoiceAgentState): SlimeAdvisorState {
@@ -542,15 +541,14 @@ export function SlimeVoiceAgent({
   const buddyTtsLoadPendingRef = useRef(false);
   /** Bumps when a new TTS request or recording session invalidates in-flight playback. */
   const ttsGenRef = useRef(0);
-  /** Stream TTS: sentences already queued for playback this turn. */
-  const streamQueuedCountRef = useRef(0);
   const streamTtsActiveRef = useRef(false);
   const streamPlayChainRef = useRef<Promise<void>>(Promise.resolve());
   const streamPrefetchRef = useRef<Map<string, Promise<Blob | null>>>(new Map());
-  const streamChunkIndexRef = useRef(0);
-  /** Normalized sentence keys already handed to the stream TTS queue this turn. */
-  const streamQueuedPartKeysRef = useRef<Set<string>>(new Set());
+  const streamLedgerRef = useRef(new StreamTtsLedger());
+  const streamBubbleDisplayRef = useRef('');
   const lastStreamedReplyRef = useRef('');
+  /** Buddy voice stream received text deltas — defer TTS until the full reply is ready (single read). */
+  const voiceStreamPendingRef = useRef(false);
   const speechUtteranceRef = useRef(0);
   /** Prevents stream/TTS races from replacing a full bubble with a shorter streamed prefix. */
   const lastBubbleTextRef = useRef('');
@@ -661,13 +659,13 @@ export function SlimeVoiceAgent({
   }, []);
 
   const resetStreamTtsState = useCallback(() => {
-    streamQueuedCountRef.current = 0;
     streamTtsActiveRef.current = false;
     streamPlayChainRef.current = Promise.resolve();
     streamPrefetchRef.current.clear();
-    streamChunkIndexRef.current = 0;
-    streamQueuedPartKeysRef.current.clear();
+    streamLedgerRef.current.reset();
+    streamBubbleDisplayRef.current = '';
     lastStreamedReplyRef.current = '';
+    voiceStreamPendingRef.current = false;
   }, []);
 
   const cancelBuddyAudio = useCallback(() => {
@@ -813,11 +811,9 @@ export function SlimeVoiceAgent({
             settle(false);
             return;
           }
-          if (opts?.sequenceHasMore) {
-            releaseBuddyAudioPlayback();
-          } else {
-            cancelBuddyAudio();
-            if (gen === ttsGenRef.current) setVoiceState('idle');
+          releaseBuddyAudioPlayback();
+          if (!opts?.sequenceHasMore && gen === ttsGenRef.current) {
+            setVoiceState('idle');
           }
           completeOutput();
         };
@@ -995,6 +991,9 @@ export function SlimeVoiceAgent({
       }
 
       const finishAll = () => {
+        buddyTtsLoadPendingRef.current = false;
+        setBuddyAudioPlaying(false);
+        setVoiceState('idle');
         if (displayText.trim()) {
           showSpeechOutput(displayText, {
             speaking: false,
@@ -1068,7 +1067,8 @@ export function SlimeVoiceAgent({
   );
 
   const appendStreamPlaybackFinish = useCallback(
-    (displayText: string, opts?: RunTtsOptions) => {
+    (spokenFlushText: string, opts?: RunTtsOptions) => {
+      const displayText = normalizeSpeechText(opts?.displayText || spokenFlushText);
       const gen = ttsGenRef.current;
       streamPlayChainRef.current = streamPlayChainRef.current.then(async () => {
         if (gen !== ttsGenRef.current) return;
@@ -1079,6 +1079,7 @@ export function SlimeVoiceAgent({
             speaking: false,
             source: opts?.source ?? 'assistant',
             evidenceItems: opts?.evidenceItems,
+            utteranceId: speechUtteranceRef.current,
           });
         }
         if (gen === ttsGenRef.current) setVoiceState('idle');
@@ -1088,77 +1089,139 @@ export function SlimeVoiceAgent({
     [showSpeechOutput],
   );
 
-  const enqueueStreamSpeakPart = useCallback(
-    (part: string, displayText: string, opts: RunTtsOptions | undefined) => {
-      const trimmed = part.trim();
-      if (!trimmed) return;
-      const dedupeKey = speakPartDedupeKey(trimmed);
-      if (streamQueuedPartKeysRef.current.has(dedupeKey)) return;
-      streamQueuedPartKeysRef.current.add(dedupeKey);
-      const voiceOff = slimeProfile.voice?.enabled === false;
-      const useTts = opts?.force === true || !voiceOff;
-      if (!useTts) return;
-
+  const runStreamDrainLoop = useCallback(
+    async (gen: number, opts: RunTtsOptions | undefined) => {
       const buddyUnifiedReveal = !isCalendarVariant;
-      const gen = ttsGenRef.current;
-      const idx = streamChunkIndexRef.current;
-      streamChunkIndexRef.current += 1;
-      const key = `stream-${gen}-${idx}`;
-      const notifyCredits = idx === 0;
-      streamPrefetchRef.current.set(key, fetchTtsBlob(trimmed, key, notifyCredits));
+      const bubbleText = streamBubbleDisplayRef.current;
+      const ledger = streamLedgerRef.current;
 
-      streamPlayChainRef.current = streamPlayChainRef.current.then(async () => {
+      while (ledger.hasMoreToPlay()) {
         if (gen !== ttsGenRef.current) return;
-        try {
-          const pref = streamPrefetchRef.current.get(key);
-          const blob = pref ? await pref : await fetchTtsBlob(trimmed, key, false);
-          streamPrefetchRef.current.delete(key);
-          if (!blob || gen !== ttsGenRef.current) return;
-          if (idx === 0) {
-            buddyTtsLoadPendingRef.current = true;
-            if (buddyUnifiedReveal) {
-              setVoiceState('speaking');
-            } else {
-              setVoiceState('preparing_voice');
-            }
+
+        const chunk = ledger.chunkAtPlayCursor();
+        if (!chunk) {
+          ledger.playCursor += 1;
+          continue;
+        }
+        if (chunk.state === 'done' || chunk.state === 'failed') {
+          ledger.playCursor += 1;
+          continue;
+        }
+
+        const part = chunk.text;
+        const sequenceHasMore = ledger.sequenceHasMore();
+        const prefetchKey = ledger.prefetchKey(gen, chunk);
+
+        let blob: Blob | null = null;
+        const prefetched = streamPrefetchRef.current.get(prefetchKey);
+        streamPrefetchRef.current.delete(prefetchKey);
+        if (prefetched) {
+          try {
+            blob = await prefetched;
+          } catch {
+            blob = null;
           }
-          await playTtsBlob(
+        }
+        for (let attempt = 0; attempt < 3 && !blob; attempt += 1) {
+          if (gen !== ttsGenRef.current) return;
+          blob = await fetchTtsBlob(
+            part,
+            `stream-${gen}-${chunk.key}-a${attempt}`,
+            ledger.playCursor === 0 && attempt === 0,
+          );
+        }
+
+        if (!blob) {
+          ledger.markFailed();
+          continue;
+        }
+
+        if (ledger.playCursor === 0) {
+          buddyTtsLoadPendingRef.current = true;
+          setVoiceState(buddyUnifiedReveal ? 'speaking' : 'preparing_voice');
+        }
+
+        const playIdx = ledger.playCursor;
+        ledger.markPlaying();
+        try {
+          const played = await playTtsBlob(
             blob,
             gen,
-            trimmed,
+            part,
             {
               ...opts,
-              suppressBubble: buddyUnifiedReveal || idx > 0,
+              suppressBubble: buddyUnifiedReveal || playIdx > 0,
               keepSpeakingState: buddyUnifiedReveal,
               suppressSpeakingEnd: true,
-              sequenceHasMore: true,
+              sequenceHasMore,
               skipCancel: true,
             },
-            () => {
-              /* next sentence runs after playTtsBlob resolves (audio ended) */
-            },
-            displayText,
+            () => undefined,
+            bubbleText || part,
           );
+          if (played) {
+            ledger.markDone(part);
+          } else {
+            ledger.markFailed();
+          }
         } catch {
           setTtsHint('TTS voice was unavailable — check API / credits, then try again.');
+          ledger.markFailed();
         }
+      }
+    },
+    [fetchTtsBlob, isCalendarVariant, playTtsBlob, slimeProfile.voice],
+  );
+
+  const pushStreamSpeakPart = useCallback(
+    (part: string, displayText: string, opts: RunTtsOptions | undefined): boolean => {
+      const ledger = streamLedgerRef.current;
+      const idx = ledger.enqueue(part);
+      if (idx === null) return false;
+
+      const voiceOff = slimeProfile.voice?.enabled === false;
+      const useTts = opts?.force === true || !voiceOff;
+      if (!useTts) {
+        const c = ledger.chunks[idx];
+        if (c) c.state = 'failed';
+        return false;
+      }
+
+      if (displayText.trim()) {
+        streamBubbleDisplayRef.current = normalizeSpeechText(displayText);
+      }
+      const chunk = ledger.chunks[idx];
+      if (!chunk) return false;
+      const gen = ttsGenRef.current;
+      const prefetchKey = ledger.prefetchKey(gen, chunk);
+      if (!streamPrefetchRef.current.has(prefetchKey)) {
+        const notifyCredits = idx === 0;
+        streamPrefetchRef.current.set(prefetchKey, fetchTtsBlob(chunk.text, prefetchKey, notifyCredits));
+      }
+      return true;
+    },
+    [fetchTtsBlob, slimeProfile.voice],
+  );
+
+  const kickStreamDrain = useCallback(
+    (gen: number, opts?: RunTtsOptions) => {
+      streamPlayChainRef.current = streamPlayChainRef.current.then(async () => {
+        if (gen !== ttsGenRef.current) return;
+        await runStreamDrainLoop(gen, opts);
       });
     },
-    [fetchTtsBlob, isCalendarVariant, playTtsBlob, showSpeechOutput, slimeProfile.voice],
+    [runStreamDrainLoop],
   );
 
   const feedStreamingVoiceTts = useCallback(
     (fullText: string, opts?: RunTtsOptions) => {
       const normalized = normalizeSpeechText(fullText);
       if (!normalized) return;
-      const { newParts, completeCount } = newlyCompleteSpeakableParts(
-        normalized,
-        streamQueuedCountRef.current,
-      );
-      if (!newParts.length) return;
-      streamQueuedCountRef.current = completeCount;
+      const ledger = streamLedgerRef.current;
+      const newParts = ledger.feedNewParts(normalized);
       streamTtsActiveRef.current = true;
       unlockSlimeAudioContext();
+      streamBubbleDisplayRef.current = normalized;
       if (!isCalendarVariant) {
         showSpeechOutput(normalized, {
           speaking: true,
@@ -1166,11 +1229,14 @@ export function SlimeVoiceAgent({
           utteranceId: speechUtteranceRef.current,
         });
       }
+      if (!newParts.length) return;
+      let enqueued = false;
       for (const part of newParts) {
-        enqueueStreamSpeakPart(part, normalized, opts);
+        if (pushStreamSpeakPart(part, normalized, opts)) enqueued = true;
       }
+      if (enqueued) kickStreamDrain(ttsGenRef.current, opts);
     },
-    [enqueueStreamSpeakPart, isCalendarVariant, showSpeechOutput],
+    [isCalendarVariant, kickStreamDrain, pushStreamSpeakPart, showSpeechOutput],
   );
 
   const finishStreamVoicePlayback = useCallback(
@@ -1180,19 +1246,33 @@ export function SlimeVoiceAgent({
         opts?.onComplete?.();
         return;
       }
-      const tail = tailSpeakablePartsAfterQueue(normalized, streamQueuedCountRef.current);
-      streamQueuedCountRef.current = completeSpeakableParts(normalized).length;
-      for (const part of tail) {
-        enqueueStreamSpeakPart(part, normalized, opts);
+      const streamBase = normalized;
+      const displayText = normalizeSpeechText(opts?.displayText || streamBase);
+      streamBubbleDisplayRef.current = displayText;
+      const ledger = streamLedgerRef.current;
+      ledger.turnDone = true;
+
+      const tailParts = ledger.remainingCanonParts(streamBase);
+      let enqueuedTail = false;
+      for (const part of tailParts) {
+        if (pushStreamSpeakPart(part, displayText, opts)) enqueuedTail = true;
       }
-      appendStreamPlaybackFinish(normalized, opts);
+      if (enqueuedTail) kickStreamDrain(ttsGenRef.current, opts);
+
+      const gen = ttsGenRef.current;
       try {
+        streamPlayChainRef.current = streamPlayChainRef.current.then(async () => {
+          if (gen !== ttsGenRef.current) return;
+          await runStreamDrainLoop(gen, opts);
+          if (gen !== ttsGenRef.current) return;
+          appendStreamPlaybackFinish(displayText, opts);
+        });
         await streamPlayChainRef.current;
       } finally {
         resetStreamTtsState();
       }
     },
-    [appendStreamPlaybackFinish, enqueueStreamSpeakPart, resetStreamTtsState],
+    [appendStreamPlaybackFinish, kickStreamDrain, pushStreamSpeakPart, resetStreamTtsState, runStreamDrainLoop],
   );
 
   const mergeCalendarEvent = useCallback(
@@ -1415,16 +1495,22 @@ export function SlimeVoiceAgent({
       }
       const assistant = (data.assistant_text || '').trim();
       const toSpeak = (data.spoken_text || data.assistant_text || '').trim();
-
-      const evidenceItems = readEvidenceItems(data);
       const fe = data.frontend_action;
       const convTurn = Boolean(data.tool_result && typeof data.tool_result === 'object' && data.tool_result.conversation_turn);
+      const speakBody =
+        convTurn && data.spoken_sequence && data.spoken_sequence.length > 0
+          ? data.spoken_sequence.map((p) => p.trim()).filter(Boolean).join(' ')
+          : '';
+      const finalSpokenText = normalizeSpeechText(speakBody || toSpeak || assistant);
+
+      const evidenceItems = readEvidenceItems(data);
 
       const ttsCommon: RunTtsOptions = {
         force: true,
         evidenceItems,
         onComplete: () => {
           clearVoiceTurnBilling();
+          setBuddyAudioPlaying(false);
           setVoiceState('idle');
         },
         onMayHaveBlocked: () =>
@@ -1517,23 +1603,30 @@ export function SlimeVoiceAgent({
       if (!hasDecisionSuggestion) {
         onDecisionSuggestion?.(null);
       }
-      const speakBody =
-        convTurn && data.spoken_sequence && data.spoken_sequence.length > 0
-          ? data.spoken_sequence.map((p) => p.trim()).filter(Boolean).join(' ')
-          : toSpeak;
-      const voiceText = (assistant || speakBody || toSpeak).trim();
-      if (voiceText) {
-        if (streamTtsActiveRef.current) {
-          const streamFlushText = normalizeSpeechText(lastStreamedReplyRef.current || voiceText);
-          await finishStreamVoicePlayback(streamFlushText, {
+      if (finalSpokenText) {
+        const streamCanon = normalizeSpeechText(lastStreamedReplyRef.current);
+        const displayText = streamCanon
+          ? resolveVoiceDisplayText(streamCanon, finalSpokenText)
+          : finalSpokenText;
+        const hadStreamReply = voiceStreamPendingRef.current || streamTtsActiveRef.current;
+        if (hadStreamReply && streamCanon) {
+          voiceStreamPendingRef.current = false;
+          await finishStreamVoicePlayback(streamCanon, {
             ...ttsCommon,
-            displayText: voiceText,
+            displayText,
+            source: 'assistant',
+          });
+        } else if (hadStreamReply && !streamCanon) {
+          voiceStreamPendingRef.current = false;
+          await finishStreamVoicePlayback(finalSpokenText, {
+            ...ttsCommon,
+            displayText,
             source: 'assistant',
           });
         } else {
-          playFinalVoiceText(voiceText, {
+          playFinalVoiceText(finalSpokenText, {
             ...ttsCommon,
-            displayText: voiceText,
+            displayText,
             source: 'assistant',
           });
         }
@@ -1568,7 +1661,7 @@ export function SlimeVoiceAgent({
       if (evidenceItems.length > 0 && !savedMemoryThisTurn) {
         onMemoryEvidenceRetrieved?.(evidenceItems.length);
       }
-      if (!voiceText) {
+      if (!finalSpokenText) {
         buddyTtsLoadPendingRef.current = false;
         setBuddyAudioPlaying(false);
         setVoiceState('idle');
@@ -1714,14 +1807,24 @@ export function SlimeVoiceAgent({
             streamedText = streamedText ? `${streamedText}${delta}` : delta;
             lastStreamedReplyRef.current = streamedText;
             const draft = normalizeSpeechText(streamedText);
-            feedStreamingVoiceTts(streamedText, { force: true, source: 'assistant' });
-            if (draft && isCalendarVariant) {
+            if (isCalendarVariant) {
               onCalendarStatusLine?.(draft);
               setStreamDraftReply(draft);
-            } else if (draft && streamTtsActiveRef.current) {
-              setVoiceState((s) =>
-                s === 'speaking' || s === 'preparing_voice' ? s : 'preparing_voice',
-              );
+              feedStreamingVoiceTts(streamedText, { force: true, source: 'assistant' });
+            } else {
+              voiceStreamPendingRef.current = true;
+              if (draft) {
+                streamBubbleDisplayRef.current = draft;
+                showSpeechOutput(draft, {
+                  speaking: true,
+                  source: 'assistant',
+                  utteranceId: speechUtteranceRef.current,
+                });
+                setVoiceState((s) =>
+                  s === 'speaking' || s === 'preparing_voice' ? s : 'preparing_voice',
+                );
+              }
+              feedStreamingVoiceTts(streamedText, { force: true, source: 'assistant' });
             }
           } else if (type === 'error') {
             streamError = String(ev.message || 'voice_stream_failed');

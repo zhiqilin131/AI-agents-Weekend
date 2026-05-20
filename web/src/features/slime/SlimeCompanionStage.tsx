@@ -458,7 +458,7 @@ export function SlimeCompanionStage({
             {speechOutput?.text ? (
               <motion.div
                 ref={bubbleRef}
-                key={`${speechOutput.source}:${speechOutput.utteranceId ?? speechOutput.text}`}
+                key={`${speechOutput.source}:${speechOutput.utteranceId ?? 0}`}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -474,7 +474,7 @@ export function SlimeCompanionStage({
                 className={cn(
                   'slime-comic-bubble slime-comic-bubble-mouth-tail slime-comic-bubble-emerge pointer-events-auto absolute z-[110]',
                   /* Tail dots arc from Rimumu/Mochi's mouth to the bubble body. */
-                  'left-[68%] top-[3%] max-w-[min(78vw,34rem)]',
+                  'left-[74%] top-[3%] max-w-[min(72vw,34rem)]',
                   slimeType === 'wellbeing' ? 'slime-comic-bubble-wellbeing' : 'slime-comic-bubble-generalized',
                   slimeType === 'wellbeing' &&
                     'sm:max-w-[min(28rem,calc(100vw-22rem))]',
