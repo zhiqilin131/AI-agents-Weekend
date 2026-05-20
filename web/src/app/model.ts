@@ -62,7 +62,7 @@ export interface ReportSurface {
 export type SlimeColorTheme = 'aurora' | 'violet' | 'mint' | 'sunset' | 'lime' | 'silver' | 'custom';
 export type SlimePersonality = 'calm' | 'direct' | 'encouraging' | 'analytical' | 'playful' | 'cautious';
 export type SlimeShape = 'classic' | 'orb' | 'robot' | 'crystal' | 'ghost';
-export type SlimeAccessory = 'none' | 'glasses' | 'halo' | 'antenna' | 'scarf' | 'spark';
+export type SlimeAccessory = 'none' | 'halo' | 'antenna' | 'scarf' | 'spark';
 export type SlimeMotion = 'subtle' | 'normal' | 'expressive';
 
 export type SlimePersonalityPreset =

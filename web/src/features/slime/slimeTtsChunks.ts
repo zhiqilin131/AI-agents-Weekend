@@ -30,14 +30,29 @@ export function remainderAfterSpokenPrefix(full: string, spokenPrefix: string): 
   const pre = normalizeSpeechText(spokenPrefix);
   if (!fin) return '';
   if (!pre) return fin;
+  if (fin === pre) return '';
   if (fin.startsWith(pre)) return fin.slice(pre.length).trim();
+  if (pre.startsWith(fin)) return '';
+  const finParts = completeSpeakableParts(fin);
+  const preParts = completeSpeakableParts(pre);
+  let shared = 0;
+  for (let i = 0; i < Math.min(finParts.length, preParts.length); i++) {
+    if (speakPartDedupeKey(finParts[i]) !== speakPartDedupeKey(preParts[i])) break;
+    shared += 1;
+  }
+  if (shared > 0) {
+    const tailParts = finParts.slice(shared);
+    const fragmentParts = splitSpeakableParts(fin).slice(completeSpeakableParts(fin).length);
+    return [...tailParts, ...fragmentParts].join(' ').trim();
+  }
   const idx = fin.indexOf(pre);
   if (idx === 0) return fin.slice(pre.length).trim();
-  return fin;
+  // Avoid replaying the full reply when stream/final strings diverge slightly.
+  return '';
 }
 
 /** Split assistant reply into speakable parts (one per sentence). */
-export function splitSpeakableParts(text: string, maxParts = 4): string[] {
+export function splitSpeakableParts(text: string, maxParts = 24): string[] {
   const t = normalizeSpeechText(text);
   if (!t) return [];
   const parts = t.split(/(?<=[.!?。！？])\s+/).map((p) => p.trim()).filter(Boolean);
@@ -88,6 +103,13 @@ export function completeSpeakableParts(text: string, maxParts = 24): string[] {
   return parts;
 }
 
+/** Bubble text during stream TTS — only sentences already queued for playback. */
+export function streamBubbleDisplayText(fullText: string, queuedCompleteCount: number): string {
+  const complete = completeSpeakableParts(fullText);
+  if (!complete.length || queuedCompleteCount <= 0) return '';
+  return complete.slice(0, Math.min(queuedCompleteCount, complete.length)).join(' ');
+}
+
 /** Newly finished sentences since the last stream-TTS enqueue. */
 export function newlyCompleteSpeakableParts(
   fullText: string,
@@ -132,5 +154,158 @@ export function tailSpeakablePartsAfterQueue(
 
 /** Stable key for deduping stream TTS sentence chunks. */
 export function speakPartDedupeKey(part: string): string {
-  return normalizeSpeechText(part).toLowerCase();
+  return normalizeSpeechText(part)
+    .toLowerCase()
+    .replace(/[''`´\u2018\u2019]/g, "'")
+    .replace(/[""]/g, '"')
+    .replace(/[^a-z0-9\s.!?。！？'"()-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
+
+/** All speakable parts in order (complete sentences, then trailing fragment). */
+export function orderedSpeakableParts(text: string, maxParts = 24): string[] {
+  const normalized = normalizeSpeechText(text);
+  if (!normalized) return [];
+  const complete = completeSpeakableParts(normalized, maxParts);
+  const parts = splitSpeakableParts(normalized, maxParts);
+  const ordered = [...complete];
+  if (parts.length > complete.length) {
+    const fragment = parts.slice(complete.length).join(' ').trim();
+    if (fragment) ordered.push(fragment);
+  }
+  return ordered;
+}
+
+/** Parts in `text` not yet heard (by sentence key), preserving order. */
+export function missingPlayedParts(text: string, playedKeys: ReadonlySet<string>, maxParts = 24): string[] {
+  return orderedSpeakableParts(text, maxParts).filter((part) => !playedKeys.has(speakPartDedupeKey(part)));
+}
+
+/** True when this exact TTS chunk is already waiting in the ordered play queue. */
+export function chunkPendingInQueue(part: string, pendingChunks: readonly string[]): boolean {
+  const key = speakPartDedupeKey(part);
+  return pendingChunks.some((c) => speakPartDedupeKey(c) === key);
+}
+
+/**
+ * Stream-only tail: sentences from the SSE canon not yet played and not already
+ * waiting in the ordered queue. Never pulls from API final text (avoids re-reading
+ * reworded duplicates when display/spoken_sequence diverges from stream).
+ */
+export function streamRemainingSpeakParts(
+  streamText: string,
+  playedKeys: ReadonlySet<string>,
+  pendingChunks: readonly string[],
+  maxParts = 24,
+): string[] {
+  const pendingKeys = new Set<string>();
+  for (const chunk of pendingChunks) {
+    for (const sentence of splitSpeakableParts(chunk, maxParts)) {
+      pendingKeys.add(speakPartDedupeKey(sentence));
+    }
+  }
+  return orderedSpeakableParts(streamText, maxParts).filter((part) => {
+    const key = speakPartDedupeKey(part);
+    return !playedKeys.has(key) && !pendingKeys.has(key);
+  });
+}
+
+/** @deprecated Use streamRemainingSpeakParts — extension path caused duplicate reads. */
+export function streamFinishTailParts(
+  streamText: string,
+  _displayText: string,
+  _queuedCompleteCount: number,
+  playedKeys: ReadonlySet<string>,
+  pendingChunks: readonly string[],
+  maxParts = 24,
+): string[] {
+  return streamRemainingSpeakParts(streamText, playedKeys, pendingChunks, maxParts);
+}
+
+/** True if any sentence in `chunk` is already reserved for stream TTS. */
+export function hasQueuedSpeakPart(
+  chunk: string,
+  queuedKeys: ReadonlySet<string>,
+  maxParts = 24,
+): boolean {
+  return splitSpeakableParts(chunk, maxParts).some((s) => queuedKeys.has(speakPartDedupeKey(s)));
+}
+
+/** Reserve queue keys for every sentence in a (possibly grouped) TTS chunk. */
+export function markQueuedSpeakParts(
+  chunk: string,
+  queuedKeys: Set<string>,
+  maxParts = 24,
+): void {
+  for (const sentence of splitSpeakableParts(chunk, maxParts)) {
+    queuedKeys.add(speakPartDedupeKey(sentence));
+  }
+}
+
+export function unmarkQueuedSpeakParts(
+  chunk: string,
+  queuedKeys: Set<string>,
+  maxParts = 24,
+): void {
+  for (const sentence of splitSpeakableParts(chunk, maxParts)) {
+    queuedKeys.delete(speakPartDedupeKey(sentence));
+  }
+}
+
+/** Mark every sentence key covered by a (possibly grouped) spoken TTS chunk. */
+export function markPlayedSpeakParts(
+  spokenChunk: string,
+  playedKeys: Set<string>,
+  maxParts = 24,
+): void {
+  for (const sentence of splitSpeakableParts(spokenChunk, maxParts)) {
+    playedKeys.add(speakPartDedupeKey(sentence));
+  }
+}
+
+/** Parts of `text` not yet successfully queued for stream TTS this turn. */
+export function unspokenStreamParts(text: string, playedKeys: ReadonlySet<string>, maxParts = 24): string[] {
+  const normalized = normalizeSpeechText(text);
+  if (!normalized) return [];
+  const complete = completeSpeakableParts(normalized, maxParts);
+  const parts = splitSpeakableParts(normalized, maxParts);
+  const all: string[] = [...complete];
+  if (parts.length > complete.length) {
+    const fragment = parts.slice(complete.length).join(' ').trim();
+    if (fragment) all.push(fragment);
+  }
+  return all.filter((part) => !playedKeys.has(speakPartDedupeKey(part)));
+}
+
+/** Bubble text at turn end — extend with API final only when it continues the stream. */
+export function resolveVoiceDisplayText(streamed: string, apiFinal: string): string {
+  const s = normalizeSpeechText(streamed);
+  const f = normalizeSpeechText(apiFinal);
+  if (!s) return f;
+  if (!f) return s;
+  if (f.startsWith(s)) return f;
+  if (s.startsWith(f)) return s;
+  return s;
+}
+
+/**
+ * Speakable parts present in API final but not covered by the streamed prefix.
+ * Used once at turn end so a late closing line is not mistaken for a full re-read.
+ */
+export function extensionSpeakParts(
+  apiFinal: string,
+  streamed: string,
+  playedKeys: ReadonlySet<string>,
+  maxParts = 24,
+): string[] {
+  const ext = remainderAfterSpokenPrefix(apiFinal, streamed);
+  if (!ext) return [];
+  return unspokenStreamParts(ext, playedKeys, maxParts);
+}
+
+/** @deprecated Use resolveVoiceDisplayText + stream-only TTS. */
+export function resolveVoiceTurnText(streamed: string, apiFinal: string): string {
+  return resolveVoiceDisplayText(streamed, apiFinal);
+}
+

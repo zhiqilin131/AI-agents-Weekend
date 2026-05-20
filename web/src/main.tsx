@@ -14,6 +14,7 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import AppErrorPage from './pages/AppErrorPage';
 import OnboardingPage from './pages/OnboardingPage';
+import SlimeDev3DPage from './pages/SlimeDev3DPage';
 import { AuthProvider } from './auth/AuthContext';
 import { RequireAuthLayout } from './auth/RequireAuthLayout';
 import { unlockSlimeAudioContext } from './utils/slimeAudioContext';
@@ -50,6 +51,9 @@ const router = createHashRouter([
       { path: '/diary', element: <DiaryPage />, errorElement: <AppErrorPage /> },
       { path: '/execution', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },
       { path: '/execution/:decisionId', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },
+      ...(import.meta.env.DEV
+        ? [{ path: '/dev/slime-3d', element: <SlimeDev3DPage />, errorElement: <AppErrorPage /> }]
+        : []),
       { path: '*', element: <AppErrorPage />, errorElement: <AppErrorPage /> },
     ],
   },

@@ -5,7 +5,11 @@
 /** Buddy speech-bubble tail anchor (fixed at mouth; do not tie to bubble height). */
 export const SLIME_BUBBLE_MOUTH_Y = '10.9rem';
 
+/** Nudge tail chain slightly right of projected mouth center. */
+export const SLIME_BUBBLE_MOUTH_X_BIAS_PX = 12;
+
 export const SLIME_BUBBLE_CSS_VARS = {
+  mouthX: '--slime-bubble-mouth-x',
   mouthY: '--slime-bubble-mouth-y',
   tailSpeakDur: '--slime-bubble-tail-speak-dur',
   tailIdleDur: '--slime-bubble-tail-idle-dur',

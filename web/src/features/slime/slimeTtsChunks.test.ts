@@ -4,11 +4,16 @@ import {
   firstSpeakableSentence,
   newlyCompleteSpeakableParts,
   remainderAfterSpokenPrefix,
+  streamBubbleDisplayText,
   groupSpeakableParts,
   splitSpeakableParts,
   ttsPrefetchMatchesFinal,
+  extensionSpeakParts,
+  resolveVoiceDisplayText,
+  resolveVoiceTurnText,
   tailSpeakablePartsAfterQueue,
   unqueuedSpeakableParts,
+  unspokenStreamParts,
 } from './slimeTtsChunks';
 
 describe('slimeTtsChunks', () => {
@@ -39,6 +44,16 @@ describe('slimeTtsChunks', () => {
     );
   });
 
+  it('remainderAfterSpokenPrefix does not replay full text on prefix mismatch', () => {
+    const streamed = "I'm really sorry to hear that you're feeling sad right now, Bob.";
+    const finalText =
+      `${streamed} It's important to acknowledge those feelings. Consider taking a moment to do something you enjoy.`;
+    expect(remainderAfterSpokenPrefix(finalText, streamed)).toBe(
+      "It's important to acknowledge those feelings. Consider taking a moment to do something you enjoy.",
+    );
+    expect(remainderAfterSpokenPrefix(finalText, 'Totally different prefix.')).toBe('');
+  });
+
   it('splitSpeakableParts splits on sentence boundaries', () => {
     const parts = splitSpeakableParts('First line. Second line here?');
     expect(parts).toEqual(['First line.', 'Second line here?']);
@@ -55,6 +70,40 @@ describe('slimeTtsChunks', () => {
     const pref = 'Rose is your girlfriend and';
     const fin = 'Rose is your girlfriend and you plan October visits.';
     expect(ttsPrefetchMatchesFinal(pref, fin)).toBe(true);
+  });
+
+  it('resolveVoiceDisplayText extends stream but keeps stream when API diverges', () => {
+    const streamed =
+      "Let's explore some events you can attend, Bob! Since you're looking for richer connections.";
+    const apiFinal =
+      "Let's explore events, Bob! Since you want connections, check local meetups for soccer or rap.";
+    expect(resolveVoiceDisplayText(streamed, apiFinal)).toBe(streamed);
+    expect(resolveVoiceDisplayText(streamed, `${streamed} More at the end.`)).toBe(`${streamed} More at the end.`);
+    expect(resolveVoiceTurnText(streamed, apiFinal)).toBe(streamed);
+  });
+
+  it('unspokenStreamParts with played keys skips heard sentences only', () => {
+    const heard = new Set(['alpha.', 'beta.']);
+    const full = 'Alpha. Beta. Gamma.';
+    expect(unspokenStreamParts(full, heard)).toEqual(['Gamma.']);
+  });
+
+  it('extensionSpeakParts only returns API tail not already played', () => {
+    const streamed =
+      'It sounds like dinner with Stephen could help. Eating together can recharge.';
+    const apiFinal = `${streamed} Consider inviting Stephen over for dinner instead of eating alone.`;
+    const played = new Set(['it sounds like dinner with stephen could help.', 'eating together can recharge.']);
+    expect(extensionSpeakParts(apiFinal, streamed, played)).toEqual([
+      'Consider inviting Stephen over for dinner instead of eating alone.',
+    ]);
+    expect(extensionSpeakParts(apiFinal, apiFinal, played)).toEqual([]);
+  });
+
+  it('streamBubbleDisplayText only includes queued complete sentences', () => {
+    const full = 'First sentence. Second sentence. Third without end';
+    expect(streamBubbleDisplayText(full, 0)).toBe('');
+    expect(streamBubbleDisplayText(full, 1)).toBe('First sentence.');
+    expect(streamBubbleDisplayText(full, 2)).toBe('First sentence. Second sentence.');
   });
 
   it('newlyCompleteSpeakableParts waits for punctuation', () => {
@@ -74,6 +123,12 @@ describe('slimeTtsChunks', () => {
       'One. Two. Three. Four. Five. It might help shift some of that weight, even just a little.';
     const completeCount = 6;
     expect(tailSpeakablePartsAfterQueue(full, completeCount)).toEqual([]);
+  });
+
+  it('unspokenStreamParts skips keys already played', () => {
+    const full = 'Alpha. Beta. Gamma.';
+    const played = new Set(['alpha.', 'beta.']);
+    expect(unspokenStreamParts(full, played)).toEqual(['Gamma.']);
   });
 
   it('tailSpeakablePartsAfterQueue returns only new complete plus trailing fragment', () => {

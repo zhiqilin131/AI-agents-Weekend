@@ -588,7 +588,9 @@
 }
 
 .slime-comic-bubble-mouth-tail {
-  transform-origin: -3.2rem 5.25rem;
+  /* Leftmost tail dot (mouth side); ::after sits ~2rem toward the bubble. */
+  --slime-bubble-mouth-x-fallback: calc(-3.58rem + 0.48rem);
+  transform-origin: calc(-3.2rem + 0.48rem) 5.25rem;
 }
 
 .slime-comic-bubble-mouth-tail.slime-comic-bubble-emerge {
@@ -601,7 +603,7 @@
 }
 
 .slime-comic-bubble-mouth-tail::before {
-  left: -0.78rem;
+  left: calc(var(--slime-bubble-mouth-x, var(--slime-bubble-mouth-x-fallback)) + 2.8rem);
   top: calc(var(--slime-bubble-mouth-y) - 0.72rem);
   width: 0.62rem;
   height: 0.62rem;
@@ -612,7 +614,7 @@
 }
 
 .slime-comic-bubble-mouth-tail::after {
-  left: -1.58rem;
+  left: calc(var(--slime-bubble-mouth-x, var(--slime-bubble-mouth-x-fallback)) + 2rem);
   top: var(--slime-bubble-mouth-y);
   width: 0.42rem;
   height: 0.42rem;

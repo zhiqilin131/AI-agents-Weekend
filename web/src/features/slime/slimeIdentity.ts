@@ -179,6 +179,22 @@ export function studioBackgroundStyle(slimeType: SlimeType): string {
   );
 }
 
+/** Slime Buddy stage canvas — ~30% whiter than theme gradients. */
+export function buddyPageCanvasBackground(slimeType: SlimeType): { base: string; overlay: string } {
+  const t = getSlimeIdentity(slimeType).theme;
+  const mix = (color: string) => `color-mix(in srgb, ${color} 70%, white)`;
+  const midStop = slimeType === 'wellbeing' ? '#fff5f7' : '#fff5fb';
+  return {
+    base:
+      `radial-gradient(circle at 50% 18%, color-mix(in srgb, ${mix(t.highlight)} 82%, transparent), transparent 28%), ` +
+      `linear-gradient(135deg, ${mix(t.background)} 0%, ${mix(midStop)} 42%, ${mix(t.surface)} 100%)`,
+    overlay:
+      `radial-gradient(ellipse at 50% 38%, color-mix(in srgb, ${t.glow} 72%, white), transparent 58%), ` +
+      `radial-gradient(circle at 18% 72%, color-mix(in srgb, ${t.secondary} 24%, transparent), transparent 32%), ` +
+      `radial-gradient(circle at 82% 70%, color-mix(in srgb, ${t.accent} 19%, transparent), transparent 34%)`,
+  };
+}
+
 /** Full-page chat shell background — always light and soft */
 export function chatPageBackgroundStyle(slimeType: SlimeType): string {
   const t = getSlimeIdentity(slimeType).theme;
