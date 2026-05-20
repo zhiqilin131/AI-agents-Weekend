@@ -43,6 +43,7 @@ export function useSlimeWebGL(force2D = false): UseSlimeWebGLResult {
     setWebglOk(detectWebGL());
   }, []);
 
-  const use3D = SLIME_3D_ENABLED && !force2D && webglOk && !reducedMotion;
+  // Keep WebGL slime visible when OS "Reduce motion" is on — only dial down motion in scene/UI.
+  const use3D = SLIME_3D_ENABLED && !force2D && webglOk;
   return { use3D, reducedMotion };
 }
