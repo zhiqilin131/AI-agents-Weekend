@@ -39,9 +39,9 @@ export function DecisionReportStreamingPanel({
   const doneJourney = journeyStateFromProgress('', 'complete');
 
   return (
-    <div className="fixed inset-0 z-[200] bg-black/30 p-4">
-      <div className="mx-auto mt-3 flex max-h-[93vh] w-[min(1240px,96vw)] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-xl">
-        <div className="shrink-0 border-b border-gray-100/90 bg-white/95 px-4 py-3 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[200] overflow-hidden bg-black/30 p-4">
+      <div className="mx-auto mt-3 flex max-h-[93vh] w-[min(1240px,96vw)] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-xl [isolation:isolate]">
+        <div className="shrink-0 border-b border-gray-100/90 bg-white px-4 py-3">
           {degradedWarnings.length > 0 ? (
             <DegradedModeBanner messages={degradedWarnings} className="mb-3" />
           ) : null}
@@ -82,7 +82,7 @@ export function DecisionReportStreamingPanel({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="report-scroll-stability min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
           {error ? (
             <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
               <p>{error}</p>
