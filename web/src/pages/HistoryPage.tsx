@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Info } from 'lucide-react';
 import { Link } from 'react-router';
 import { MainNavButtons } from '../app/components/MainNavButtons';
@@ -6,7 +6,14 @@ import { OutcomeReviewCard } from '../app/components/followup/OutcomeReviewCard'
 import type { FollowupToastPayload } from '../app/components/followup/DecisionFollowupToast';
 import { SavedOutcomeModal } from '../app/components/SavedOutcomeModal';
 import { BuddyTooltip } from '../features/slime/BuddyTooltip';
+import { useAuth } from '../auth/AuthContext';
 import { apiFetch } from '../utils/apiFetch';
+import {
+  buildHistoryTracesCacheKey,
+  readUiDataCache,
+  UI_CACHE_TTL,
+  writeUiDataCache,
+} from '../utils/uiDataCache';
 
 interface TraceRow {
   decision_id: string;
@@ -28,6 +35,7 @@ function formatCheckin(iso: string | null | undefined): string {
 }
 
 export default function HistoryPage() {
+  const { session } = useAuth();
   const [rows, setRows] = useState<TraceRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -37,6 +45,18 @@ export default function HistoryPage() {
   } | null>(null);
   const [savedOutcomeForId, setSavedOutcomeForId] = useState<string | null>(null);
 
+  const cacheKey = useMemo(
+    () => buildHistoryTracesCacheKey(session?.user?.id),
+    [session?.user?.id],
+  );
+
+  useEffect(() => {
+    const cached = readUiDataCache<TraceRow[]>(cacheKey);
+    if (cached) {
+      setRows(cached);
+    }
+  }, [cacheKey]);
+
   const load = useCallback(async () => {
     setError(null);
     try {
@@ -44,10 +64,11 @@ export default function HistoryPage() {
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as TraceRow[];
       setRows(data);
+      writeUiDataCache(cacheKey, data, UI_CACHE_TTL.historyTracesMs);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load');
     }
-  }, []);
+  }, [cacheKey]);
 
   useEffect(() => {
     void load();

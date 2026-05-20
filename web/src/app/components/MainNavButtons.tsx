@@ -1,4 +1,4 @@
-import type { ComponentType, SVGProps } from 'react';
+import { useCallback, type ComponentType, type SVGProps } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { BookOpen, CalendarDays, Ghost, History, Home, LogOut, MessagesSquare } from 'lucide-react';
 import { SlimeAdvisor } from './report/SlimeAdvisor';
@@ -11,6 +11,13 @@ import { DEFAULT_SLIME_PROFILE, useSlimeProfile } from '../../hooks/useSlimeProf
 import { BuddyTooltip } from '../../features/slime/BuddyTooltip';
 import { HomeResilienceNavButton } from './home/HomeResilienceNavButton';
 import { BrandMark } from './BrandMark';
+import { apiFetch } from '../../utils/apiFetch';
+import {
+  buildHistoryTracesCacheKey,
+  buildShadowThreadsCacheKey,
+  prefetchUiDataCache,
+  UI_CACHE_TTL,
+} from '../../utils/uiDataCache';
 
 type NavIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
@@ -134,6 +141,30 @@ export function MainNavButtons({
   const isActivePath = (base: string) =>
     base === '/' ? pathname === '/' : pathname === base || pathname.startsWith(`${base}/`);
   const iconTone = (classic: string, topbar: string) => (useTopbar ? topbar : classic);
+  const prefetchChatThreads = useCallback(() => {
+    const key = buildShadowThreadsCacheKey(session?.user?.id);
+    void prefetchUiDataCache(
+      key,
+      UI_CACHE_TTL.shadowThreadsMs,
+      async () => {
+        const res = await apiFetch('/api/shadow-chat/threads');
+        if (!res.ok) throw new Error(`threads_${res.status}`);
+        return (await res.json()) as { threads: unknown[] };
+      },
+    );
+  }, [session?.user?.id]);
+  const prefetchHistoryTraces = useCallback(() => {
+    const key = buildHistoryTracesCacheKey(session?.user?.id);
+    void prefetchUiDataCache(
+      key,
+      UI_CACHE_TTL.historyTracesMs,
+      async () => {
+        const res = await apiFetch('/api/traces');
+        if (!res.ok) throw new Error(`traces_${res.status}`);
+        return (await res.json()) as unknown[];
+      },
+    );
+  }, [session?.user?.id]);
 
   const homeBtn = !hideHome ? (
     <BuddyTooltip content="Go to the Foresight-X home screen and decision workspace.">
@@ -167,13 +198,27 @@ export function MainNavButtons({
   const navPills = (
     <>
       <BuddyTooltip content="Open Shadow Chat — threaded assistant with reports, memory, and full composer.">
-        <button type="button" onClick={() => navigate('/chat')} className={navBtnClass(isActivePath('/chat'))} style={navBtnStyle}>
+        <button
+          type="button"
+          onMouseEnter={prefetchChatThreads}
+          onFocus={prefetchChatThreads}
+          onClick={() => navigate('/chat')}
+          className={navBtnClass(isActivePath('/chat'))}
+          style={navBtnStyle}
+        >
           <NavIconSlot Icon={MessagesSquare} compact={compact} colorClass={iconTone('text-indigo-600', 'text-indigo-700')} />
           Chat
         </button>
       </BuddyTooltip>
       <BuddyTooltip content="Browse saved decision traces and past runs.">
-        <button type="button" onClick={() => navigate('/history')} className={navBtnClass(isActivePath('/history'))} style={navBtnStyle}>
+        <button
+          type="button"
+          onMouseEnter={prefetchHistoryTraces}
+          onFocus={prefetchHistoryTraces}
+          onClick={() => navigate('/history')}
+          className={navBtnClass(isActivePath('/history'))}
+          style={navBtnStyle}
+        >
           <NavIconSlot Icon={History} compact={compact} colorClass={iconTone('text-purple-600', 'text-purple-700')} />
           History
         </button>
