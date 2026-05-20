@@ -11,7 +11,7 @@ export const SLIME_CORE_OPACITY = 0.78;
 const CORE_SATURATION = 1.22;
 
 /** Flow wave speed — higher = more visible liquid motion. */
-const CORE_FLOW_SPEED = 0.46;
+const CORE_FLOW_SPEED = 0.54;
 
 const CORE_EDGE_FLOW = 0.12;
 const CORE_EDGE_RIM = 0.16;
@@ -37,11 +37,11 @@ const vertexShader = /* glsl */ `
 
     float edgeWobble = sin(u * 2.0 + t * 0.38) * 0.012 * edgeMask;
     float swell =
-      sin(pos.x * 1.85 + tSlow * 0.85) * sin(pos.y * 1.7 - tSlow * 0.78) * 0.011 * coreMask
-      + sin(pos.z * 1.55 + t * 0.55) * 0.009 * coreMask
-      + sin(dot(pos, vec3(0.4, 0.9, 0.2)) * 2.2 + t * 0.62) * 0.007 * coreMask;
+      sin(pos.x * 1.85 + tSlow * 0.92) * sin(pos.y * 1.7 - tSlow * 0.82) * 0.016 * coreMask
+      + sin(pos.z * 1.55 + t * 0.58) * 0.013 * coreMask
+      + sin(dot(pos, vec3(0.4, 0.9, 0.2)) * 2.2 + t * 0.68) * 0.01 * coreMask;
 
-    pos += n * (edgeWobble + swell + uPulse * 0.011);
+    pos += n * (edgeWobble + swell + uPulse * 0.018);
     vLocal = pos;
     vSphere = normalize(position);
     vRadial = length(pos);

@@ -938,14 +938,14 @@ export default function SlimeCompanionPage() {
         ) : null}
         <motion.div
           className={cn(
-            'relative h-[min(72vh,680px)] w-full max-w-5xl shrink-0 rounded-[32px]',
+            'pointer-events-none fixed inset-0 w-full',
             speechOutput?.text ? 'z-[78]' : 'z-[70]',
-            buddyIntakeBlockingUi && 'pointer-events-none invisible',
+            buddyIntakeBlockingUi && 'invisible',
           )}
           aria-hidden={buddyIntakeBlockingUi}
         >
           <SlimeCompanionStage
-            className="relative"
+            className="relative h-full w-full"
             profile={slimeDraft}
             slimeType={buddySlimeType}
             advisorState={advisorState}

@@ -13,7 +13,7 @@ const vertexShader = /* glsl */ `
 
   void main() {
     vec3 pos = position;
-    float wobble = sin(pos.y * 4.0 + uTime * 1.2) * uVertexWobble;
+    float wobble = sin(pos.y * 4.0 + uTime * 1.05) * uVertexWobble;
     pos.x += wobble;
     pos.z += wobble * 0.35;
     pos *= vec3(uSquashX, uSquashY, uSquashX);

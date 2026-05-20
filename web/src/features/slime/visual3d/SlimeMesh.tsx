@@ -31,6 +31,7 @@ export function SlimeMesh({
   gooBurstKey = 0,
 }: SlimeMeshProps) {
   const bodyRef = useRef<THREE.Group>(null);
+  const innerBreathRef = useRef<THREE.Group>(null);
   const { palette, shellMaterial, coreMaterial } = useSlimeBodyMaterial(slimeType);
   const bodyScale = useMemo(() => slimeBodyScaleFor(slimeType, profile), [slimeType, profile]);
   const displayScale = displayScaleForVariant(variant);
@@ -71,20 +72,18 @@ export function SlimeMesh({
     shellMaterial.uniforms.uVertexWobble!.value = u.vertexWobble;
     coreMaterial.uniforms.uTime!.value = t;
     coreMaterial.uniforms.uPulse!.value =
-      0.4 +
-      (isSpeaking ? speakAmplitude * 0.45 : 0) +
-      Math.sin(t * 0.72) * 0.14 +
-      Math.sin(t * 0.41) * 0.09 +
-      Math.sin(t * 0.24) * 0.05;
+      u.innerPulse +
+      (isSpeaking ? speakAmplitude * 0.42 : 0) +
+      Math.sin(t * 0.81 + 0.9) * 0.12 +
+      Math.sin(t * 0.47) * 0.08;
+    if (innerBreathRef.current) {
+      innerBreathRef.current.scale.set(u.innerSquashX, u.innerSquashY, u.innerSquashX);
+    }
     if (bodyRef.current) {
       const [sx, sy, sz] = bodyScale;
       const jx = 1 + burstJiggle;
       const jy = 1 - burstJiggle * 0.65;
-      bodyRef.current.scale.set(
-        sx * u.squashX * displayScale * jx,
-        sy * u.squashY * displayScale * jy,
-        sz * u.squashX * displayScale * jx,
-      );
+      bodyRef.current.scale.set(sx * displayScale * jx, sy * displayScale * jy, sz * displayScale * jx);
       bodyRef.current.rotation.z = burstActive
         ? Math.sin(burstElapsed * 42) * 0.06 * (1 - burstElapsed / 0.55)
         : 0;
@@ -99,6 +98,7 @@ export function SlimeMesh({
         slimeType={slimeType}
         profile={profile}
         bodyRef={bodyRef}
+        innerBreathRef={innerBreathRef}
         shellMaterial={shellMaterial}
         coreMaterial={coreMaterial}
       />

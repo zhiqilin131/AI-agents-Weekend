@@ -26,6 +26,7 @@ export function SlimeAdvisor2D({
   profile,
   slimeType = 'generalized',
   companionMode = false,
+  buddyPage = false,
   studioScene = false,
 }: SlimeAdvisorProps) {
   const p = profile ?? DEFAULT_SLIME_PROFILE;
@@ -67,7 +68,7 @@ export function SlimeAdvisor2D({
   if (isSpeaking) blinkDuration *= 1.15;
   const mouthSpeak = isWellbeing ? SLIME_MOUTH_SPEAK_WELLBEING : SLIME_MOUTH_SPEAK_GENERALIZED;
   const mouthSpeakDuration = mouthSpeak.duration * (p.motion === 'expressive' ? 0.92 : 1);
-  const spread = studioScene ? dim * 2.05 : dim * 2.45;
+  const spread = studioScene ? dim * 2.05 : buddyPage ? dim * 2.45 * 0.8 * 1.1 : dim * 2.45;
   const bodyOpacity = 0.98;
   const coreOpacity = isWellbeing ? 0.92 : 0.88;
   const leftEyeX = 39.5;
