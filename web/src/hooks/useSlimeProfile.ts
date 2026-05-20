@@ -38,6 +38,16 @@ function clamp0to3(n: unknown, fallback: 0 | 1 | 2 | 3): 0 | 1 | 2 | 3 {
   return r as 0 | 1 | 2 | 3;
 }
 
+const ACCESSORIES: SlimeProfile['accessory'][] = ['none', 'halo', 'antenna', 'scarf', 'spark'];
+
+function normalizeAccessory(raw: unknown): SlimeProfile['accessory'] {
+  const a = String(raw ?? 'none');
+  if (a === 'glasses') return 'none';
+  return ACCESSORIES.includes(a as SlimeProfile['accessory'])
+    ? (a as SlimeProfile['accessory'])
+    : 'none';
+}
+
 function toCamelPersona(raw: unknown): SlimePersona {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_SLIME_PERSONA };
   const r = raw as Record<string, unknown>;
@@ -132,7 +142,7 @@ function toCamelProfile(raw: any): SlimeProfile {
     customColors,
     personality: (raw.personality ?? DEFAULT_SLIME_PROFILE.personality) as SlimeProfile['personality'],
     shape: (raw.shape ?? DEFAULT_SLIME_PROFILE.shape) as SlimeProfile['shape'],
-    accessory: (raw.accessory ?? DEFAULT_SLIME_PROFILE.accessory) as SlimeProfile['accessory'],
+    accessory: normalizeAccessory(raw.accessory ?? DEFAULT_SLIME_PROFILE.accessory),
     motion: (raw.motion ?? DEFAULT_SLIME_PROFILE.motion) as SlimeProfile['motion'],
     voice,
     persona: toCamelPersona(raw.persona),

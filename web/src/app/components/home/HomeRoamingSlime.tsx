@@ -160,7 +160,7 @@ export function HomeRoamingSlime({ variant = 'home' }: { variant?: HomeRoamingSl
             : { type: 'spring', stiffness: 28, damping: 19, mass: 1.05 }
         }
       >
-        <div className="pointer-events-auto relative flex flex-col items-center">
+        <div className="pointer-events-auto relative flex flex-col items-center overflow-visible">
           <span
             className={cn(
               'pointer-events-none mb-1 rounded-full border border-white/50 bg-white/75 px-2.5 py-0.5 text-[10px] font-medium text-violet-950/90 shadow-sm backdrop-blur-sm transition-opacity duration-200',
@@ -175,7 +175,7 @@ export function HomeRoamingSlime({ variant = 'home' }: { variant?: HomeRoamingSl
             title="Visit your Slime Buddy"
             aria-label="Visit your Slime Buddy — open Slime studio"
             className={cn(
-              'group relative flex cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 shadow-none outline-none transition-shadow',
+              'group relative flex cursor-pointer items-center justify-center overflow-visible rounded-full border-0 bg-transparent p-2 shadow-none outline-none transition-shadow',
               'focus-visible:ring-2 focus-visible:ring-violet-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
             )}
             onMouseEnter={() => setHovering(true)}
@@ -225,7 +225,13 @@ export function HomeRoamingSlime({ variant = 'home' }: { variant?: HomeRoamingSl
               }}
               transition={{ type: 'spring', stiffness: 380, damping: 24 }}
             >
-              <SlimeAdvisor state="idle" size="sm" profile={profile} companionMode />
+              <SlimeAdvisor
+                state="idle"
+                size="lg"
+                profile={profile}
+                slimeType="generalized"
+                companionMode
+              />
             </motion.div>
           </motion.button>
         </div>

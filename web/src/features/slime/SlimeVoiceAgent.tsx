@@ -6,7 +6,12 @@ import { motion } from 'motion/react';
 import { DecisionModeToggle } from '../../app/components/DecisionModeToggle';
 import type { SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
 import type { MemoryEvidenceItem } from '../../app/components/profile/memoryEvidenceTypes';
-import { playMp3BlobWithWebAudio, unlockSlimeAudioContext } from '../../utils/slimeAudioContext';
+import {
+  connectHtmlAudioAmplitudeAnalyzer,
+  playMp3BlobWithWebAudio,
+  unlockSlimeAudioContext,
+} from '../../utils/slimeAudioContext';
+import { resetSlimeSpeakAmplitude } from './visual3d/slimeSpeakAmplitude';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import type { SlimeProfile } from '../../app/model';
 import { apiFetch } from '../../utils/apiFetch';
@@ -532,6 +537,7 @@ export function SlimeVoiceAgent({
   const buddyAudioRef = useRef<HTMLAudioElement | null>(null);
   const buddyWebAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const buddyObjectUrlRef = useRef<string | null>(null);
+  const buddyAudioAmpStopRef = useRef<(() => void) | null>(null);
   /** True while /api/slime/tts fetch or blob decode is in flight (buddyAudioRef not set yet). */
   const buddyTtsLoadPendingRef = useRef(false);
   /** Bumps when a new TTS request or recording session invalidates in-flight playback. */
@@ -628,6 +634,9 @@ export function SlimeVoiceAgent({
   );
 
   const releaseBuddyAudioPlayback = useCallback(() => {
+    buddyAudioAmpStopRef.current?.();
+    buddyAudioAmpStopRef.current = null;
+    resetSlimeSpeakAmplitude();
     const w = buddyWebAudioSourceRef.current;
     buddyWebAudioSourceRef.current = null;
     if (w) {
@@ -841,7 +850,13 @@ export function SlimeVoiceAgent({
           audio.setAttribute('playsinline', 'true');
           audio.preload = 'auto';
           audio.src = url;
-          audio.onended = finishOutput;
+          buddyAudioAmpStopRef.current?.();
+          buddyAudioAmpStopRef.current = connectHtmlAudioAmplitudeAnalyzer(audio);
+          audio.onended = () => {
+            buddyAudioAmpStopRef.current?.();
+            buddyAudioAmpStopRef.current = null;
+            finishOutput();
+          };
           audio.onerror = () => {
             if (opts?.sequenceHasMore) {
               releaseBuddyAudioPlayback();

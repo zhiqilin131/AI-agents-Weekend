@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { animate, motion, useMotionValue } from 'motion/react';
 import { MarkdownContent } from '../../app/components/MarkdownContent';
 import { SlimeAdvisor, type SlimeAdvisorState } from '../../app/components/report/SlimeAdvisor';
@@ -8,7 +8,12 @@ import type { SlimeProfile } from '../../app/model';
 import type { MemoryEvidenceItem } from '../../app/components/profile/memoryEvidenceTypes';
 import type { SlimeDecisionSuggestion, SlimeSpeechOutput } from './SlimeVoiceAgent';
 import { autoHighlightSlimeSpeech } from './slimeSpeechMarkdown';
-import { SLIME_DRAG_RELEASE_SPRING } from './slimeMotionTokens';
+import {
+  SLIME_BUBBLE_CSS_VARS,
+  SLIME_BUBBLE_MOUTH_X_BIAS_PX,
+  SLIME_DRAG_RELEASE_SPRING,
+} from './slimeMotionTokens';
+import { SLIME_IDLE_INTERACT_MS, slimeIdleFidgetIntervalMs } from './slimeIdleBehavior';
 
 /** Approximate radius of the slime “body” for obstacle clearance (viewport px). */
 const SLIME_FOOTPRINT_RADIUS = 78;
@@ -136,6 +141,7 @@ export function SlimeCompanionStage({
   decisionSuggestion,
   onEvidenceOpen,
   onDoubleClickToggleCompanion,
+  speakAmplitude = 0,
   className,
 }: {
   profile: SlimeProfile;
@@ -146,6 +152,8 @@ export function SlimeCompanionStage({
   onEvidenceOpen?: () => void;
   /** Double-click slime to cycle Mochi ↔ Rimumu (Buddy page). */
   onDoubleClickToggleCompanion?: () => void;
+  /** TTS-driven mouth/body pulse (0–1). */
+  speakAmplitude?: number;
   /** Merged onto the stage root (e.g. z-index vs voice UI layers). */
   className?: string;
 }) {
@@ -158,12 +166,25 @@ export function SlimeCompanionStage({
   const squish = useMotionValue(1);
   const [wiggle, setWiggle] = useState(0);
   const [playBurst, setPlayBurst] = useState(0);
+  const [gooBurstKey, setGooBurstKey] = useState(0);
+  const lastInteractAtRef = useRef(Date.now());
   const draggingRef = useRef(false);
   const reducedMotionRef = useRef(false);
   const cancelledRef = useRef(false);
   const singleTapTimerRef = useRef<number | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [dragLim, setDragLim] = useState({ left: -175, right: 175, top: -175, bottom: 175 });
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  const [mouthAnchor, setMouthAnchor] = useState<{ x: string; y: string } | null>(null);
+
+  const handleMouthAnchor = useCallback((anchor: { clientX: number; clientY: number }) => {
+    const bubble = bubbleRef.current;
+    if (!bubble) return;
+    const br = bubble.getBoundingClientRect();
+    const x = `${anchor.clientX - br.left + SLIME_BUBBLE_MOUTH_X_BIAS_PX}px`;
+    const y = `${anchor.clientY - br.top}px`;
+    setMouthAnchor((prev) => (prev?.x === x && prev?.y === y ? prev : { x, y }));
+  }, []);
   const renderedSpeechText = speechOutput?.text ? autoHighlightSlimeSpeech(speechOutput.text) : '';
 
   const clampRoamIntoStage = () => {
@@ -210,6 +231,41 @@ export function SlimeCompanionStage({
     reducedMotionRef.current =
       typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }, []);
+
+  const touchInteract = useCallback(() => {
+    lastInteractAtRef.current = Date.now();
+  }, []);
+
+  useEffect(() => {
+    if (advisorState !== 'idle') {
+      lastInteractAtRef.current = Date.now();
+    }
+  }, [advisorState, speechOutput?.text]);
+
+  /** Idle shake + goo when nobody has interacted for a while. */
+  useEffect(() => {
+    if (reducedMotionRef.current) return;
+    let tid: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      tid = window.setTimeout(() => {
+        if (advisorState !== 'idle' || draggingRef.current) {
+          schedule();
+          return;
+        }
+        if (Date.now() - lastInteractAtRef.current < SLIME_IDLE_INTERACT_MS) {
+          schedule();
+          return;
+        }
+        lastInteractAtRef.current = Date.now();
+        setGooBurstKey((k) => k + 1);
+        setPlayBurst((n) => n + 1);
+        setWiggle((n) => n + 1);
+        schedule();
+      }, slimeIdleFidgetIntervalMs());
+    };
+    schedule();
+    return () => window.clearTimeout(tid);
+  }, [advisorState]);
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -294,8 +350,12 @@ export function SlimeCompanionStage({
           dragElastic={0.06}
           dragConstraints={dragLim}
           whileDrag={{ cursor: 'grabbing' }}
-          onPointerDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            touchInteract();
+          }}
           onDragStart={() => {
+            touchInteract();
             draggingRef.current = true;
             setDragLim(computeDragLimits(stageRef.current, roamX.get(), roamY.get()));
           }}
@@ -325,6 +385,7 @@ export function SlimeCompanionStage({
               : 'Drag to move'
           }
           onTap={() => {
+            touchInteract();
             if (!onDoubleClickToggleCompanion) {
               setWiggle((n) => n + 1);
               return;
@@ -340,6 +401,7 @@ export function SlimeCompanionStage({
           onDoubleClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
+            touchInteract();
             if (singleTapTimerRef.current != null) {
               window.clearTimeout(singleTapTimerRef.current);
               singleTapTimerRef.current = null;
@@ -365,8 +427,13 @@ export function SlimeCompanionStage({
             }
             animate={
               playBurst > 0
-                ? { y: [0, -10, 0, -6, 0], scaleY: [1, 0.88, 1.1, 0.95, 1], scaleX: [1, 1.06, 0.96, 1.04, 1] }
-                : { y: 0, scaleY: 1, scaleX: 1 }
+                ? {
+                    y: [0, -12, 2, -8, 0],
+                    scaleY: [1, 0.82, 1.12, 0.9, 1],
+                    scaleX: [1, 1.08, 0.94, 1.06, 1],
+                    rotate: [0, -4, 3, -2, 0],
+                  }
+                : { y: 0, scaleY: 1, scaleX: 1, rotate: 0 }
             }
             transition={{ duration: playBurst > 0 ? 0.75 : 0, ease: 'easeInOut' }}
           >
@@ -376,15 +443,34 @@ export function SlimeCompanionStage({
               animate={wiggle > 0 ? { x: [0, -7, 7, -4, 4, 0], scale: [1, 1.05, 1.02, 1] } : { x: 0, scale: 1 }}
               transition={{ duration: wiggle > 0 ? 0.42 : 0 }}
             >
-              <SlimeAdvisor state={advisorState} size="lg" profile={profile} slimeType={slimeType} companionMode />
+              <SlimeAdvisor
+                state={advisorState}
+                size="lg"
+                profile={profile}
+                slimeType={slimeType}
+                companionMode
+                buddyPage
+                speakAmplitude={speakAmplitude}
+                gooBurstKey={gooBurstKey}
+                onMouthAnchor={handleMouthAnchor}
+              />
             </motion.div>
             {speechOutput?.text ? (
               <motion.div
+                ref={bubbleRef}
                 key={`${speechOutput.source}:${speechOutput.utteranceId ?? speechOutput.text}`}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.28, ease: 'easeOut' }}
+                style={
+                  mouthAnchor
+                    ? ({
+                        [SLIME_BUBBLE_CSS_VARS.mouthX]: mouthAnchor.x,
+                        [SLIME_BUBBLE_CSS_VARS.mouthY]: mouthAnchor.y,
+                      } as CSSProperties)
+                    : undefined
+                }
                 className={cn(
                   'slime-comic-bubble slime-comic-bubble-mouth-tail slime-comic-bubble-emerge pointer-events-auto absolute z-[110]',
                   /* Tail dots arc from Rimumu/Mochi's mouth to the bubble body. */

@@ -32,7 +32,6 @@ export const SHAPE_OPTIONS: Array<{ id: SlimeProfile['shape']; label: string }> 
 
 export const ACCESSORY_OPTIONS: Array<{ id: SlimeProfile['accessory']; label: string }> = [
   { id: 'none', label: 'None' },
-  { id: 'glasses', label: 'Tiny glasses' },
   { id: 'halo', label: 'Small halo ring' },
   { id: 'antenna', label: 'Little antenna' },
   { id: 'scarf', label: 'Scarf / ribbon' },

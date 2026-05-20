@@ -7,7 +7,8 @@ describe('AgentPresence3DPanel', () => {
     const html = renderToStaticMarkup(
       <AgentPresence3DPanel status="idle" timeline={['Ready']} forceFallback />,
     );
-    expect(html).toContain('Shadow Chat');
+    expect(html).toContain('Mochi');
+    expect(html).toContain('data-testid="slime-advisor"');
   });
 
   it('exposes thinking status for accessibility', () => {

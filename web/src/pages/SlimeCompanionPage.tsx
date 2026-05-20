@@ -58,6 +58,7 @@ import { apiFetch } from '../utils/apiFetch';
 import { SLIME_CALENDAR_BRIEF_CONTEXT_KEY } from '../utils/executionStorageKeys';
 import { unlockSlimeAudioContext } from '../utils/slimeAudioContext';
 import {
+  buddyPageCanvasBackground,
   getSlimeIdentity,
   nextSlimeType,
   normalizeSlimeType,
@@ -66,6 +67,7 @@ import {
 } from '../features/slime/slimeIdentity';
 import { slimeTypeFromThread } from '../utils/patchThreadSlimeType';
 import { BUDDY_TOPBAR_CLEARANCE } from '../features/slime/buddyLayout';
+import { useSlimeSpeakAmplitude } from '../features/slime/visual3d/slimeSpeakAmplitude';
 import { isDraftThread, listDraftThreads, resolveThreadSlimeType } from '../features/slime/newChatGuard';
 
 /** Legacy single-key storage; per-user keys are ``${prefix}:${supabaseUserId}``. */
@@ -142,6 +144,7 @@ export default function SlimeCompanionPage() {
   const [therapyReport, setTherapyReport] = useState<TherapyReport | null>(null);
   const intakePromptThreadRef = useRef<string | null>(null);
   const [buddyRecapRefresh, setBuddyRecapRefresh] = useState(0);
+  const speakAmplitude = useSlimeSpeakAmplitude();
   const [profileMemoryToasts, setProfileMemoryToasts] = useState<ProfileMemoryToast[]>([]);
   const profileMemoryToastTimersRef = useRef<Map<string, number>>(new Map());
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
@@ -661,6 +664,7 @@ export default function SlimeCompanionPage() {
     buddyIntakeBlockingUi || rimumuIntroOpen || therapyReportOpen;
 
   const buddyIdent = getSlimeIdentity(buddySlimeType);
+  const buddyCanvasBg = buddyPageCanvasBackground(buddySlimeType);
   const [buddyRailTop, setBuddyRailTop] = useState<string>(
     `calc(${BUDDY_TOPBAR_CLEARANCE} + 3rem)`,
   );
@@ -760,9 +764,15 @@ export default function SlimeCompanionPage() {
       }
       decisionModeToggleDisabled={reportStream.isStreaming}
     />
-    <motion.div className="relative min-h-[100dvh] min-w-0 overflow-x-clip bg-[radial-gradient(circle_at_50%_18%,rgba(255,255,255,0.9),transparent_25%),linear-gradient(135deg,#fff5fb_0%,#f7f2ff_46%,#e8f4ff_100%)]">
-      <div className="pointer-events-none absolute inset-0 opacity-[0.58] bg-[radial-gradient(ellipse_at_50%_38%,rgba(139,92,246,0.18),transparent_58%),radial-gradient(circle_at_18%_72%,rgba(34,211,238,0.12),transparent_30%),radial-gradient(circle_at_82%_70%,rgba(244,114,182,0.10),transparent_32%)]" />
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-white/55 to-transparent" />
+    <motion.div
+      className="relative min-h-[100dvh] min-w-0 overflow-x-clip"
+      style={{ background: buddyCanvasBg.base }}
+    >
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.45]"
+        style={{ background: buddyCanvasBg.overlay }}
+      />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-white/72 to-transparent" />
 
       <div className="relative z-[60]">
         <MainNavButtons layout="topbar" className="!mb-0" hideSignOut />
@@ -950,6 +960,7 @@ export default function SlimeCompanionPage() {
             }
             onEvidenceOpen={() => setEvidenceDrawerOpen(true)}
             onDoubleClickToggleCompanion={toggleBuddyCompanion}
+            speakAmplitude={speakAmplitude}
           />
         </motion.div>
 
