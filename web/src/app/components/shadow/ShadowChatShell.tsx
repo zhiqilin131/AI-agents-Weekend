@@ -63,6 +63,13 @@ import type { TherapyReport } from '../../../features/slime/therapySession';
 import { therapyReportFromMessages } from '../../../features/slime/therapySession';
 import { sortThreadsByRecent } from '../../../features/slime/buddyThreadSort';
 import { findReusableDraftThread, isDraftThread, listDraftThreads, resolveThreadSlimeType } from '../../../features/slime/newChatGuard';
+import {
+  buildShadowThreadDetailCacheKey,
+  buildShadowThreadsCacheKey,
+  readUiDataCache,
+  UI_CACHE_TTL,
+  writeUiDataCache,
+} from '../../../utils/uiDataCache';
 
 export function ShadowChatShell({
   initialThreadId = null,
@@ -95,6 +102,14 @@ export function ShadowChatShell({
   const [threads, setThreads] = useState<ShadowThread[]>([]);
   const [threadsLoaded, setThreadsLoaded] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const threadsCacheKey = useMemo(
+    () => buildShadowThreadsCacheKey(session?.user?.id),
+    [session?.user?.id],
+  );
+  const threadDetailCacheKey = useCallback(
+    (threadId: string) => buildShadowThreadDetailCacheKey(session?.user?.id, threadId),
+    [session?.user?.id],
+  );
   const [revealDraftInSidebar, setRevealDraftInSidebar] = useState(false);
   const [messages, setMessages] = useState<ShadowMessage[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
@@ -170,13 +185,109 @@ export function ShadowChatShell({
       return [...s, x].slice(-6);
     });
 
+  const applyLoadedThread = useCallback(
+    (thread: ShadowThread, opts?: { preservePendingSuggestion?: boolean }) => {
+      const tid = thread.thread_id;
+      // Keep sidebar/header titles in sync with freshly loaded thread payload.
+      setThreads((prev) => {
+        const idx = prev.findIndex((t) => t.thread_id === tid);
+        if (idx < 0) return prev;
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], ...thread };
+        return copy;
+      });
+      const mem = Array.isArray(thread.memory_events)
+        ? (thread.memory_events as Array<{ kind: string; items: string[]; at: string; details?: ProfileMemoryDetail[] }>)
+        : [];
+      const profileEvents = mem.filter(
+        (ev) => ev.kind === 'profile_update' && Array.isArray(ev.items) && ev.items.length > 0,
+      );
+
+      if (profileMemoryToastThreadRef.current !== tid) {
+        profileMemoryToastThreadRef.current = tid;
+        clearAllProfileMemoryToasts();
+        profileMemoryToastKeysRef.current = new Set(profileEvents.map(profileMemoryEventDedupeKey));
+      } else {
+        for (const ev of profileEvents) {
+          const k = profileMemoryEventDedupeKey(ev);
+          if (profileMemoryToastKeysRef.current.has(k)) continue;
+          profileMemoryToastKeysRef.current.add(k);
+          scheduleProfileMemoryToast({ items: ev.items, at: ev.at, details: ev.details });
+        }
+      }
+
+      setActiveThreadId(tid);
+      setActiveThread(thread);
+      setThreads((prev) =>
+        sortThreadsByRecent(
+          prev.map((t) =>
+            t.thread_id === tid
+              ? {
+                  ...t,
+                  title: thread.title || t.title,
+                  updated_at: thread.updated_at || t.updated_at,
+                  message_count: thread.messages?.length ?? t.message_count,
+                  slime_type: thread.slime_type ?? thread.slimeType ?? t.slime_type,
+                }
+              : t,
+          ),
+        ),
+      );
+      const loadedSlimeType = slimeTypeFromThread(thread);
+      setActiveSlimeType(loadedSlimeType);
+      if (!slimeSupportsDecisionMode(loadedSlimeType)) {
+        setDecisionModeManual(false);
+      }
+      const intakeDone =
+        thread.therapy_session?.intake_complete ?? thread.wellbeing_session?.intake_complete;
+      if (loadedSlimeType === 'wellbeing' && !intakeDone) {
+        setWellbeingIntakeOpen(true);
+      }
+      const existingReport =
+        (thread.therapy_session?.report as TherapyReport | undefined) ??
+        therapyReportFromMessages(thread.messages);
+      if (existingReport) setTherapyReport(existingReport);
+      const msgs = normalizeThreadMessages(thread.messages || []);
+      setMessages(msgs);
+      const pa = thread.pending_action;
+      if (pa && typeof pa === 'object' && pa.type) {
+        setPendingAction(pa as PendingAction);
+      } else if (!opts?.preservePendingSuggestion) {
+        setPendingAction(null);
+      }
+      if (!opts?.preservePendingSuggestion) {
+        lastDecisionSuggestionRef.current = null;
+      }
+    },
+    [clearAllProfileMemoryToasts, scheduleProfileMemoryToast],
+  );
+
   const refreshThreads = useCallback(async () => {
+    const cached = readUiDataCache<{ threads: ShadowThread[] }>(threadsCacheKey);
+    if (cached?.threads) {
+      setThreads(sortThreadsByRecent(cached.threads || []));
+      setThreadsLoaded(true);
+    }
     const res = await apiFetch('/api/shadow-chat/threads');
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (!cached?.threads) {
+        setThreadsLoaded(true);
+      }
+      return;
+    }
     const data = (await res.json()) as { threads: ShadowThread[] };
     setThreads(sortThreadsByRecent(data.threads || []));
     setThreadsLoaded(true);
-  }, []);
+    writeUiDataCache(threadsCacheKey, data, UI_CACHE_TTL.shadowThreadsMs);
+  }, [threadsCacheKey]);
+
+  useEffect(() => {
+    const cached = readUiDataCache<{ threads: ShadowThread[] }>(threadsCacheKey);
+    if (cached?.threads) {
+      setThreads(sortThreadsByRecent(cached.threads || []));
+      setThreadsLoaded(true);
+    }
+  }, [threadsCacheKey]);
 
   const patchThreadTitle = useCallback((threadId: string, title: string) => {
     const trimmed = title.trim();
@@ -195,6 +306,10 @@ export function ShadowChatShell({
     id: string,
     opts?: { preservePendingSuggestion?: boolean },
   ) => {
+    const cachedThread = readUiDataCache<{ thread: ShadowThread }>(threadDetailCacheKey(id));
+    if (cachedThread?.thread) {
+      applyLoadedThread(cachedThread.thread, opts);
+    }
     const fetchThread = () => apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`);
     let res = await fetchThread();
     if (res.status === 404) {
@@ -219,77 +334,8 @@ export function ShadowChatShell({
       return;
     }
     const data = (await res.json()) as { thread: ShadowThread };
-    const tid = data.thread.thread_id;
-    // Keep sidebar/header titles in sync with freshly loaded thread payload.
-    setThreads((prev) => {
-      const idx = prev.findIndex((t) => t.thread_id === tid);
-      if (idx < 0) return prev;
-      const copy = [...prev];
-      copy[idx] = { ...copy[idx], ...data.thread };
-      return copy;
-    });
-    const mem = Array.isArray(data.thread.memory_events)
-      ? (data.thread.memory_events as Array<{ kind: string; items: string[]; at: string; details?: ProfileMemoryDetail[] }>)
-      : [];
-    const profileEvents = mem.filter(
-      (ev) => ev.kind === 'profile_update' && Array.isArray(ev.items) && ev.items.length > 0,
-    );
-
-    if (profileMemoryToastThreadRef.current !== tid) {
-      profileMemoryToastThreadRef.current = tid;
-      clearAllProfileMemoryToasts();
-      profileMemoryToastKeysRef.current = new Set(profileEvents.map(profileMemoryEventDedupeKey));
-    } else {
-      for (const ev of profileEvents) {
-        const k = profileMemoryEventDedupeKey(ev);
-        if (profileMemoryToastKeysRef.current.has(k)) continue;
-        profileMemoryToastKeysRef.current.add(k);
-        scheduleProfileMemoryToast({ items: ev.items, at: ev.at, details: ev.details });
-      }
-    }
-
-    setActiveThreadId(tid);
-    setActiveThread(data.thread);
-    setThreads((prev) =>
-      sortThreadsByRecent(
-        prev.map((t) =>
-          t.thread_id === tid
-            ? {
-                ...t,
-                title: data.thread.title || t.title,
-                updated_at: data.thread.updated_at || t.updated_at,
-                message_count: data.thread.messages?.length ?? t.message_count,
-                slime_type: data.thread.slime_type ?? data.thread.slimeType ?? t.slime_type,
-              }
-            : t,
-        ),
-      ),
-    );
-    const loadedSlimeType = slimeTypeFromThread(data.thread);
-    setActiveSlimeType(loadedSlimeType);
-    if (!slimeSupportsDecisionMode(loadedSlimeType)) {
-      setDecisionModeManual(false);
-    }
-    const intakeDone =
-      data.thread.therapy_session?.intake_complete ?? data.thread.wellbeing_session?.intake_complete;
-    if (loadedSlimeType === 'wellbeing' && !intakeDone) {
-      setWellbeingIntakeOpen(true);
-    }
-    const existingReport =
-      (data.thread.therapy_session?.report as TherapyReport | undefined) ??
-      therapyReportFromMessages(data.thread.messages);
-    if (existingReport) setTherapyReport(existingReport);
-    const msgs = normalizeThreadMessages(data.thread.messages || []);
-    setMessages(msgs);
-    const pa = data.thread.pending_action;
-    if (pa && typeof pa === 'object' && pa.type) {
-      setPendingAction(pa as PendingAction);
-    } else if (!opts?.preservePendingSuggestion) {
-      setPendingAction(null);
-    }
-    if (!opts?.preservePendingSuggestion) {
-      lastDecisionSuggestionRef.current = null;
-    }
+    writeUiDataCache(threadDetailCacheKey(data.thread.thread_id), data, UI_CACHE_TTL.shadowThreadDetailMs);
+    applyLoadedThread(data.thread, opts);
   };
 
   const createChatWithSlime = async (slimeType: SlimeType) => {
@@ -339,6 +385,11 @@ export function ShadowChatShell({
       setActiveSlimeType(resolveThreadSlimeType(createdThread));
       setMessages(normalizeThreadMessages(createdThread.messages || []));
       setPendingAction(createdThread.pending_action ?? null);
+      writeUiDataCache(
+        threadDetailCacheKey(createdThread.thread_id),
+        { thread: createdThread },
+        UI_CACHE_TTL.shadowThreadDetailMs,
+      );
       if (slimeType === 'wellbeing') {
         setWellbeingIntakeOpen(true);
       }
