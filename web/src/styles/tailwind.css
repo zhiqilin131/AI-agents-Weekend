@@ -449,6 +449,87 @@
   animation-delay: 0.32s;
 }
 
+/* Buddy speech bubble — tail anchor + life motion (values mirrored in slimeMotionTokens.ts) */
+@keyframes slime-bubble-tail-emerge {
+  0% {
+    opacity: 0;
+    transform: translateY(-50%) translate(-7px, 5px) scale(0.25);
+  }
+  72% {
+    opacity: 1;
+    transform: translateY(-50%) translate(1px, -1px) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(-50%) translate(0, 0) scale(1);
+  }
+}
+
+@keyframes slime-bubble-tail-idle {
+  0%,
+  100% {
+    transform: translateY(-50%) translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translateY(-50%) translate(0.6px, -0.35px) scale(1.02);
+  }
+}
+
+@keyframes slime-bubble-tail-speak-near {
+  0%,
+  100% {
+    transform: translateY(-50%) translate(0, 0) scale(1);
+  }
+  42% {
+    transform: translateY(-50%) translate(2.5px, -1.5px) scale(1.07);
+  }
+  68% {
+    transform: translateY(-50%) translate(0.8px, -0.4px) scale(1.02);
+  }
+}
+
+@keyframes slime-bubble-tail-speak-far {
+  0%,
+  100% {
+    transform: translateY(-50%) translate(0, 0) scale(1);
+  }
+  38% {
+    transform: translateY(-50%) translate(3.5px, -2px) scale(1.05);
+  }
+  62% {
+    transform: translateY(-50%) translate(1.2px, -0.8px) scale(1.01);
+  }
+}
+
+@keyframes slime-bubble-body-emerge {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes slime-bubble-body-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow:
+      0 16px 36px rgba(79, 70, 229, 0.14),
+      0 3px 10px rgba(15, 23, 42, 0.055),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+  48% {
+    transform: translateY(calc(var(--slime-bubble-body-breathe-lift) * -1)) scale(var(--slime-bubble-body-breathe-scale));
+    box-shadow:
+      0 18px 40px rgba(79, 70, 229, 0.17),
+      0 4px 12px rgba(15, 23, 42, 0.06),
+      inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  }
+}
+
 .slime-comic-bubble {
   width: clamp(16rem, 48vw, 34rem);
   min-width: 16rem;
@@ -470,6 +551,12 @@
   --slime-bubble-accent-soft: rgba(124, 58, 237, 0.12);
   --slime-bubble-action: #059669;
   --slime-bubble-action-soft: rgba(16, 185, 129, 0.12);
+  --slime-bubble-mouth-y: 10.9rem;
+  --slime-bubble-tail-speak-dur: 2.4s;
+  --slime-bubble-tail-idle-dur: 5.5s;
+  --slime-bubble-body-breathe-dur: 2.85s;
+  --slime-bubble-body-breathe-lift: 1px;
+  --slime-bubble-body-breathe-scale: 1.008;
 }
 
 .slime-comic-bubble::before {
@@ -502,7 +589,15 @@
 
 .slime-comic-bubble-mouth-tail {
   transform-origin: -3.2rem 5.25rem;
-  --slime-bubble-mouth-y: 10.9rem;
+}
+
+.slime-comic-bubble-mouth-tail.slime-comic-bubble-emerge {
+  animation: slime-bubble-body-emerge 0.52s cubic-bezier(0.22, 0.84, 0.32, 1) both;
+}
+
+.slime-comic-bubble-mouth-tail::before,
+.slime-comic-bubble-mouth-tail::after {
+  will-change: transform;
 }
 
 .slime-comic-bubble-mouth-tail::before {
@@ -511,6 +606,9 @@
   width: 0.62rem;
   height: 0.62rem;
   background: var(--slime-bubble-tail-fill);
+  animation:
+    slime-bubble-tail-emerge 0.48s cubic-bezier(0.22, 0.84, 0.32, 1) both,
+    slime-bubble-tail-idle var(--slime-bubble-tail-idle-dur) ease-in-out 0.5s infinite;
 }
 
 .slime-comic-bubble-mouth-tail::after {
@@ -524,6 +622,38 @@
     -0.72rem -0.2rem 0 -0.04rem var(--slime-bubble-tail-fill),
     -1.42rem -0.36rem 0 -0.11rem var(--slime-bubble-tail-fill-soft),
     -2rem -0.48rem 0 -0.17rem rgba(255, 255, 255, 0.56);
+  animation:
+    slime-bubble-tail-emerge 0.56s cubic-bezier(0.22, 0.84, 0.32, 1) 0.1s both,
+    slime-bubble-tail-idle var(--slime-bubble-tail-idle-dur) ease-in-out 0.62s infinite;
+}
+
+.slime-comic-bubble-mouth-tail.slime-comic-bubble-speaking::before {
+  animation: slime-bubble-tail-emerge 0.48s cubic-bezier(0.22, 0.84, 0.32, 1) both,
+    slime-bubble-tail-speak-near var(--slime-bubble-tail-speak-dur) ease-in-out 0.42s infinite;
+}
+
+.slime-comic-bubble-mouth-tail.slime-comic-bubble-speaking::after {
+  animation: slime-bubble-tail-emerge 0.56s cubic-bezier(0.22, 0.84, 0.32, 1) 0.1s both,
+    slime-bubble-tail-speak-far calc(var(--slime-bubble-tail-speak-dur) * 1.08) ease-in-out 0.54s infinite;
+}
+
+.slime-comic-bubble-mouth-tail.slime-comic-bubble-speaking {
+  animation: slime-bubble-body-breathe var(--slime-bubble-body-breathe-dur) ease-in-out infinite;
+}
+
+.slime-comic-bubble-wellbeing.slime-comic-bubble-mouth-tail {
+  --slime-bubble-tail-speak-dur: 3.1s;
+  --slime-bubble-tail-idle-dur: 6.8s;
+  --slime-bubble-body-breathe-dur: 3.35s;
+  --slime-bubble-body-breathe-lift: 0.85px;
+  --slime-bubble-body-breathe-scale: 1.006;
+}
+
+.slime-comic-bubble-generalized.slime-comic-bubble-mouth-tail {
+  --slime-bubble-tail-speak-dur: 2.15s;
+  --slime-bubble-body-breathe-dur: 2.55s;
+  --slime-bubble-body-breathe-lift: 1.25px;
+  --slime-bubble-body-breathe-scale: 1.01;
 }
 
 .slime-comic-bubble-generalized {
@@ -621,6 +751,17 @@
   .slime-studio-talk,
   .slime-studio-typing span {
     animation: none;
+  }
+
+  .slime-comic-bubble-mouth-tail,
+  .slime-comic-bubble-mouth-tail::before,
+  .slime-comic-bubble-mouth-tail::after {
+    animation: none !important;
+  }
+
+  .slime-comic-bubble-mouth-tail.slime-comic-bubble-emerge {
+    opacity: 1;
+    transform: none;
   }
 }
 

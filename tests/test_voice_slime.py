@@ -538,6 +538,67 @@ def test_voice_pipeline_tool_timeout_falls_back_to_conversation_answer(monkeypat
     assert body["tool_result"].get("error") == "tool_timeout"
 
 
+def test_slime_tts_bundled_in_voice_turn_skips_extra_tts_debit(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ENABLE_CREDIT_LIMITS", "true")
+    monkeypatch.setenv("DEFAULT_SLIME_CREDITS", "20")
+    monkeypatch.setenv("CREDIT_COST_SLIME_VOICE", "2")
+    monkeypatch.setenv("CREDIT_COST_TTS", "1")
+    from foresight_x.ui import api_server
+
+    class FakeSpeech:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(read=lambda: b"fake-mp3")
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key: str, base_url: str | None = None):
+            self.audio = types.SimpleNamespace(speech=FakeSpeech())
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+
+    from foresight_x.usage.credits import consume_credits, get_credit_balance
+    from foresight_x.config import load_settings
+
+    settings = load_settings()
+    uid = settings.foresight_user_id
+    turn_id = "voice-turn-test-001"
+    consume_credits(uid, "slime_voice", 2, turn_id, settings=settings)
+    bal_after_voice = get_credit_balance(uid, settings=settings)
+
+    c = TestClient(api_server.app)
+
+    r1 = c.post(
+        "/api/slime/tts",
+        json={"text": "First sentence."},
+        headers={
+            "X-Credit-Request-Id": "tts-chunk-1",
+            "X-Bundled-Voice-Turn": turn_id,
+        },
+    )
+    r2 = c.post(
+        "/api/slime/tts",
+        json={"text": "Second sentence."},
+        headers={
+            "X-Credit-Request-Id": "tts-chunk-2",
+            "X-Bundled-Voice-Turn": turn_id,
+        },
+    )
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    bal_after_tts = get_credit_balance(uid, settings=settings)
+    assert bal_after_tts == bal_after_voice
+
+    r3 = c.post(
+        "/api/slime/tts",
+        json={"text": "Replay only."},
+        headers={"X-Credit-Request-Id": "tts-replay-only"},
+    )
+    assert r3.status_code == 200
+    bal_after_replay = get_credit_balance(uid, settings=settings)
+    assert bal_after_replay == bal_after_voice - 1
+
+
 def test_slime_tts_requires_openai_key(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FORESIGHT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "")

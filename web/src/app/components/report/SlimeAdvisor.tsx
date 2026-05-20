@@ -5,6 +5,10 @@ import type { SlimeProfile } from '../../model';
 import { DEFAULT_SLIME_PROFILE } from '../../../hooks/useSlimeProfile';
 import { slimeThemePalette } from '../../../features/slime/slimeThemePalette';
 import type { SlimeType } from '../../../features/slime/slimeIdentity';
+import {
+  SLIME_MOUTH_SPEAK_GENERALIZED,
+  SLIME_MOUTH_SPEAK_WELLBEING,
+} from '../../../features/slime/slimeMotionTokens';
 
 export type SlimeAdvisorState =
   | 'idle'
@@ -76,7 +80,11 @@ export function SlimeAdvisor({
   if (p.personality === 'calm') blinkDuration += 0.9;
   if (p.personality === 'cautious') blinkDuration += 0.55;
   if (p.personality === 'playful') blinkDuration -= 0.45;
-  const mouthSpeed = p.motion === 'expressive' ? 0.3 : 0.38;
+  if (isThinking) blinkDuration *= 1.42;
+  if (isListening) blinkDuration *= 1.08;
+  if (isSpeaking) blinkDuration *= 1.15;
+  const mouthSpeak = isWellbeing ? SLIME_MOUTH_SPEAK_WELLBEING : SLIME_MOUTH_SPEAK_GENERALIZED;
+  const mouthSpeakDuration = mouthSpeak.duration * (p.motion === 'expressive' ? 0.92 : 1);
   const spread = studioScene ? dim * 2.05 : dim * 2.45;
   const bodyOpacity = isWellbeing ? 0.98 : 0.8;
   const coreOpacity = isWellbeing ? 0.94 : 0.66;
@@ -212,26 +220,47 @@ export function SlimeAdvisor({
             style={companionMode ? undefined : { transformStyle: 'preserve-3d' }}
             animate={
               companionMode
-                ? isListening
+                ? isSpeaking
                   ? {
-                      y: [0, -5, 0, -4, 0],
-                      x: studioScene ? [0, 1, -1, 0] : [0, 2, -2, 0],
-                      rotateZ: [0, -2, 2, 0],
-                      scale: [1, 1.04, 1, 1.02, 1],
+                      y: isWellbeing ? [0, -2.5, -0.8, -3.2, 0] : [0, -4, -1.5, -5, -2, 0],
+                      x: isWellbeing ? [0, 1.5, 0.5, -0.8, 0] : [0, 2.5, -1, 2, 0],
+                      rotateZ: isWellbeing ? [0, -1.2, 1, 0] : [0, -2.5, 2, -1.5, 0],
+                      scale: isWellbeing ? [1, 1.025, 1.01, 1.03, 1] : [1, 1.04, 1.02, 1.05, 1.02, 1],
                     }
-                  : studioScene
+                  : isListening
                     ? {
-                        y: [0, -10, 0, -14, 0],
-                        x: [0, 2, -2, 0],
-                        rotateZ: [0, -2.5, 2.5, 0],
-                        scale: [1, 1.02, 0.99, 1.01, 1],
+                        y: [0, -4, -3, -4, 0],
+                        x: studioScene ? [0, 1.5, 0.5, 0] : [0, 4, 3, 4, 0],
+                        rotateZ: [0, -1.5, 1.5, 0],
+                        scale: [1, 1.05, 1.04, 1.05, 1],
                       }
-                    : {
-                        y: [0, -16, 0, -28, 0, -12, 0, -22, 0],
-                        x: [0, 7, -7, 0, -6, 6, 0],
-                        rotateZ: [0, -5, 5, -3.5, 3.5, 0],
-                        scale: [1, 1.03, 0.99, 1.02, 1],
-                      }
+                    : isThinking
+                      ? {
+                          y: [0, -6, -3, -8, 0],
+                          x: studioScene ? [0, 1, -1, 0] : [0, 2.5, -2.5, 0],
+                          rotateZ: [0, -2, 2, 0],
+                          scale: [1, 1.01, 0.995, 1.008, 1],
+                        }
+                      : isCautious
+                        ? {
+                            y: [0, -3, 0],
+                            x: [0, 0.5, 0],
+                            rotateZ: [0, -0.8, 0],
+                            scale: [1, 1.01, 1],
+                          }
+                        : studioScene
+                          ? {
+                              y: [0, -10, 0, -14, 0],
+                              x: [0, 2, -2, 0],
+                              rotateZ: [0, -2.5, 2.5, 0],
+                              scale: [1, 1.02, 0.99, 1.01, 1],
+                            }
+                          : {
+                              y: [0, -16, 0, -28, 0, -12, 0, -22, 0],
+                              x: [0, 7, -7, 0, -6, 6, 0],
+                              rotateZ: [0, -5, 5, -3.5, 3.5, 0],
+                              scale: [1, 1.03, 0.99, 1.02, 1],
+                            }
                 : {
                     y: [0, -floatAmp, 0],
                     rotateX: [9, 11.2, 9],
@@ -239,7 +268,19 @@ export function SlimeAdvisor({
                   }
             }
             transition={{
-              duration: companionMode ? (isListening ? 1.6 : 4.2) : isSpeaking ? 1.8 : 3.2,
+              duration: companionMode
+                ? isSpeaking
+                  ? mouthSpeakDuration * 1.35
+                  : isListening
+                    ? 1.45
+                    : isThinking
+                      ? 5.4
+                      : isCautious
+                        ? 3.6
+                        : 4.2
+                : isSpeaking
+                  ? 1.8
+                  : 3.2,
               repeat: Infinity,
               ease: 'easeInOut',
             }}
@@ -313,7 +354,17 @@ export function SlimeAdvisor({
                 ? { rotate: [0, 3.2, -3.2, 0], scaleX: [1, 1.08, 0.92, 1.06, 1], scaleY: [1, 0.93, 1.08, 0.95, 1] }
                 : { rotate: [0, 1.2, -0.8, 0], scaleX: [1, 1.04, 0.98, 1], scaleY: [1, 0.97, 1.03, 1] }
             }
-            transition={{ duration: companionMode ? 2 : bodySpeed * 4.2, repeat: Infinity, ease: 'easeInOut' }}
+            transition={{
+              duration: companionMode
+                ? isSpeaking
+                  ? mouthSpeakDuration * 1.1
+                  : isThinking
+                    ? 3.4
+                    : 2
+                : bodySpeed * 4.2,
+              repeat: Infinity,
+              ease: 'easeInOut',
+            }}
           >
             <ellipse
               cx={50}
@@ -326,8 +377,18 @@ export function SlimeAdvisor({
             />
             <motion.g
               filter={`url(#premium-${uid})`}
-              animate={isSpeaking ? { y: [0, 0.45, 0] } : { y: 0 }}
-              transition={{ duration: bodySpeed * 2, repeat: Infinity, ease: 'easeInOut' }}
+              animate={
+                isSpeaking
+                  ? { y: isWellbeing ? [0, 0.35, 0.15, 0.4, 0] : [0, 0.55, 0.2, 0.65, 0] }
+                  : isListening
+                    ? { y: [0, 0.25, 0] }
+                    : { y: 0 }
+              }
+              transition={{
+                duration: isSpeaking ? mouthSpeakDuration : isListening ? 1.5 : bodySpeed * 2,
+                repeat: isSpeaking || isListening ? Infinity : 0,
+                ease: 'easeInOut',
+              }}
             >
               <motion.ellipse
                 cx={50}
@@ -438,7 +499,14 @@ export function SlimeAdvisor({
               <motion.g
                 key={companionMode ? `buddy-eye-${buddyMood}` : 'eye-blink'}
                 animate={{ scaleY: [1, 1, 1, 0.15, 1, 1] }}
-                transition={{ duration: blinkDuration, repeat: Infinity, ease: 'easeInOut', times: [0, 0.86, 0.87, 0.89, 0.91, 1] }}
+                transition={{
+                  duration: blinkDuration,
+                  repeat: Infinity,
+                  ease: 'easeInOut',
+                  times: isThinking
+                    ? [0, 0.9, 0.91, 0.93, 0.95, 1]
+                    : [0, 0.86, 0.87, 0.89, 0.91, 1],
+                }}
                 style={{ transformOrigin: '50px 40px' }}
               >
                 {companionMode && !isSpeaking && buddyMood === 3 ? (
@@ -450,19 +518,47 @@ export function SlimeAdvisor({
                   <>
                     <circle
                       cx={leftEyeX}
-                      cy={shape.eyeY + (companionMode && !isSpeaking && buddyMood === 1 ? -0.6 : 0)}
-                      r={companionMode && !isSpeaking ? (buddyMood === 2 ? 5.25 : buddyMood === 1 ? 3.55 : 4.05) : 4.05}
+                      cy={
+                        shape.eyeY +
+                        (companionMode && !isSpeaking && buddyMood === 1 ? -0.6 : 0) +
+                        (isListening ? -0.35 : 0)
+                      }
+                      r={
+                        isListening
+                          ? 4.45
+                          : companionMode && !isSpeaking
+                            ? buddyMood === 2
+                              ? 5.25
+                              : buddyMood === 1
+                                ? 3.55
+                                : 4.05
+                            : 4.05
+                      }
                       className={cn('fill-white', isCautious ? 'opacity-95' : 'opacity-100')}
                       stroke={eyeStroke}
-                      strokeWidth={0.65}
+                      strokeWidth={isListening ? 0.75 : 0.65}
                     />
                     <circle
                       cx={rightEyeX}
-                      cy={shape.eyeY + (companionMode && !isSpeaking && buddyMood === 1 ? -0.6 : 0)}
-                      r={companionMode && !isSpeaking ? (buddyMood === 2 ? 5.25 : buddyMood === 1 ? 3.55 : 4.05) : 4.05}
+                      cy={
+                        shape.eyeY +
+                        (companionMode && !isSpeaking && buddyMood === 1 ? -0.6 : 0) +
+                        (isListening ? -0.35 : 0)
+                      }
+                      r={
+                        isListening
+                          ? 4.45
+                          : companionMode && !isSpeaking
+                            ? buddyMood === 2
+                              ? 5.25
+                              : buddyMood === 1
+                                ? 3.55
+                                : 4.05
+                            : 4.05
+                      }
                       className="fill-white"
                       stroke={eyeStroke}
-                      strokeWidth={0.65}
+                      strokeWidth={isListening ? 0.75 : 0.65}
                     />
                   </>
                 )}
@@ -496,7 +592,7 @@ export function SlimeAdvisor({
             initial={{ rx: 6.3, ry: 1.55 }}
             animate={
               isSpeaking
-                ? { ry: [2.2, 4.8, 2.7, 4.3, 2.1], opacity: 0.92, rx: 6.4 }
+                ? { ry: mouthSpeak.ry, rx: mouthSpeak.rx, opacity: 0.92 }
                 : companionMode
                   ? buddyMood === 0
                     ? { rx: 6.3, ry: 1.55, opacity: 0.58 }
@@ -508,7 +604,16 @@ export function SlimeAdvisor({
                   : { ry: 1.55, opacity: 0.56, rx: 6.3 }
             }
             transition={
-              isSpeaking ? { duration: mouthSpeed, repeat: Infinity, ease: 'easeInOut' } : companionMode ? { duration: 0.4, ease: 'easeOut' } : { duration: 0.25 }
+              isSpeaking
+                ? {
+                    duration: mouthSpeakDuration,
+                    repeat: Infinity,
+                    ease: 'easeInOut',
+                    times: mouthSpeak.times,
+                  }
+                : companionMode
+                  ? { duration: 0.4, ease: 'easeOut' }
+                  : { duration: 0.25 }
             }
             data-testid="slime-mouth"
           />

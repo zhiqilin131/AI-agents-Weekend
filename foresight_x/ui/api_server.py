@@ -151,6 +151,7 @@ from foresight_x.llm.model_resolve import (
     public_model_dict,
 )
 from foresight_x.llm.model_catalog import build_model_catalog
+from foresight_x.usage.credit_store import find_usage_by_request_id
 from foresight_x.usage.credits import (
     calculate_credit_cost,
     check_credits,
@@ -229,6 +230,23 @@ async def _read_audio_upload_limited(upload: UploadFile, *, empty_detail: str) -
 
 def _credit_header_request_id(request: Request) -> str | None:
     return (request.headers.get("x-credit-request-id") or "").strip() or None
+
+
+def _bundled_voice_turn_request_id(request: Request) -> str | None:
+    """Client voice-turn id (same as voice-command-stream X-Credit-Request-Id) to bundle TTS into that charge."""
+    return (request.headers.get("x-bundled-voice-turn") or "").strip() or None
+
+
+def _tts_billed_in_voice_turn(settings, bundled_turn_id: str) -> bool:
+    """True when this TTS call is covered by an earlier slime_voice debit for the same turn."""
+    rid = (bundled_turn_id or "").strip()
+    if not rid:
+        return False
+    uid = (settings.foresight_user_id or "").strip()
+    if not uid:
+        return False
+    prior = find_usage_by_request_id(uid, rid, settings=settings)
+    return prior is not None and prior.type == "usage" and prior.feature == "slime_voice"
 
 
 def _credit_actor_email() -> str | None:
@@ -5220,16 +5238,23 @@ def slime_tts(body: SlimeTtsBody, request: Request):
     settings = _settings_for_active_user()
     rid = _credit_header_request_id(request) or f"slime_tts:{uuid.uuid4().hex}"
     prof = load_user_profile(settings)
-    tx, gate_err = _credit_gate(
-        settings,
-        "tts",
-        request_id=rid,
-        model_option_id=body.model_option_id,
-        profile=prof,
-        metadata={"endpoint": "/api/slime/tts"},
-    )
-    if gate_err is not None:
-        return gate_err
+    bundled_turn = _bundled_voice_turn_request_id(request)
+    tts_in_voice_turn = _tts_billed_in_voice_turn(settings, bundled_turn) if bundled_turn else False
+    tx: CreditTransaction | None = None
+    gate_err: JSONResponse | None = None
+    if tts_in_voice_turn:
+        tx = None
+    else:
+        tx, gate_err = _credit_gate(
+            settings,
+            "tts",
+            request_id=rid,
+            model_option_id=body.model_option_id,
+            profile=prof,
+            metadata={"endpoint": "/api/slime/tts"},
+        )
+        if gate_err is not None:
+            return gate_err
     if not (settings.openai_api_key or "").strip():
         if tx is not None:
             refund_for_transaction(tx, "OpenAI not configured", settings=settings)

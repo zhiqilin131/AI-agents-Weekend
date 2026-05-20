@@ -548,6 +548,8 @@ export function SlimeVoiceAgent({
   const speechUtteranceRef = useRef(0);
   /** Prevents stream/TTS races from replacing a full bubble with a shorter streamed prefix. */
   const lastBubbleTextRef = useRef('');
+  /** voice-command-stream credit id — Buddy TTS chunks in the same turn reuse this (no per-sentence TTS debit). */
+  const voiceTurnCreditIdRef = useRef<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     patch: Record<string, unknown>;
@@ -563,9 +565,14 @@ export function SlimeVoiceAgent({
     onSpeechOutputChange?.(null);
   }, [onSpeechOutputChange]);
 
+  const clearVoiceTurnBilling = useCallback(() => {
+    voiceTurnCreditIdRef.current = null;
+  }, []);
+
   const cancelVoiceRequest = useCallback(() => {
     voiceRequestAbortRef.current?.abort();
     voiceRequestAbortRef.current = null;
+    clearVoiceTurnBilling();
     inFlightRequestRef.current += 1;
     if (slowHintTimerRef.current != null) {
       window.clearTimeout(slowHintTimerRef.current);
@@ -578,7 +585,7 @@ export function SlimeVoiceAgent({
     setLatencyHint(null);
     setStreamDraftReply(null);
     setVoiceState('idle');
-  }, []);
+  }, [clearVoiceTurnBilling]);
 
   const showSpeechOutput = useCallback(
     (
@@ -693,11 +700,13 @@ export function SlimeVoiceAgent({
       const ttsCredit =
         typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${prefix}-${Date.now()}`;
       const ttsVoice = normalizeTtsVoiceName(fixedSlimeTtsVoice);
+      const bundledTurn = voiceTurnCreditIdRef.current;
       const r = await apiFetch('/api/slime/tts', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Credit-Request-Id': ttsCredit,
+          ...(bundledTurn ? { 'X-Bundled-Voice-Turn': bundledTurn } : {}),
         },
         body: JSON.stringify({
           text: trimmed,
@@ -1399,7 +1408,10 @@ export function SlimeVoiceAgent({
       const ttsCommon: RunTtsOptions = {
         force: true,
         evidenceItems,
-        onComplete: () => setVoiceState('idle'),
+        onComplete: () => {
+          clearVoiceTurnBilling();
+          setVoiceState('idle');
+        },
         onMayHaveBlocked: () =>
           setTtsHint('No audio? Tap “Play reply” below — some browsers block auto-speak after recording.'),
       };
@@ -1561,6 +1573,7 @@ export function SlimeVoiceAgent({
       showSpeechOutput,
       runTts,
       navigate,
+      clearVoiceTurnBilling,
     ],
   );
 
@@ -1625,6 +1638,7 @@ export function SlimeVoiceAgent({
         const reqStart = performance.now();
         const vcCredit =
           typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `vc-${Date.now()}`;
+        voiceTurnCreditIdRef.current = vcCredit;
         const res = await apiFetch('/api/slime/voice-command-stream', {
           method: 'POST',
           headers: { 'X-Credit-Request-Id': vcCredit },
@@ -1636,6 +1650,7 @@ export function SlimeVoiceAgent({
           setLatencyHint(uploadMs > 1800 ? 'Processing voice command…' : null);
         }
         if (res.status === 402) {
+          clearVoiceTurnBilling();
           let j: Record<string, unknown> = {};
           try {
             j = (await res.json()) as Record<string, unknown>;
@@ -1735,13 +1750,16 @@ export function SlimeVoiceAgent({
         setStreamDraftReply(null);
         voiceRequestAbortRef.current = null;
         if (e instanceof DOMException && e.name === 'AbortError') {
+          clearVoiceTurnBilling();
           setVoiceState('idle');
           return;
         }
         if (e instanceof Error && e.name === 'AbortError') {
+          clearVoiceTurnBilling();
           setVoiceState('idle');
           return;
         }
+        clearVoiceTurnBilling();
         setVoiceState('error');
         showSpeechOutput(friendlySlimeVoiceError(apiFetchErrorMessage(e)), { source: 'error' });
       }
@@ -1763,6 +1781,7 @@ export function SlimeVoiceAgent({
       cancelBuddyAudio,
       resetStreamTtsState,
       decisionModeActive,
+      clearVoiceTurnBilling,
     ],
   );
 

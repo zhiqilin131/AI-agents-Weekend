@@ -7,6 +7,8 @@ import { cn } from '../../app/components/ui/utils';
 import type { SlimeProfile } from '../../app/model';
 import type { MemoryEvidenceItem } from '../../app/components/profile/memoryEvidenceTypes';
 import type { SlimeDecisionSuggestion, SlimeSpeechOutput } from './SlimeVoiceAgent';
+import { autoHighlightSlimeSpeech } from './slimeSpeechMarkdown';
+import { SLIME_DRAG_RELEASE_SPRING } from './slimeMotionTokens';
 
 /** Approximate radius of the slime “body” for obstacle clearance (viewport px). */
 const SLIME_FOOTPRINT_RADIUS = 78;
@@ -123,81 +125,6 @@ function memoryChipLabel(item: MemoryEvidenceItem): string {
   return cleaned.length > 34 ? `${cleaned.slice(0, 31).trim()}…` : cleaned;
 }
 
-function hasSlimeReadableMarkdown(text: string): boolean {
-  return /(\*\*[^*]+\*\*|^\s*>)/m.test(text || '');
-}
-
-function highlightFirstPlainMatch(text: string, pattern: RegExp): { text: string; changed: boolean } {
-  const match = text.match(pattern);
-  const phrase = match?.[1]?.trim();
-  if (!phrase || phrase.length < 8 || phrase.length > 96) return { text, changed: false };
-  return { text: text.replace(phrase, `**${phrase}**`), changed: true };
-}
-
-function autoHighlightSlimeSpeech(text: string): string {
-  const raw = (text || '').trim();
-  if (!raw || hasSlimeReadableMarkdown(raw)) return text;
-
-  let out = raw;
-
-  const actionMatches = Array.from(
-    out.matchAll(
-      /(^|(?<=[.!?])\s+)([^.!?]*(?:would you|could we|could you|can we|can you|what do you think|want to try|small step|share what's on your mind|take a moment|reflecting on)[^.!?]*[.!?])/gi,
-    ),
-  );
-  const action = actionMatches.at(-1)?.[2]?.trim();
-  if (action && action.length <= 260 && !out.includes(`> ${action}`)) {
-    out = out.replace(action, `\n\n> ${action}`);
-  }
-
-  const sections = out.split(/\n\n(?=>\s)/);
-  let body = sections[0] ?? out;
-  const tail = sections.length > 1 ? `\n\n${sections.slice(1).join('\n\n')}` : '';
-
-  const emphasisPatterns = [
-    /\b(feeling sad about [^,.!?]{8,80})/i,
-    /\b(tough place to be)\b/i,
-    /\b(hard on yourself)\b/i,
-    /\b(not meeting the standards [^,.!?]{8,80})/i,
-    /\b(already dealing with [^,.!?]{8,80})/i,
-    /\b(without letting it define your worth)\b/i,
-    /\b(labeling it as [^,.!?]{8,80})/i,
-    /\b(fit into your life in a more positive way)\b/i,
-    /\b(really heavy|that weight|the pressure that comes with it|not making progress|ups and downs|moment of focus)\b/i,
-    /\b(part of you that [^,.!?]{8,90})/i,
-    /\b(the part that [^,.!?]{8,90})/i,
-    /\b(what matters [^,.!?]{8,90})/i,
-  ];
-
-  let highlights = 0;
-  for (const pattern of emphasisPatterns) {
-    if (highlights >= 5) break;
-    const next = highlightFirstPlainMatch(body, pattern);
-    if (next.changed) {
-      body = next.text;
-      highlights += 1;
-    }
-  }
-
-  if (highlights === 0) {
-    const firstInsight = out
-      .split(/(?<=[.!?])\s+/)
-      .find((s) => s.length >= 42 && s.length <= 150 && !/\?$/.test(s) && !/^hello\b/i.test(s.trim()));
-    if (firstInsight) {
-      const phrase = firstInsight
-        .replace(/^It(?:'s| is)\s+/i, '')
-        .replace(/^Sometimes,\s+/i, '')
-        .split(/,\s+|\s+and\s+|\s+but\s+/)[0]
-        .trim();
-      if (phrase.length >= 16 && phrase.length <= 90) {
-        body = body.replace(phrase, `**${phrase}**`);
-      }
-    }
-  }
-
-  return `${body}${tail}`;
-}
-
 /**
  * Roaming pet: wander from current spot; drag merges into roam (no snap-back); clamped to stage.
  */
@@ -232,6 +159,7 @@ export function SlimeCompanionStage({
   const [wiggle, setWiggle] = useState(0);
   const [playBurst, setPlayBurst] = useState(0);
   const draggingRef = useRef(false);
+  const reducedMotionRef = useRef(false);
   const cancelledRef = useRef(false);
   const singleTapTimerRef = useRef<number | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -276,6 +204,11 @@ export function SlimeCompanionStage({
       ro.disconnect();
       window.removeEventListener('resize', clampRoamIntoStage);
     };
+  }, []);
+
+  useEffect(() => {
+    reducedMotionRef.current =
+      typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }, []);
 
   useEffect(() => {
@@ -375,6 +308,16 @@ export function SlimeCompanionStage({
             dragX.set(0);
             dragY.set(0);
             draggingRef.current = false;
+            if (!reducedMotionRef.current) {
+              void (async () => {
+                try {
+                  await animate(squish, 0.9, { duration: 0.08, ease: 'easeOut' });
+                  await animate(squish, 1, { type: 'spring', ...SLIME_DRAG_RELEASE_SPRING });
+                } catch {
+                  squish.set(1);
+                }
+              })();
+            }
           }}
           title={
             onDoubleClickToggleCompanion
@@ -410,6 +353,16 @@ export function SlimeCompanionStage({
             key={playBurst}
             className="relative"
             initial={false}
+            whileHover={
+              reducedMotionRef.current || draggingRef.current
+                ? undefined
+                : { scale: 1.035, transition: { type: 'spring', stiffness: 520, damping: 24 } }
+            }
+            whileTap={
+              reducedMotionRef.current
+                ? undefined
+                : { scale: 0.97, transition: { type: 'spring', stiffness: 600, damping: 28 } }
+            }
             animate={
               playBurst > 0
                 ? { y: [0, -10, 0, -6, 0], scaleY: [1, 0.88, 1.1, 0.95, 1], scaleX: [1, 1.06, 0.96, 1.04, 1] }
@@ -420,25 +373,26 @@ export function SlimeCompanionStage({
             <motion.div
               key={wiggle}
               initial={wiggle === 0 ? false : { x: 0, scale: 1 }}
-              animate={wiggle > 0 ? { x: [0, -9, 9, -6, 6, 0], scale: [1, 1.06, 1.04, 1] } : { x: 0, scale: 1 }}
-              transition={{ duration: wiggle > 0 ? 0.48 : 0 }}
+              animate={wiggle > 0 ? { x: [0, -7, 7, -4, 4, 0], scale: [1, 1.05, 1.02, 1] } : { x: 0, scale: 1 }}
+              transition={{ duration: wiggle > 0 ? 0.42 : 0 }}
             >
               <SlimeAdvisor state={advisorState} size="lg" profile={profile} slimeType={slimeType} companionMode />
             </motion.div>
             {speechOutput?.text ? (
               <motion.div
                 key={`${speechOutput.source}:${speechOutput.utteranceId ?? speechOutput.text}`}
-                initial={{ opacity: 0, y: 10, scale: 0.92, rotate: -1.5 }}
-                animate={{ opacity: 1, y: 0, scale: 1, rotate: 0 }}
-                exit={{ opacity: 0, y: 6, scale: 0.96 }}
-                transition={{ type: 'spring', stiffness: 420, damping: 26 }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.28, ease: 'easeOut' }}
                 className={cn(
-                  'slime-comic-bubble slime-comic-bubble-mouth-tail pointer-events-auto absolute z-[110]',
+                  'slime-comic-bubble slime-comic-bubble-mouth-tail slime-comic-bubble-emerge pointer-events-auto absolute z-[110]',
                   /* Tail dots arc from Rimumu/Mochi's mouth to the bubble body. */
                   'left-[68%] top-[3%] max-w-[min(78vw,34rem)]',
                   slimeType === 'wellbeing' ? 'slime-comic-bubble-wellbeing' : 'slime-comic-bubble-generalized',
                   slimeType === 'wellbeing' &&
                     'sm:max-w-[min(28rem,calc(100vw-22rem))]',
+                  speechOutput.speaking && 'slime-comic-bubble-speaking',
                   speechOutput.source === 'error' && 'slime-comic-bubble-error',
                   speechOutput.source === 'system' && 'slime-comic-bubble-system',
                 )}
