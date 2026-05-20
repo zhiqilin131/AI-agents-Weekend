@@ -4,7 +4,7 @@
 
 | Path | When | Entry |
 |------|------|--------|
-| **3D Mascot** | `VITE_SLIME_3D=1` + WebGL + motion OK | [`SlimeAdvisor3D`](web/src/features/slime/visual3d/SlimeAdvisor3D.tsx) |
+| **3D Mascot** | production build (or `VITE_SLIME_3D=1`) + WebGL + motion OK | [`SlimeAdvisor3D`](web/src/features/slime/visual3d/SlimeAdvisor3D.tsx) |
 | **2D SVG** | Fallback / `prefers-reduced-motion` | [`SlimeAdvisor2D`](web/src/app/components/report/SlimeAdvisor2D.tsx) |
 | **Facade** | All touchpoints | [`SlimeAdvisor`](web/src/app/components/report/SlimeAdvisor.tsx) |
 

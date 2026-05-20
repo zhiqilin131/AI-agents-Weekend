@@ -1,6 +1,20 @@
-/** Enable WebGL slime (set VITE_SLIME_3D=1 in .env). */
-export const SLIME_3D_ENABLED =
-  import.meta.env.VITE_SLIME_3D === 'true' || import.meta.env.VITE_SLIME_3D === '1';
+/**
+ * WebGL slime toggle (Vite bakes this at build time).
+ * - `VITE_SLIME_3D=1` / `true` → on
+ * - `VITE_SLIME_3D=0` / `false` → off (CI, low-end previews)
+ * - unset in production build → on (so Vercel does not need a separate env var)
+ * - unset in local dev → off (use `web/.env.development` with `VITE_SLIME_3D=1`)
+ */
+export function parseSlime3DFlag(flag: string | undefined, isProd: boolean): boolean {
+  if (flag === '0' || flag === 'false') return false;
+  if (flag === '1' || flag === 'true') return true;
+  return isProd;
+}
+
+export const SLIME_3D_ENABLED = parseSlime3DFlag(
+  import.meta.env.VITE_SLIME_3D,
+  import.meta.env.PROD,
+);
 
 export type SlimeVisualVariant = 'hero' | 'buddyHero' | 'studio' | 'chip' | 'inline';
 
