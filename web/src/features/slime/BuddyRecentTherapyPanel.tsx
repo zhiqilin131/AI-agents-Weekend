@@ -55,6 +55,7 @@ export type BuddyRecentTherapyPanelProps = {
   activeThreadId: string | null;
   storageUserId?: string | null;
   refreshKey?: number;
+  creatingNewTherapy?: boolean;
   onSelectThread: (threadId: string) => void;
   onStartNewTherapy: () => void;
   onOpenFullChat: () => void;
@@ -83,6 +84,7 @@ export function BuddyRecentTherapyPanel({
   activeThreadId,
   storageUserId = null,
   refreshKey = 0,
+  creatingNewTherapy = false,
   onSelectThread,
   onStartNewTherapy,
   onOpenFullChat,
@@ -232,14 +234,15 @@ export function BuddyRecentTherapyPanel({
                 <button
                   type="button"
                   onClick={onStartNewTherapy}
+                  disabled={creatingNewTherapy}
                   className={cn(
-                    'mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs',
+                    'mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-70',
                     SLIME_CTA_BTN_CLASS,
                   )}
                   style={slimeCtaButtonStyle(ident.theme)}
                 >
                   <Plus className="h-3.5 w-3.5" aria-hidden />
-                  New session
+                  {creatingNewTherapy ? 'Creating…' : 'New session'}
                 </button>
               </BuddyTooltip>
 

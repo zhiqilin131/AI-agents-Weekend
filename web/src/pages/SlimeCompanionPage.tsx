@@ -66,6 +66,7 @@ import {
 } from '../features/slime/slimeIdentity';
 import { slimeTypeFromThread } from '../utils/patchThreadSlimeType';
 import { BUDDY_TOPBAR_CLEARANCE } from '../features/slime/buddyLayout';
+import { isDraftThread, listDraftThreads, resolveThreadSlimeType } from '../features/slime/newChatGuard';
 
 /** Legacy single-key storage; per-user keys are ``${prefix}:${supabaseUserId}``. */
 const BUDDY_THREAD_STORAGE_PREFIX = 'slimeBuddyShadowThreadId';
@@ -145,6 +146,8 @@ export default function SlimeCompanionPage() {
   const profileMemoryToastTimersRef = useRef<Map<string, number>>(new Map());
   const [pendingDecision, setPendingDecision] = useState<SlimeDecisionSuggestion | null>(null);
   const [buddyPendingAction, setBuddyPendingAction] = useState<PendingAction | null>(null);
+  const [creatingBuddyChat, setCreatingBuddyChat] = useState(false);
+  const [creatingBuddyTherapy, setCreatingBuddyTherapy] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [decisionModeManual, setDecisionModeManual] = useState(false);
   const reportStream = useDecisionReportStream();
@@ -190,38 +193,103 @@ export default function SlimeCompanionPage() {
     [authUserId, buddySlimeType],
   );
 
+  const activateBuddyThread = useCallback(
+    (
+      thread: ShadowThread,
+      slimeType: SlimeType,
+      options?: { syncCompanionFromThread?: boolean; openWellbeingIntake?: boolean },
+    ) => {
+      const resolvedType = options?.syncCompanionFromThread ? resolveThreadSlimeType(thread) : slimeType;
+      writeBuddyCompanionPref(authUserId, resolvedType);
+      setBuddySlimeType(resolvedType);
+      setBuddyActiveThread(thread);
+      const rep =
+        (thread.therapy_session?.report as TherapyReport | undefined) ??
+        therapyReportFromMessages(thread.messages);
+      if (rep) setTherapyReport(rep);
+      persistThreadId(thread.thread_id, resolvedType);
+      if (options?.openWellbeingIntake && resolvedType === 'wellbeing') {
+        setWellbeingIntakeOpen(true);
+      }
+      void loadBuddyThreadMeta(thread.thread_id, { syncCompanionFromThread: options?.syncCompanionFromThread });
+    },
+    [authUserId, loadBuddyThreadMeta, persistThreadId],
+  );
+
+  const loadBuddyThreads = useCallback(async (): Promise<ShadowThread[]> => {
+    const res = await apiFetch('/api/shadow-chat/threads');
+    if (!res.ok) return [];
+    const data = (await res.json()) as { threads?: ShadowThread[] };
+    return data.threads || [];
+  }, []);
+
   const startNewTherapy = useCallback(async () => {
-    const res = await apiFetch('/api/shadow-chat/threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slime_type: 'wellbeing', title: 'Therapy session' }),
-    });
-    if (!res.ok) return;
-    const data = (await res.json()) as { thread?: ShadowThread };
-    const tid = data.thread?.thread_id;
-    if (!tid) return;
-    writeBuddyCompanionPref(authUserId, 'wellbeing');
-    setBuddySlimeType('wellbeing');
-    persistThreadId(tid, 'wellbeing');
-    await loadBuddyThreadMeta(tid, { syncCompanionFromThread: true });
-    setWellbeingIntakeOpen(true);
-  }, [authUserId, loadBuddyThreadMeta, persistThreadId]);
+    if (creatingBuddyTherapy) return;
+    setCreatingBuddyTherapy(true);
+    try {
+      if (buddyActiveThread && isDraftThread(buddyActiveThread, 'wellbeing')) {
+        activateBuddyThread(buddyActiveThread, 'wellbeing', {
+          syncCompanionFromThread: true,
+          openWellbeingIntake: true,
+        });
+        return;
+      }
+      const threads = await loadBuddyThreads();
+      const staleDraftIds = listDraftThreads(threads, 'wellbeing')
+        .map((t) => t.thread_id)
+        .filter((id) => id && id !== buddyThreadId);
+      const res = await apiFetch('/api/shadow-chat/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slime_type: 'wellbeing', title: 'Therapy session' }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { thread?: ShadowThread };
+      if (!data.thread?.thread_id) return;
+      activateBuddyThread(data.thread, 'wellbeing', {
+        syncCompanionFromThread: true,
+        openWellbeingIntake: true,
+      });
+      void Promise.allSettled(
+        staleDraftIds
+          .filter((id) => id !== data.thread?.thread_id)
+          .map((id) => apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+      ).then(() => setBuddyRecapRefresh((n) => n + 1));
+    } finally {
+      setCreatingBuddyTherapy(false);
+    }
+  }, [activateBuddyThread, buddyActiveThread, buddyThreadId, creatingBuddyTherapy, loadBuddyThreads]);
 
   const startNewBuddyChat = useCallback(async () => {
-    const res = await apiFetch('/api/shadow-chat/threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slime_type: 'generalized', title: 'New chat' }),
-    });
-    if (!res.ok) return;
-    const data = (await res.json()) as { thread?: ShadowThread };
-    const tid = data.thread?.thread_id;
-    if (!tid) return;
-    writeBuddyCompanionPref(authUserId, 'generalized');
-    setBuddySlimeType('generalized');
-    persistThreadId(tid, 'generalized');
-    await loadBuddyThreadMeta(tid, { syncCompanionFromThread: true });
-  }, [authUserId, loadBuddyThreadMeta, persistThreadId]);
+    if (creatingBuddyChat) return;
+    setCreatingBuddyChat(true);
+    try {
+      if (buddyActiveThread && isDraftThread(buddyActiveThread, 'generalized')) {
+        activateBuddyThread(buddyActiveThread, 'generalized', { syncCompanionFromThread: true });
+        return;
+      }
+      const threads = await loadBuddyThreads();
+      const staleDraftIds = listDraftThreads(threads, 'generalized')
+        .map((t) => t.thread_id)
+        .filter((id) => id && id !== buddyThreadId);
+      const res = await apiFetch('/api/shadow-chat/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slime_type: 'generalized', title: 'New chat' }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { thread?: ShadowThread };
+      if (!data.thread?.thread_id) return;
+      activateBuddyThread(data.thread, 'generalized', { syncCompanionFromThread: true });
+      void Promise.allSettled(
+        staleDraftIds
+          .filter((id) => id !== data.thread?.thread_id)
+          .map((id) => apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+      ).then(() => setBuddyRecapRefresh((n) => n + 1));
+    } finally {
+      setCreatingBuddyChat(false);
+    }
+  }, [activateBuddyThread, buddyActiveThread, buddyThreadId, creatingBuddyChat, loadBuddyThreads]);
 
   const openBuddyChat = useCallback(() => {
     const tid = buddyThreadId?.trim();
@@ -772,6 +840,7 @@ export default function SlimeCompanionPage() {
               activeThreadId={buddyThreadId}
               storageUserId={authUserId}
               refreshKey={buddyRecapRefresh}
+              creatingNewTherapy={creatingBuddyTherapy}
               onSelectThread={(id) => {
                 persistThreadId(id, 'wellbeing');
                 void loadBuddyThreadMeta(id, { syncCompanionFromThread: true });
@@ -786,6 +855,7 @@ export default function SlimeCompanionPage() {
               activeThreadId={buddyThreadId}
               storageUserId={authUserId}
               refreshKey={buddyRecapRefresh}
+              creatingNewChat={creatingBuddyChat}
               onSelectThread={(id) => {
                 persistThreadId(id, 'generalized');
                 void loadBuddyThreadMeta(id, { syncCompanionFromThread: true });

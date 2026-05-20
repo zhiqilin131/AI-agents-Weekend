@@ -62,6 +62,7 @@ import { TherapyReportPanel } from '../../../features/slime/TherapyReportPanel';
 import type { TherapyReport } from '../../../features/slime/therapySession';
 import { therapyReportFromMessages } from '../../../features/slime/therapySession';
 import { sortThreadsByRecent } from '../../../features/slime/buddyThreadSort';
+import { findReusableDraftThread, isDraftThread, listDraftThreads, resolveThreadSlimeType } from '../../../features/slime/newChatGuard';
 
 export function ShadowChatShell({
   initialThreadId = null,
@@ -77,6 +78,7 @@ export function ShadowChatShell({
   const [activeSlimeType, setActiveSlimeType] = useState<SlimeType>(initialSlimeType);
   const [activeThread, setActiveThread] = useState<ShadowThread | null>(null);
   const [pickSlimeOpen, setPickSlimeOpen] = useState(false);
+  const [creatingNewChat, setCreatingNewChat] = useState(false);
   const [wellbeingIntakeOpen, setWellbeingIntakeOpen] = useState(false);
   const [therapyReportOpen, setTherapyReportOpen] = useState(false);
   const [therapyReport, setTherapyReport] = useState<TherapyReport | null>(null);
@@ -290,41 +292,88 @@ export function ShadowChatShell({
   };
 
   const createChatWithSlime = async (slimeType: SlimeType) => {
-    const res = await apiFetch('/api/shadow-chat/threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        slime_type: slimeType,
-        title: slimeType === 'wellbeing' ? 'Therapy session' : undefined,
-      }),
-    });
-    if (!res.ok) return;
-    const data = (await res.json()) as { thread: ShadowThread };
-    const createdThread: ShadowThread = {
-      ...data.thread,
-      slime_type: data.thread.slime_type ?? data.thread.slimeType ?? slimeType,
-      created_at: data.thread.created_at || new Date().toISOString(),
-      updated_at: data.thread.updated_at || data.thread.created_at || new Date().toISOString(),
-    };
-    setThreads((prev) =>
-      sortThreadsByRecent([
-        createdThread,
-        ...prev.filter((t) => t.thread_id !== createdThread.thread_id),
-      ]),
-    );
-    await loadThread(data.thread.thread_id);
-    if (slimeType === 'wellbeing') {
-      setWellbeingIntakeOpen(true);
+    if (creatingNewChat) return;
+    setCreatingNewChat(true);
+    try {
+      const activeSummary = activeThreadId
+        ? threads.find((thread) => thread.thread_id === activeThreadId) ?? null
+        : null;
+      if (activeSummary && isDraftThread(activeSummary, slimeType)) {
+        await loadThread(activeSummary.thread_id);
+        if (slimeType === 'wellbeing') {
+          setWellbeingIntakeOpen(true);
+        }
+        return;
+      }
+      const staleDraftIds = listDraftThreads(threads, slimeType)
+        .map((thread) => thread.thread_id)
+        .filter((id) => id && id !== activeThreadId);
+      const res = await apiFetch('/api/shadow-chat/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          slime_type: slimeType,
+          title: slimeType === 'wellbeing' ? 'Therapy session' : undefined,
+        }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { thread: ShadowThread };
+      const nowIso = new Date().toISOString();
+      const createdThread: ShadowThread = {
+        ...data.thread,
+        slime_type: resolveThreadSlimeType(data.thread),
+        created_at: data.thread.created_at || nowIso,
+        updated_at: data.thread.updated_at || data.thread.created_at || nowIso,
+        messages: data.thread.messages || [],
+      };
+      setThreads((prev) =>
+        sortThreadsByRecent([
+          createdThread,
+          ...prev.filter((t) => t.thread_id !== createdThread.thread_id),
+        ]),
+      );
+      // Optimistic activation avoids waiting an extra GET roundtrip.
+      setActiveThreadId(createdThread.thread_id);
+      setActiveThread(createdThread);
+      setActiveSlimeType(resolveThreadSlimeType(createdThread));
+      setMessages(normalizeThreadMessages(createdThread.messages || []));
+      setPendingAction(createdThread.pending_action ?? null);
+      if (slimeType === 'wellbeing') {
+        setWellbeingIntakeOpen(true);
+      }
+      // Keep exactly one empty draft visible by removing stale empty drafts in background.
+      void Promise.allSettled(
+        staleDraftIds
+          .filter((id) => id !== createdThread.thread_id)
+          .map((id) => apiFetch(`/api/shadow-chat/threads/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+      ).then(() => {
+        void refreshThreads();
+      });
+      void refreshThreads();
+    } finally {
+      setCreatingNewChat(false);
     }
   };
 
   const newChat = (opts?: { fromAuto?: boolean }) => {
+    if (creatingNewChat) return;
     if (autoCreateThreadRef.current && !opts?.fromAuto) return;
     if (opts?.fromAuto) {
       void createChatWithSlime(initialSlimeType);
       return;
     }
-    setPickSlimeOpen(true);
+    // Keep the slime picker only when there is no existing draft/new-chat shell yet.
+    const activeIsDraft = Boolean(
+      activeThread && isDraftThread(activeThread, resolveThreadSlimeType(activeThread)),
+    );
+    const hasExistingDraftShell =
+      activeIsDraft ||
+      threads.some((thread) => isDraftThread(thread, resolveThreadSlimeType(thread)));
+    if (!hasExistingDraftShell) {
+      setPickSlimeOpen(true);
+      return;
+    }
+    void createChatWithSlime(activeSlimeType);
   };
 
   const deleteProfileMemoryFromToast = useCallback(
@@ -387,26 +436,34 @@ export function ShadowChatShell({
   }, []);
 
   useEffect(() => {
-    if (threads.length > 0 && !activeThreadId) {
-      const prefer = initialThreadId && threads.some((t) => t.thread_id === initialThreadId) ? initialThreadId : threads[0].thread_id;
-      void loadThread(prefer);
-    } else if (threadsLoaded && threads.length === 0 && !activeThreadId) {
-      if (autoCreateThreadRef.current) return;
-      autoCreateThreadRef.current = true;
-      setMessages([]);
-      setPendingAction(null);
-      lastDecisionSuggestionRef.current = null;
-      profileMemoryToastThreadRef.current = null;
-      profileMemoryToastKeysRef.current.clear();
-      profileMemoryToastTimersRef.current.forEach((tid) => window.clearTimeout(tid));
-      profileMemoryToastTimersRef.current.clear();
-      setProfileMemoryToasts([]);
-      void (async () => {
-        await newChat({ fromAuto: true });
-        autoCreateThreadRef.current = false;
-      })();
+    if (!threadsLoaded || activeThreadId) return;
+    if (initialThreadId && threads.some((t) => t.thread_id === initialThreadId)) {
+      void loadThread(initialThreadId);
+      return;
     }
-  }, [threadsLoaded, threads, activeThreadId, initialThreadId]);
+    // On (re)login, land user in a draft "new chat" shell instead of a historical thread.
+    const preferredDraft =
+      findReusableDraftThread(threads, initialSlimeType) ??
+      findReusableDraftThread(threads, 'generalized');
+    if (preferredDraft?.thread_id) {
+      void loadThread(preferredDraft.thread_id);
+      return;
+    }
+    if (autoCreateThreadRef.current) return;
+    autoCreateThreadRef.current = true;
+    setMessages([]);
+    setPendingAction(null);
+    lastDecisionSuggestionRef.current = null;
+    profileMemoryToastThreadRef.current = null;
+    profileMemoryToastKeysRef.current.clear();
+    profileMemoryToastTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+    profileMemoryToastTimersRef.current.clear();
+    setProfileMemoryToasts([]);
+    void (async () => {
+      await newChat({ fromAuto: true });
+      autoCreateThreadRef.current = false;
+    })();
+  }, [threadsLoaded, threads, activeThreadId, initialThreadId, initialSlimeType]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -774,8 +831,16 @@ export function ShadowChatShell({
   };
 
   const activeTitle = useMemo(
-    () => threads.find((t) => t.thread_id === activeThreadId)?.title || (threads.length ? 'Shadow Chat' : 'No chat selected'),
-    [threads, activeThreadId],
+    () =>
+      threads.find((t) => t.thread_id === activeThreadId)?.title ||
+      activeThread?.title ||
+      (threads.length ? 'Shadow Chat' : 'No chat selected'),
+    [threads, activeThreadId, activeThread],
+  );
+
+  const sidebarThreads = useMemo(
+    () => threads.filter((thread) => !isDraftThread(thread, resolveThreadSlimeType(thread))),
+    [threads],
   );
 
   const beginDecisionReport = async (
@@ -1039,9 +1104,10 @@ export function ShadowChatShell({
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <div className="lg:col-span-3">
             <ChatSidebar
-              threads={threads}
+              threads={sidebarThreads}
               activeThreadId={activeThreadId}
               slimeType={activeSlimeType}
+              creatingNewChat={creatingNewChat}
               onNewChat={() => newChat()}
               onSelectThread={(id) => void loadThread(id)}
               onDeleteThread={async (id) => {
@@ -1335,14 +1401,6 @@ export function ShadowChatShell({
         onDelete={deleteProfileMemoryFromToast}
         onEdit={openProfileMemoryEditor}
       />
-      <PickSlimeForNewChatDialog
-        open={pickSlimeOpen}
-        onClose={() => setPickSlimeOpen(false)}
-        onPick={(type) => {
-          setPickSlimeOpen(false);
-          void createChatWithSlime(type);
-        }}
-      />
       {activeThreadId ? (
         <RimumuWellbeingIntakeDialog
           open={wellbeingIntakeOpen && activeSlimeType === 'wellbeing'}
@@ -1353,6 +1411,14 @@ export function ShadowChatShell({
           }}
         />
       ) : null}
+      <PickSlimeForNewChatDialog
+        open={pickSlimeOpen}
+        onClose={() => setPickSlimeOpen(false)}
+        onPick={(type) => {
+          setPickSlimeOpen(false);
+          void createChatWithSlime(type);
+        }}
+      />
       <TherapyReportPanel
         open={therapyReportOpen}
         report={therapyReport}

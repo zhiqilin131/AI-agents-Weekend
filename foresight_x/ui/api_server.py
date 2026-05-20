@@ -650,7 +650,14 @@ if any(x.strip() == "*" for x in _configured_origins):
     _exact_origins = ["*"]
 else:
     _exact_origins = list(dict.fromkeys([*_configured_origins, *_default_local_origins]))
-_preview_regex = _cors_settings.cors_preview_regex or None
+# Allow any localhost/127.0.0.1 dev port by default (e.g. 5174/5178),
+# while still supporting explicit production preview regex via env override.
+_default_local_origin_regex = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+_configured_preview_regex = (_cors_settings.cors_preview_regex or "").strip()
+if _configured_preview_regex:
+    _preview_regex = f"(?:{_configured_preview_regex})|(?:{_default_local_origin_regex})"
+else:
+    _preview_regex = _default_local_origin_regex
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_exact_origins,
@@ -710,7 +717,20 @@ async def supabase_jwt_context_middleware(request: Request, call_next):
                 user = decode_supabase_access_token(token)
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-                return _cors_json_response(status_code=exc.status_code, content={"detail": detail})
+                # Local/dev fallback: if Supabase JWKS/auth backend is temporarily unavailable,
+                # keep serving requests via persona mode instead of hard-failing every API call.
+                if (
+                    settings.allow_persona_fallback_with_supabase
+                    and exc.status_code >= 500
+                ):
+                    _log.warning(
+                        "supabase_jwt_decode_unavailable_fallback: status=%s detail=%s",
+                        exc.status_code,
+                        detail,
+                    )
+                    user = None
+                else:
+                    return _cors_json_response(status_code=exc.status_code, content={"detail": detail})
 
     if settings.require_auth and path.startswith("/api") and not _auth_exempt_path(path):
         if user is None:
