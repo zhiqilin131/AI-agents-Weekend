@@ -49,6 +49,7 @@ export type BuddyRecentChatPanelProps = {
   activeThreadId: string | null;
   storageUserId?: string | null;
   refreshKey?: number;
+  creatingNewChat?: boolean;
   onSelectThread: (threadId: string) => void;
   onStartNewChat: () => void;
   onOpenFullChat: () => void;
@@ -77,6 +78,7 @@ export function BuddyRecentChatPanel({
   activeThreadId,
   storageUserId = null,
   refreshKey = 0,
+  creatingNewChat = false,
   onSelectThread,
   onStartNewChat,
   onOpenFullChat,
@@ -204,10 +206,11 @@ export function BuddyRecentChatPanel({
                 <button
                   type="button"
                   onClick={onStartNewChat}
-                  className="mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:brightness-105"
+                  disabled={creatingNewChat}
+                  className="mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   <Plus className="h-3.5 w-3.5" aria-hidden />
-                  New chat
+                  {creatingNewChat ? 'Creating…' : 'New chat'}
                 </button>
               </BuddyTooltip>
 

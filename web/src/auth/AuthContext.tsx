@@ -1,5 +1,5 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { clearAllOnboardingClientState } from '../features/onboarding/onboarding';
 import { registerAuthSessionBridge, setAuthAccessToken, setAuthUserId } from './authTokenBridge';
 
@@ -19,8 +19,23 @@ function createSupabaseClient(): SupabaseClient | null {
   return createClient(url, anon);
 }
 
+type AuthGlobalCache = typeof globalThis & {
+  __fx_supabase_client__?: SupabaseClient | null;
+  __fx_supabase_client_initialized__?: boolean;
+};
+
+function getSupabaseClientSingleton(): SupabaseClient | null {
+  const g = globalThis as AuthGlobalCache;
+  if (g.__fx_supabase_client_initialized__) {
+    return g.__fx_supabase_client__ ?? null;
+  }
+  g.__fx_supabase_client__ = createSupabaseClient();
+  g.__fx_supabase_client_initialized__ = true;
+  return g.__fx_supabase_client__ ?? null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const supabase = useMemo(() => createSupabaseClient(), []);
+  const supabase = getSupabaseClientSingleton();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
