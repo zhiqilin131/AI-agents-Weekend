@@ -133,10 +133,8 @@ export function MainNavButtons({
     useTopbar
       ? cn(
           'inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm text-slate-700 transition-colors',
-          active
-            ? 'bg-white/58 text-violet-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),inset_0_0_0_1px_rgba(196,181,253,0.5)] ring-inset ring-1 ring-violet-300/55'
-            : 'hover:bg-white/39',
-          'focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500/35',
+          active ? 'bg-violet-100/95 text-violet-900' : 'hover:bg-slate-200/70',
+          'focus:outline-none focus:ring-2 focus:ring-violet-500/35',
         )
       : btnClass;
   const navBtnStyle = useTopbar ? undefined : btnStyle;
@@ -273,12 +271,12 @@ export function MainNavButtons({
               data-slime-avoid
               className="fixed left-1/2 top-3 z-[70] w-[min(1500px,calc(100vw-1.5rem))] -translate-x-1/2 sm:top-4 sm:w-[min(1500px,calc(100vw-2rem))] md:top-5"
             >
-              <div className="main-nav-topbar-glass w-full rounded-2xl px-4 py-3">
-                <div className="relative z-[1] grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-4">
+              <div className="w-full rounded-2xl border border-slate-300/90 bg-white/90 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.12)] backdrop-blur-md">
+                <div className="grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-4">
                   <div className="flex min-w-0 items-center justify-start">{brandBtn}</div>
                   <div className="flex min-w-0 items-center justify-center">
-                    <div className="flex max-w-full items-center justify-center overflow-x-auto overflow-y-visible overscroll-x-contain py-1 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]">
-                      <div className="flex w-max flex-nowrap items-center justify-center gap-1 px-1 py-0.5">{navPills}</div>
+                    <div className="flex max-w-full items-center justify-center overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]">
+                      <div className="flex w-max flex-nowrap items-center justify-center gap-1 px-1">{navPills}</div>
                     </div>
                   </div>
                   <div className="flex min-w-0 items-center justify-end gap-2">
