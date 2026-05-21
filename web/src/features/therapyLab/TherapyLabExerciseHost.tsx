@@ -8,6 +8,7 @@ import { Grounding54321Exercise } from './exercises/Grounding54321Exercise';
 import { CbtReframeExercise } from './exercises/CbtReframeExercise';
 import { MicroActionPlanExercise } from './exercises/MicroActionPlanExercise';
 import { SafetyEscalationPanel } from './components/SafetyEscalationPanel';
+import { stopTherapyAudioNow } from './useTherapyAudio';
 
 type Props = {
   exercise: TherapyExerciseType;
@@ -44,6 +45,7 @@ export function TherapyLabExerciseHost({
   );
 
   const handleSafety = useCallback(() => {
+    stopTherapyAudioNow();
     setSafetyActive(true);
     onSessionUpdate({ safetyActive: true, currentStep: 'safety_escalation' });
     const startedAt = new Date().toISOString();

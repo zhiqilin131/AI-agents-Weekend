@@ -5,6 +5,7 @@ import {
   BREATHING_CYCLE_SECONDS,
   BREATHING_PATTERN,
   BreathingOrb,
+  type BreathingPhaseId,
 } from '../components/BreathingOrb';
 import {
   IntensitySlider,
@@ -14,12 +15,21 @@ import {
   therapyLabTheme,
 } from '../components/TherapyLabChrome';
 import { useTherapyLabTts } from '../useTherapyLabTts';
+import { useTherapyAudio } from '../useTherapyAudio';
 
 type Props = TherapyExerciseCallbacks & {
   onStepChange: (step: string) => void;
+  /** Test hook: counts committed BreathingOrb renders. */
+  onOrbRenderDebug?: () => void;
 };
 
-export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChange }: Props) {
+export function BreathingGuideExercise({
+  onStart,
+  onComplete,
+  onSkip,
+  onStepChange,
+  onOrbRenderDebug,
+}: Props) {
   const [phase, setPhase] = useState<'intro' | 'running' | 'after'>('intro');
   const [beforeIntensity, setBeforeIntensity] = useState(5);
   const [afterIntensity, setAfterIntensity] = useState(4);
@@ -31,7 +41,9 @@ export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChan
   const [cyclesDone, setCyclesDone] = useState(0);
   const startedAtRef = useRef(new Date().toISOString());
   const phaseIndexRef = useRef(0);
+  const lastAudioPhaseRef = useRef<BreathingPhaseId | null>(null);
   const { speak, speaking, ttsError } = useTherapyLabTts();
+  const therapyAudio = useTherapyAudio();
 
   const current = BREATHING_PATTERN[phaseIndex]!;
 
@@ -40,6 +52,16 @@ export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChan
       phase === 'intro' ? 'before_intensity' : phase === 'after' ? 'after_intensity' : `breath_${current.id}`,
     );
   }, [phase, current.id, onStepChange]);
+
+  const syncPhaseAudio = useCallback(
+    (phaseId: BreathingPhaseId, phaseSeconds: number, withCue: boolean) => {
+      if (lastAudioPhaseRef.current === phaseId) return;
+      lastAudioPhaseRef.current = phaseId;
+      if (withCue) therapyAudio.playPhaseTransitionCue(phaseId);
+      therapyAudio.updateBreathPhase(phaseId, phaseSeconds);
+    },
+    [therapyAudio],
+  );
 
   useEffect(() => {
     if (!running) return;
@@ -51,13 +73,20 @@ export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChan
         if (next === 0) setCyclesDone((n) => n + 1);
         const p = BREATHING_PATTERN[next]!;
         setPhaseIndex(next);
+        syncPhaseAudio(p.id, p.seconds, true);
         if (voiceOn) void speak(p.label);
         return p.seconds;
       });
       setElapsedInCycle((e) => (e + 1 >= BREATHING_CYCLE_SECONDS ? 0 : e + 1));
     }, 1000);
     return () => window.clearInterval(id);
-  }, [running, speak, voiceOn]);
+  }, [running, speak, syncPhaseAudio, voiceOn]);
+
+  useEffect(() => {
+    return () => {
+      therapyAudio.stopAll();
+    };
+  }, [therapyAudio]);
 
   const startBreathing = () => {
     onStart?.();
@@ -69,12 +98,18 @@ export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChan
     setCountdown(BREATHING_PATTERN[0]!.seconds);
     setElapsedInCycle(0);
     setCyclesDone(0);
+    lastAudioPhaseRef.current = null;
+    void therapyAudio.resumeContext();
+    therapyAudio.startBreathBed();
+    syncPhaseAudio(BREATHING_PATTERN[0]!.id, BREATHING_PATTERN[0]!.seconds, false);
     if (voiceOn) void speak('Inhale');
   };
 
   const endExercise = useCallback(
     (status: 'completed' | 'skipped') => {
       setRunning(false);
+      lastAudioPhaseRef.current = null;
+      therapyAudio.stopAll();
       onComplete(
         buildExerciseResult({
           exerciseType: 'breathing_guide',
@@ -90,7 +125,7 @@ export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChan
         }),
       );
     },
-    [afterIntensity, beforeIntensity, cyclesDone, onComplete],
+    [afterIntensity, beforeIntensity, cyclesDone, onComplete, therapyAudio],
   );
 
   if (phase === 'intro') {
@@ -104,6 +139,36 @@ export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChan
           <input type="checkbox" checked={voiceOn} onChange={(e) => setVoiceOn(e.target.checked)} />
           Optional voice guidance (Rimumu TTS)
         </label>
+        <div className="rounded-xl border border-rose-100 bg-white/80 p-3">
+          <label className="flex items-center justify-between gap-2 text-sm text-slate-700">
+            <span>Ambient co-breathing sound</span>
+            <button
+              type="button"
+              className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-xs font-semibold text-rose-900"
+              onClick={() => {
+                const next = !therapyAudio.muted;
+                therapyAudio.setMuted(next);
+                if (!next) void therapyAudio.resumeContext();
+              }}
+            >
+              {therapyAudio.muted ? 'Enable sound' : 'Mute'}
+            </button>
+          </label>
+          <div className="mt-2">
+            <label className="block text-[11px] font-medium text-slate-500">
+              Volume
+              <input
+                type="range"
+                min={0}
+                max={0.26}
+                step={0.01}
+                value={therapyAudio.volume}
+                onChange={(e) => therapyAudio.setVolume(Number(e.target.value))}
+                className="mt-1 w-full accent-rose-400"
+              />
+            </label>
+          </div>
+        </div>
         {ttsError ? <p className="text-xs text-amber-800">{ttsError}</p> : null}
         <div className="flex flex-wrap gap-2">
           <TherapyLabPrimaryButton onClick={startBreathing}>Start</TherapyLabPrimaryButton>
@@ -125,22 +190,20 @@ export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChan
     return (
       <TherapyLabStepCard title={current.label} stepIndex={2} stepTotal={3}>
         <div className="flex flex-col items-center gap-5 py-2">
-          <BreathingOrb
-            phaseId={current.id}
-            phaseSeconds={current.seconds}
-            countdown={countdown}
-            paused={!running}
-            label={
-              <>
-                <span className="font-semibold" style={{ color: therapyLabTheme.heading }}>
-                  {current.label}
-                </span>
-                <span className="text-slate-400"> · </span>
-                Cycle {cyclesDone + 1}
-                {speaking ? <span className="text-slate-400"> · voice…</span> : null}
-              </>
-            }
-          />
+          <BreathingOrb phaseId={current.id} phaseSeconds={current.seconds} paused={!running} onRender={onOrbRenderDebug} />
+          <div className="text-center text-sm text-slate-600">
+            <span className="font-semibold tabular-nums text-4xl" style={{ color: therapyLabTheme.heading }}>
+              {countdown}
+            </span>
+            <div className="mt-1.5">
+              <span className="font-semibold" style={{ color: therapyLabTheme.heading }}>
+                {current.label}
+              </span>
+              <span className="text-slate-400"> · </span>
+              Cycle {cyclesDone + 1}
+              {speaking ? <span className="text-slate-400"> · voice…</span> : null}
+            </div>
+          </div>
 
           <div className="flex w-full max-w-xs gap-1">
             {BREATHING_PATTERN.map((p, i) => (
@@ -169,6 +232,8 @@ export function BreathingGuideExercise({ onStart, onComplete, onSkip, onStepChan
           <TherapyLabGhostButton
             onClick={() => {
               setRunning(false);
+              lastAudioPhaseRef.current = null;
+              therapyAudio.stopAll();
               setPhase('after');
             }}
           >

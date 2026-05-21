@@ -1,5 +1,5 @@
 import { motion } from 'motion/react';
-import type { ReactNode } from 'react';
+import { memo, useEffect } from 'react';
 import { therapyLabTheme } from './TherapyLabChrome';
 
 export type BreathingPhaseId = 'inhale' | 'hold_in' | 'exhale' | 'hold_out';
@@ -13,24 +13,27 @@ const t = therapyLabTheme;
 type BreathingOrbProps = {
   phaseId: BreathingPhaseId;
   phaseSeconds: number;
-  countdown: number;
   paused?: boolean;
-  label?: ReactNode;
+  /** Test/debug hook to count real render commits. */
+  onRender?: () => void;
 };
 
-export function BreathingOrb({ phaseId, phaseSeconds, countdown, paused = false, label }: BreathingOrbProps) {
+export const BreathingOrb = memo(function BreathingOrb({
+  phaseId,
+  phaseSeconds,
+  paused = false,
+  onRender,
+}: BreathingOrbProps) {
   const expanded = phaseId === 'inhale' || phaseId === 'hold_in';
   const targetScale = expanded ? SCALE_MAX : SCALE_MIN;
   const isHold = phaseId === 'hold_in' || phaseId === 'hold_out';
   const animateDuration = paused || isHold ? 0 : phaseSeconds;
-  const atPhaseStart = countdown === phaseSeconds;
-  const initialScale = atPhaseStart
-    ? phaseId === 'inhale'
-      ? SCALE_MIN
-      : phaseId === 'exhale'
-        ? SCALE_MAX
-        : targetScale
-    : targetScale;
+
+  useEffect(() => {
+    onRender?.();
+  });
+
+  const initialScale = phaseId === 'inhale' ? SCALE_MIN : phaseId === 'exhale' ? SCALE_MAX : targetScale;
 
   return (
     <div className="flex flex-col items-center gap-3">
@@ -115,23 +118,11 @@ export function BreathingOrb({ phaseId, phaseSeconds, countdown, paused = false,
             }}
           />
 
-          {/* Countdown on the orb */}
-          <span
-            className="relative z-10 select-none text-4xl font-bold tabular-nums tracking-tight"
-            style={{
-              color: t.heading,
-              textShadow: '0 1px 0 rgba(255,255,255,0.9), 0 2px 12px rgba(142, 42, 64, 0.25)',
-            }}
-          >
-            {countdown}
-          </span>
         </motion.div>
       </div>
-
-      {label ? <div className="text-center text-sm text-slate-600">{label}</div> : null}
     </div>
   );
-}
+});
 
 export const BREATHING_PATTERN = [
   { id: 'inhale' as const, label: 'Inhale', seconds: 4 },
