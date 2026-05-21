@@ -15,6 +15,7 @@ import RegisterPage from './pages/RegisterPage';
 import AppErrorPage from './pages/AppErrorPage';
 import OnboardingPage from './pages/OnboardingPage';
 import SlimeDev3DPage from './pages/SlimeDev3DPage';
+import RimumuTherapyLabPage from './pages/RimumuTherapyLabPage';
 import { AuthProvider } from './auth/AuthContext';
 import { RequireAuthLayout } from './auth/RequireAuthLayout';
 import { unlockSlimeAudioContext } from './utils/slimeAudioContext';
@@ -47,6 +48,8 @@ const router = createHashRouter([
       { path: '/profile', element: <ProfilePage />, errorElement: <AppErrorPage /> },
       { path: '/onboarding', element: <OnboardingPage />, errorElement: <AppErrorPage /> },
       { path: '/buddy', element: <SlimeCompanionPage />, errorElement: <AppErrorPage /> },
+      { path: '/therapy-lab', element: <RimumuTherapyLabPage />, errorElement: <AppErrorPage /> },
+      { path: '/rimumu-lab', element: <Navigate to="/therapy-lab" replace />, errorElement: <AppErrorPage /> },
       { path: '/care', element: <Navigate to="/chat?slime=wellbeing" replace />, errorElement: <AppErrorPage /> },
       { path: '/diary', element: <DiaryPage />, errorElement: <AppErrorPage /> },
       { path: '/execution', element: <ExecutionPlannerPage />, errorElement: <AppErrorPage /> },

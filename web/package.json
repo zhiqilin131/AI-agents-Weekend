@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:therapy-lab": "vite --config vite.therapy-lab.config.ts",
+    "dev:therapy-lab:all": "concurrently -n api,lab -c blue,magenta \"npm run dev:api\" \"npm run dev:therapy-lab\"",
     "dev:api": "cd .. && ALLOW_PERSONA_FALLBACK_WITH_SUPABASE=true python3 -m uvicorn foresight_x.ui.api_server:app --host 127.0.0.1 --port 8765 --reload",
     "dev:all": "concurrently -n api,web -c blue,green \"npm run dev:api\" \"vite\"",
     "dev:check": "curl -sf http://127.0.0.1:8765/api/health >/dev/null && curl -sf http://127.0.0.1:5173/api/health >/dev/null && echo 'API + Vite proxy OK' || (echo 'Start: cd web && npm run dev:all' && exit 1)",
