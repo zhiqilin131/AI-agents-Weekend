@@ -15,10 +15,19 @@ export const SLIME_STATE_INDEX: Record<SlimeAdvisorState, number> = {
   celebrating: 7,
 };
 
+/** Phase offset so inner core breath leads the outer shell slightly (staggered jelly). */
+export const SLIME_INNER_BREATH_PHASE = 1.12;
+
 export type SlimeMotionUniforms = {
   stateIndex: number;
+  /** Outer jelly shell squash. */
   squashY: number;
   squashX: number;
+  /** Inner core squash — stronger, phase-shifted vs shell. */
+  innerSquashY: number;
+  innerSquashX: number;
+  /** Shader pulse for inner flow (0–1). */
+  innerPulse: number;
   pulse: number;
   rimBoost: number;
   speak: number;
@@ -59,17 +68,22 @@ export function slimeMotionUniforms(
           ? 0.9
           : 1;
 
-  const breathAmp = wellbeing ? 0.02 : 0.035;
-  let squashY = 1 + breathWave * breathAmp * motionScale * personalityFloat;
-  let squashX = 1 - breathWave * (breathAmp * 0.75) * motionScale;
-  let pulse = 0.32 + breathWave * 0.12;
+  const outerAmp = wellbeing ? 0.026 : 0.044;
+  const innerAmp = outerAmp * 1.72;
+  const innerWave = Math.sin(time * ((Math.PI * 2) / breath) + SLIME_INNER_BREATH_PHASE);
+  let squashY = 1 + breathWave * outerAmp * motionScale * personalityFloat;
+  let squashX = 1 - breathWave * (outerAmp * 0.72) * motionScale;
+  let innerSquashY = 1 + innerWave * innerAmp * motionScale * personalityFloat;
+  let innerSquashX = 1 - innerWave * (innerAmp * 0.7) * motionScale;
+  let innerPulse = 0.38 + innerWave * 0.22 + breathWave * 0.06;
+  let pulse = 0.32 + innerWave * 0.14 + breathWave * 0.05;
   let rimBoost = wellbeing ? 0.5 : 0.62;
   let speak = 0;
   let listen = 0;
   let think = 0;
   let mouthOpen = wellbeing ? 0.1 : 0.07;
   let wobble = 0;
-  let vertexWobble = wellbeing ? 0.012 : 0.018;
+  let vertexWobble = wellbeing ? 0.014 : 0.022;
   let eyeScale = 1;
 
   if (isSpeaking) {
@@ -104,6 +118,9 @@ export function slimeMotionUniforms(
     vertexWobble = 0.03;
   } else if (isCautious) {
     squashY = 0.98 + breathWave * 0.015;
+    innerSquashY = 0.97 + innerWave * 0.028;
+    innerSquashX = 1 - innerWave * 0.018;
+    innerPulse = 0.36 + innerWave * 0.1;
     rimBoost = 0.45;
     pulse = 0.35;
   }
@@ -118,6 +135,9 @@ export function slimeMotionUniforms(
     stateIndex: SLIME_STATE_INDEX[state],
     squashY,
     squashX,
+    innerSquashY,
+    innerSquashX,
+    innerPulse,
     pulse,
     rimBoost,
     speak,

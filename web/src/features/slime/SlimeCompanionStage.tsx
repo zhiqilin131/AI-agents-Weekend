@@ -16,7 +16,7 @@ import {
 import { SLIME_IDLE_INTERACT_MS, slimeIdleFidgetIntervalMs } from './slimeIdleBehavior';
 
 /** Approximate radius of the slime “body” for obstacle clearance (viewport px). */
-const SLIME_FOOTPRINT_RADIUS = 78;
+const SLIME_FOOTPRINT_RADIUS = 62;
 const AVOID_RECT_PADDING = 10;
 const ROAM_SAMPLE_TRIES = 28;
 /** Buddy anchor: vertical fraction of stage (from top). 0.5 = centered in the stage; roam offsets apply from here. */
@@ -195,15 +195,31 @@ export function SlimeCompanionStage({
     roamY.set(cl.y);
   };
 
-  /** Start at stage center on mount and when switching Mochi ↔ Rimumu (no carry-over offset). */
+  /** Start at viewport center on mount / refresh and when switching Mochi ↔ Rimumu. */
+  const resetSlimeToViewportCenter = useCallback(() => {
+    const el = stageRef.current;
+    if (!el || typeof window === 'undefined') {
+      roamX.set(0);
+      roamY.set(0);
+      return;
+    }
+    const S = el.getBoundingClientRect();
+    const anchorVx = S.left + S.width / 2;
+    const anchorVy = S.top + S.height * SLIME_ANCHOR_Y_FRAC;
+    const targetCx = window.innerWidth / 2;
+    const targetCy = window.innerHeight / 2;
+    const cl = clampOffsetToStage(el, targetCx - anchorVx, targetCy - anchorVy);
+    roamX.set(cl.x);
+    roamY.set(cl.y);
+  }, [roamX, roamY]);
+
   useLayoutEffect(() => {
-    roamX.set(0);
-    roamY.set(0);
     dragX.set(0);
     dragY.set(0);
     fade.set(1);
     squish.set(1);
-  }, [slimeType, dragX, dragY, fade, roamX, roamY, squish]);
+    resetSlimeToViewportCenter();
+  }, [slimeType, dragX, dragY, fade, resetSlimeToViewportCenter, squish]);
 
   useEffect(
     () => () => {
@@ -217,15 +233,21 @@ export function SlimeCompanionStage({
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
-    clampRoamIntoStage();
-    const ro = new ResizeObserver(() => clampRoamIntoStage());
+    const onLayout = () => {
+      clampRoamIntoStage();
+      setDragLim(computeDragLimits(stageRef.current, roamX.get(), roamY.get()));
+    };
+    onLayout();
+    const ro = new ResizeObserver(onLayout);
     ro.observe(el);
-    window.addEventListener('resize', clampRoamIntoStage);
+    window.addEventListener('resize', onLayout);
+    window.visualViewport?.addEventListener('resize', onLayout);
     return () => {
       ro.disconnect();
-      window.removeEventListener('resize', clampRoamIntoStage);
+      window.removeEventListener('resize', onLayout);
+      window.visualViewport?.removeEventListener('resize', onLayout);
     };
-  }, []);
+  }, [roamX, roamY]);
 
   useEffect(() => {
     reducedMotionRef.current =

@@ -11,6 +11,9 @@ export type MascotFaceLayout = {
   faceWidth: number;
 };
 
+/** Eye footprint scale vs baseline mesh layout (1.3 × 1.5). */
+export const SLIME_EYE_SIZE_SCALE = 1.95;
+
 /** Shared face layout — only palette differs between Mochi / Rimumu. */
 export function mascotFaceLayout(): MascotFaceLayout {
   const R = SLIME_BLOB_RADIUS * SLIME_BLOB_SCALE[0];
@@ -18,7 +21,7 @@ export function mascotFaceLayout(): MascotFaceLayout {
   const eyeY = 0.05;
   const surfaceZ = Math.sqrt(Math.max(R * R - eyeSpacing * eyeSpacing - eyeY * eyeY, 0.01));
 
-  const eyeWidth = 0.013;
+  const eyeWidth = 0.013 * SLIME_EYE_SIZE_SCALE;
   const faceWidth = (eyeSpacing + eyeWidth) * 2;
 
   return {
@@ -26,7 +29,7 @@ export function mascotFaceLayout(): MascotFaceLayout {
     eyeY,
     eyeZ: surfaceZ + 0.032,
     eyeWidth,
-    eyeHeight: 0.024,
+    eyeHeight: 0.024 * SLIME_EYE_SIZE_SCALE,
     mouthY: -0.072,
     faceWidth,
   };

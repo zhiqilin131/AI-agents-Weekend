@@ -22,8 +22,11 @@ export type SlimeVisualVariant = 'hero' | 'buddyHero' | 'studio' | 'chip' | 'inl
 /** Buddy / home hero stage body scale. */
 export const SLIME_HERO_BODY_SCALE = 0.72;
 
-/** Slime Buddy page — 30% larger than default hero. */
-export const SLIME_BUDDY_HERO_BODY_SCALE = SLIME_HERO_BODY_SCALE * 1.3;
+/** Slime Buddy page body scale (tuned −20% then +10% vs original buddy hero). */
+export const SLIME_BUDDY_HERO_BODY_SCALE = SLIME_HERO_BODY_SCALE * 1.3 * 0.8 * 1.1;
+
+/** Canvas spread multiplier for `buddyHero`. */
+export const SLIME_BUDDY_HERO_SPREAD_MUL = 1.75 * 1.3 * 0.8 * 1.1;
 
 export const SLIME_BODY_SEGMENTS = 128;
 
@@ -63,7 +66,7 @@ export function slimeCanvasLayout(size: 'sm' | 'md' | 'lg', variant: SlimeVisual
     variant === 'studio'
       ? 2.05
       : variant === 'buddyHero'
-        ? 1.75 * 1.3
+        ? SLIME_BUDDY_HERO_SPREAD_MUL
         : variant === 'hero'
           ? 1.75
           : 2.15;

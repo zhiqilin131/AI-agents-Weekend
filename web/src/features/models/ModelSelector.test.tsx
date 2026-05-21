@@ -92,6 +92,40 @@ describe('ModelSelector', () => {
     expect(html).not.toContain('lucide-sparkles');
   });
 
+  it('renders dock icon abbrev for buddy voice bar', () => {
+    const html = renderToStaticMarkup(
+      <ModelSelector
+        feature="slime_voice"
+        selectedModelId="little"
+        onChange={() => {}}
+        models={[
+          ...sampleModels,
+          {
+            id: 'little',
+            display_name: 'Little Slime',
+            description: 'Cheap',
+            best_for: [],
+            tier: 'lite',
+            speed: 'fast',
+            quality: 'basic',
+            credit_multiplier: 0.35,
+            enabled: true,
+            engine: 'nano',
+          },
+        ]}
+        selectorEnabled
+        variant="dockIcon"
+        showCostPreview={false}
+        elevated={false}
+      />,
+    );
+    expect(html).toContain('LIT');
+    expect(html).toContain('lucide-coins');
+    expect(html).not.toContain('lucide-layout-grid');
+    expect(html).toContain('Slime speed');
+    expect(html).not.toContain('lucide-sparkles');
+  });
+
   it('renders engine on cards variant', () => {
     const html = renderToStaticMarkup(
       <ModelSelector

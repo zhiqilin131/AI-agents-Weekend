@@ -5,6 +5,7 @@ import { cn } from '../../app/components/ui/utils';
 import { apiFetch } from '../../utils/apiFetch';
 import { getSlimeIdentity } from './slimeIdentity';
 import { BuddyTooltip } from './BuddyTooltip';
+import { BUDDY_RAIL_CONTENT_X } from './buddyLayout';
 import { sortThreadsByRecent } from './buddyThreadSort';
 import { SLIME_CTA_BTN_CLASS, slimeCtaButtonStyle } from './slimeCtaButton';
 
@@ -156,7 +157,7 @@ export function BuddyRecentTherapyPanel({
     >
       <div
         className={cn(
-          'flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border shadow-[0_14px_48px_rgba(244,114,182,0.14)] backdrop-blur-xl',
+          'flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border shadow-[0_4px_14px_rgba(15,23,42,0.05)] backdrop-blur-xl',
           collapsed && 'items-center rounded-full py-2',
         )}
         style={{
@@ -201,7 +202,10 @@ export function BuddyRecentTherapyPanel({
         ) : (
           <>
             <div
-              className="flex shrink-0 items-start justify-between gap-2 border-b px-3 py-2.5"
+              className={cn(
+                'flex shrink-0 items-start justify-between gap-2 border-b py-2.5',
+                BUDDY_RAIL_CONTENT_X,
+              )}
               style={{ borderColor: ident.theme.border }}
             >
               <motion.div initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} className="min-w-0">
@@ -229,7 +233,7 @@ export function BuddyRecentTherapyPanel({
               </BuddyTooltip>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 py-2">
+            <div className={cn('min-h-0 flex-1 overflow-y-auto overscroll-contain py-2', BUDDY_RAIL_CONTENT_X)}>
               <BuddyTooltip content="Create a new therapy thread — then complete check-in and tap Start therapy below.">
                 <button
                   type="button"
@@ -324,7 +328,7 @@ export function BuddyRecentTherapyPanel({
             </div>
 
             <motion.div
-              className="shrink-0 border-t p-2.5"
+              className={cn('shrink-0 border-t py-2.5', BUDDY_RAIL_CONTENT_X)}
               style={{ borderColor: ident.theme.border }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}

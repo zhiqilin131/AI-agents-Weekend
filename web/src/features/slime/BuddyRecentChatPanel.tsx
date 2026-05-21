@@ -3,9 +3,12 @@ import { AnimatePresence, motion } from 'motion/react';
 import { ChevronLeft, ChevronRight, MessageSquare, Plus } from 'lucide-react';
 import { cn } from '../../app/components/ui/utils';
 import { apiFetch } from '../../utils/apiFetch';
+import { BUDDY_RAIL_CONTENT_X } from './buddyLayout';
+import { mochiBuddyRecentPanelTheme } from './buddyRecentPanelTheme';
 import { getSlimeIdentity, normalizeSlimeType } from './slimeIdentity';
 import { BuddyTooltip } from './BuddyTooltip';
 import { sortThreadsByRecent } from './buddyThreadSort';
+import { SLIME_CTA_BTN_CLASS } from './slimeCtaButton';
 
 const COLLAPSED_STORAGE_PREFIX = 'slimeBuddyRecentChatCollapsed';
 
@@ -86,6 +89,8 @@ export function BuddyRecentChatPanel({
   className,
 }: BuddyRecentChatPanelProps) {
   const ident = getSlimeIdentity('generalized');
+  const theme = ident.theme;
+  const panel = mochiBuddyRecentPanelTheme(theme);
   const [collapsed, setCollapsed] = useState(() => readCollapsedPreference(storageUserId));
   const [threads, setThreads] = useState<ChatThreadSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -130,6 +135,11 @@ export function BuddyRecentChatPanel({
 
   const chatCount = threads.length;
   const petName = ident.displayName;
+  const panelShellStyle = {
+    borderColor: panel.border,
+    background: `linear-gradient(180deg, ${panel.surface}, rgba(255,255,255,0.94))`,
+    boxShadow: `0 4px 14px ${panel.shadow}`,
+  } as const;
 
   return (
     <aside
@@ -149,42 +159,63 @@ export function BuddyRecentChatPanel({
         layout
         transition={{ type: 'spring', stiffness: 380, damping: 32 }}
         className={cn(
-          'flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-white/80 bg-white/72 shadow-[0_14px_48px_rgba(79,70,229,0.12)] backdrop-blur-xl',
-          collapsed && 'items-center rounded-full border-violet-200/70 py-2',
+          'flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border backdrop-blur-xl',
+          collapsed && 'items-center rounded-full py-2',
         )}
+        style={panelShellStyle}
       >
         {collapsed ? (
-          <motion.div layout className="flex flex-col items-center gap-2 px-1 py-1">
+          <motion.div layout className={cn('flex flex-col items-center gap-2 py-1', BUDDY_RAIL_CONTENT_X)}>
             <BuddyTooltip side="right" content="Expand recent chat">
               <button
                 type="button"
                 onClick={toggleCollapsed}
                 aria-expanded={false}
                 aria-label="Expand recent chat"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-violet-200/80 bg-violet-50/90 text-violet-700 transition hover:border-violet-300 hover:bg-violet-100"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border transition hover:brightness-105"
+                style={{
+                  borderColor: panel.border,
+                  background: panel.highlight,
+                  color: panel.label,
+                }}
               >
                 <ChevronRight className="h-4 w-4" aria-hidden />
               </button>
             </BuddyTooltip>
-            <MessageSquare className="h-4 w-4 text-violet-500/80" aria-hidden />
+            <MessageSquare className="h-4 w-4" style={{ color: panel.label }} aria-hidden />
             {chatCount > 0 ? (
-              <span className="rounded-full bg-violet-600 px-1.5 py-0.5 text-[9px] font-bold text-white">
+              <span
+                className="rounded-full px-1.5 py-0.5 text-[9px] font-bold text-white"
+                style={{ background: panel.label }}
+              >
                 {chatCount}
               </span>
             ) : null}
           </motion.div>
         ) : (
           <>
-            <div className="flex shrink-0 items-start justify-between gap-2 border-b border-violet-100/80 bg-gradient-to-r from-violet-50/90 to-fuchsia-50/50 px-3 py-2.5">
+            <div
+              className={cn(
+                'flex shrink-0 items-start justify-between gap-2 border-b py-2.5',
+                BUDDY_RAIL_CONTENT_X,
+              )}
+              style={{
+                borderColor: panel.border,
+                background: `linear-gradient(90deg, ${panel.highlight}, transparent)`,
+              }}
+            >
               <motion.div
                 initial={{ opacity: 0, x: -6 }}
                 animate={{ opacity: 1, x: 0 }}
                 className="min-w-0"
               >
-                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-violet-600/90">
+                <p
+                  className="text-[10px] font-semibold uppercase tracking-[0.22em]"
+                  style={{ color: panel.label }}
+                >
                   Recent chat
                 </p>
-                <p className="mt-0.5 truncate text-xs font-medium text-slate-700">
+                <p className="mt-0.5 truncate text-xs font-medium" style={{ color: panel.subtitle }}>
                   {activeThreadId ? `Chats with ${petName}` : 'Pick a conversation'}
                 </p>
               </motion.div>
@@ -194,20 +225,28 @@ export function BuddyRecentChatPanel({
                   onClick={toggleCollapsed}
                   aria-expanded
                   aria-label="Collapse recent chat"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/80 bg-white/90 text-violet-700 shadow-sm transition hover:bg-violet-50"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-white/90 shadow-sm transition hover:brightness-105"
+                  style={{ borderColor: panel.border, color: panel.label }}
                 >
                   <ChevronLeft className="h-4 w-4" aria-hidden />
                 </button>
               </BuddyTooltip>
             </div>
 
-            <motion.div layout className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 py-2">
+            <motion.div
+              layout
+              className={cn('min-h-0 flex-1 overflow-y-auto overscroll-contain py-2', BUDDY_RAIL_CONTENT_X)}
+            >
               <BuddyTooltip content="Start a fresh chat with Mochi on the buddy page.">
                 <button
                   type="button"
                   onClick={onStartNewChat}
                   disabled={creatingNewChat}
-                  className="mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
+                  className={cn(
+                    'mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs',
+                    SLIME_CTA_BTN_CLASS,
+                  )}
+                  style={panel.ctaStyle}
                 >
                   <Plus className="h-3.5 w-3.5" aria-hidden />
                   {creatingNewChat ? 'Creating…' : 'New chat'}
@@ -219,13 +258,20 @@ export function BuddyRecentChatPanel({
                   {[0, 1, 2].map((i) => (
                     <li
                       key={i}
-                      className="h-12 animate-pulse rounded-xl border border-white/60 bg-white/50"
+                      className="h-12 animate-pulse rounded-xl border bg-white/50"
+                      style={{ borderColor: panel.border }}
                     />
                   ))}
                 </ul>
               ) : threads.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-violet-200/90 bg-violet-50/40 px-3 py-4 text-center">
-                  <MessageSquare className="mx-auto h-5 w-5 text-violet-400" aria-hidden />
+                <div
+                  className="rounded-xl border border-dashed px-3 py-4 text-center"
+                  style={{
+                    borderColor: panel.border,
+                    background: panel.highlight,
+                  }}
+                >
+                  <MessageSquare className="mx-auto h-5 w-5" style={{ color: panel.label }} aria-hidden />
                   <p className="mt-2 text-[11px] leading-relaxed text-slate-600">
                     No chats yet. Tap New chat, or hold the mic and say hello.
                   </p>
@@ -250,19 +296,20 @@ export function BuddyRecentChatPanel({
                             <button
                               type="button"
                               onClick={() => onSelectThread(t.thread_id)}
-                              className={cn(
-                                'w-full rounded-xl border px-2.5 py-2 text-left text-[11px] transition',
-                                active
-                                  ? 'border-violet-300 bg-violet-100/90 shadow-sm'
-                                  : 'border-violet-100/90 bg-white/85 hover:border-violet-200',
-                              )}
+                              className="w-full rounded-xl border px-2.5 py-2 text-left text-[11px] transition"
+                              style={active ? panel.activeItem : panel.idleItem}
                             >
                               <motion.div layout className="flex items-center justify-between gap-1">
                                 <span className="truncate font-medium text-slate-800">
                                   {t.title || 'Chat'}
                                 </span>
                                 {when ? (
-                                  <span className="shrink-0 text-[9px] text-violet-600/80">{when}</span>
+                                  <span
+                                    className="shrink-0 text-[9px] font-medium"
+                                    style={{ color: panel.label }}
+                                  >
+                                    {when}
+                                  </span>
                                 ) : null}
                               </motion.div>
                               <p className="mt-0.5 truncate text-[10px] text-slate-500">{subtitle}</p>
@@ -278,7 +325,8 @@ export function BuddyRecentChatPanel({
 
             <motion.div
               layout
-              className="shrink-0 border-t border-violet-100/80 bg-white/50 p-2.5"
+              className={cn('shrink-0 border-t py-2.5', BUDDY_RAIL_CONTENT_X)}
+              style={{ borderColor: panel.border, background: `${panel.highlight}88` }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
             >
@@ -288,11 +336,10 @@ export function BuddyRecentChatPanel({
                   onClick={onOpenFullChat}
                   disabled={!activeThreadId}
                   className={cn(
-                    'inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition',
-                    activeThreadId
-                      ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-md hover:brightness-105'
-                      : 'cursor-not-allowed border border-violet-100 bg-violet-50/60 text-violet-400',
+                    'inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs transition',
+                    activeThreadId ? SLIME_CTA_BTN_CLASS : 'font-semibold',
                   )}
+                  style={activeThreadId ? panel.ctaStyle : panel.ctaDisabled}
                 >
                   <MessageSquare className="h-3.5 w-3.5 shrink-0" aria-hidden />
                   {activeThreadId ? 'Continue in Chat' : 'Chat (pick a conversation)'}

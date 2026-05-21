@@ -5,6 +5,13 @@
 export const BUDDY_TOPBAR_CLEARANCE =
   'max(13rem,calc(env(safe-area-inset-top,0px) + 12.5rem))';
 
+/** Horizontal padding inside left-rail cards (companion switch + recent panels). */
+export const BUDDY_RAIL_CONTENT_X = 'px-1';
+
+/** Fallback until top-nav brand position is measured (see data-buddy-rail-align). */
+export const BUDDY_RAIL_LEFT_FALLBACK =
+  'max(0.75rem, env(safe-area-inset-left, 0px))';
+
 export const BUDDY_LEFT_RAIL_MAX_HEIGHT = `calc(100dvh - ${BUDDY_TOPBAR_CLEARANCE} - env(safe-area-inset-bottom,0px))`;
 
 export const BUDDY_RIGHT_RAIL_MAX_HEIGHT = BUDDY_LEFT_RAIL_MAX_HEIGHT;

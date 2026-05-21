@@ -11,6 +11,7 @@ export type SlimeBodyMeshProps = {
   slimeType: SlimeType;
   profile: SlimeProfile;
   bodyRef: React.RefObject<THREE.Group | null>;
+  innerBreathRef: React.RefObject<THREE.Group | null>;
   shellMaterial: THREE.ShaderMaterial;
   coreMaterial: THREE.ShaderMaterial;
 };
@@ -35,14 +36,16 @@ export const SLIME_CORE_INNER_SCALE_XYZ: [number, number, number] = [
 ];
 
 /** Layered jelly: inner core + gradient shell (same geometry for both). */
-export function SlimeBodyMesh({ slimeType, bodyRef, shellMaterial, coreMaterial }: SlimeBodyMeshProps) {
+export function SlimeBodyMesh({ slimeType, bodyRef, innerBreathRef, shellMaterial, coreMaterial }: SlimeBodyMeshProps) {
   const geometry = useMemo(() => createRoundSlimeGeometry(), []);
 
   return (
     <group ref={bodyRef}>
-      <mesh geometry={geometry} scale={SLIME_CORE_INNER_SCALE_XYZ} renderOrder={0}>
-        <primitive object={coreMaterial} attach="material" />
-      </mesh>
+      <group ref={innerBreathRef}>
+        <mesh geometry={geometry} scale={SLIME_CORE_INNER_SCALE_XYZ} renderOrder={0}>
+          <primitive object={coreMaterial} attach="material" />
+        </mesh>
+      </group>
       <mesh geometry={geometry} renderOrder={1}>
         <primitive object={shellMaterial} attach="material" />
       </mesh>

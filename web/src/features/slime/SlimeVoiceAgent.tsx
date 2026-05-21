@@ -36,6 +36,7 @@ import { cn } from '../../app/components/ui/utils';
 import { useSlimeCredits } from '../../app/components/credits/SlimeCreditsContext';
 import { ModelSelector } from '../models/ModelSelector';
 import { useSlimeModelCatalog } from '../models/useSlimeModelCatalog';
+import { BuddyVoiceDockBar } from './BuddyVoiceDockBar';
 import { BuddyTooltip } from './BuddyTooltip';
 import { calendarMutationKindFromTranscript } from './slimeVoiceIntentGuards';
 import {
@@ -1996,7 +1997,8 @@ export function SlimeVoiceAgent({
   const showVoiceCancel = !recording && isVoiceRequestCancellable(voiceState);
   const showBuddyReplayButton =
     showBuddyInlineControls && Boolean(lastReplyText) && !recording && voiceState === 'idle' && !streamDraftReply;
-  const showBuddyLeftActionButton = showBuddyInlineControls && (showVoiceCancel || showBuddyReplayButton);
+  const buddyDockPhaseLabel =
+    showBuddyInlineControls && recording ? speechPhaseLabel(speechPhase, recording) : null;
 
   const voiceUi = (
     <>
@@ -2189,14 +2191,6 @@ export function SlimeVoiceAgent({
               'border-sky-200/70 bg-sky-50/20',
           )}
         >
-          {showBuddyInlineControls ? (
-            <div className="absolute bottom-full left-1/2 z-10 mb-2 flex -translate-x-1/2 flex-col items-center gap-2">
-              {recording && speechPhaseLabel(speechPhase, recording) ? (
-                <p className="whitespace-nowrap text-center text-xs font-medium text-cyan-900/90">{speechPhaseLabel(speechPhase, recording)}</p>
-              ) : null}
-            </div>
-          ) : null}
-
           {!showBuddyInlineControls && showVoiceDockMeta ? (
             <div className="relative z-10 flex w-full items-center justify-center gap-2">
               {isCalendarVariant && streamDraftReply && !recording ? (
@@ -2238,145 +2232,96 @@ export function SlimeVoiceAgent({
             </div>
           ) : null}
 
+          {showBuddyInlineControls ? (
+            <div className="relative z-10 w-full max-w-[min(96vw,22rem)]">
+              <BuddyVoiceDockBar
+                theme={slimeTheme}
+                slimeType={slimeType}
+                petName={petName}
+                supported={supported}
+                recording={recording}
+                voiceGateDisabled={voiceGateDisabled}
+                voiceGateMessage={voiceGateMessage}
+                onPushToTalk={() => void pushToTalk()}
+                showDecision={Boolean(onToggleDecisionMode && slimeSupportsDecisionMode(slimeType))}
+                decisionModeActive={decisionModeActive}
+                decisionModeToggleDisabled={decisionModeToggleDisabled}
+                onToggleDecisionMode={onToggleDecisionMode}
+                showVoiceCancel={showVoiceCancel}
+                onCancelVoice={() => cancelVoiceRequest()}
+                showReplay={showBuddyReplayButton}
+                buddyAudioPlaying={buddyAudioPlaying}
+                onReplay={() => {
+                  setTtsHint(null);
+                  unlockSlimeAudioContext();
+                  runTts(lastReplyText ?? '', { force: true });
+                }}
+                hideModelSelector={hideModelSelector}
+                voiceModelOptionId={voiceModelOptionId || defaultVoiceModelId}
+                defaultVoiceModelId={defaultVoiceModelId}
+                onVoiceModelChange={setVoiceModelOptionId}
+                models={slimeModels.models}
+                selectorEnabled={slimeModels.selectorEnabled}
+                phaseLabel={buddyDockPhaseLabel}
+              />
+            </div>
+          ) : (
+            <div className="relative z-10 h-14 w-full max-w-[min(96vw,760px)]">
+              <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center">
+                {recording ? (
+                  <motion.span
+                    className="pointer-events-none absolute inset-0 rounded-full"
+                    style={{ backgroundColor: `${slimeTheme.accent}40` }}
+                    animate={{ scale: [1, 1.35, 1], opacity: [0.5, 0.15, 0.5] }}
+                    transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                  />
+                ) : null}
+                <BuddyTooltip
+                  side="top"
+                  content={
+                    voiceGateDisabled && voiceGateMessage
+                      ? voiceGateMessage
+                      : supported
+                        ? `Tap to start or stop recording and send to ${petName}. Works like push-to-talk.`
+                        : 'Voice input is not available in this browser.'
+                  }
+                >
+                  <span className="inline-flex rounded-full">
+                    <button
+                      type="button"
+                      disabled={!supported || (voiceGateDisabled && !recording)}
+                      onClick={() => void pushToTalk()}
+                      aria-label={recording ? 'Stop recording' : `Talk to ${petName}`}
+                      className={cn(
+                        'relative flex h-14 w-14 items-center justify-center rounded-full border-2',
+                        SLIME_CTA_BTN_CLASS,
+                        'hover:scale-[1.03] disabled:cursor-not-allowed',
+                        recording && 'ring-4 ring-cyan-300/80',
+                      )}
+                      style={slimeCtaButtonStyle(slimeTheme)}
+                    >
+                      {recording ? <Square className="h-6 w-6 fill-current" aria-hidden /> : <Mic className="h-6 w-6" aria-hidden />}
+                    </button>
+                  </span>
+                </BuddyTooltip>
+              </div>
+            </div>
+          )}
+
           {!showBuddyInlineControls &&
           !isCalendarVariant &&
           onToggleDecisionMode &&
           slimeSupportsDecisionMode(slimeType) ? (
-            <motion.div
-              className={cn(
-                'relative z-10 flex w-full items-center justify-center',
-                showBuddyInlineControls ? 'mb-2' : '-mb-1',
-              )}
-            >
+            <motion.div className="relative z-10 -mb-1 flex w-full items-center justify-center">
               <DecisionModeToggle
                 active={decisionModeActive}
                 disabled={decisionModeToggleDisabled}
                 onToggle={onToggleDecisionMode}
                 testId="slime-decision-mode-toggle"
-                className={cn(showBuddyInlineControls ? 'bg-white/90' : '-translate-y-1 bg-white/90')}
+                className="-translate-y-1 bg-white/90"
                 slimeType={slimeType}
               />
             </motion.div>
-          ) : null}
-
-          <div className="relative z-10 h-14 w-full max-w-[min(96vw,760px)]">
-            <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center">
-              {recording ? (
-                <motion.span
-                  className="pointer-events-none absolute inset-0 rounded-full"
-                  style={{ backgroundColor: `${slimeTheme.accent}40` }}
-                  animate={{ scale: [1, 1.35, 1], opacity: [0.5, 0.15, 0.5] }}
-                  transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
-                />
-              ) : null}
-              <BuddyTooltip
-                side="top"
-                content={
-                  voiceGateDisabled && voiceGateMessage
-                    ? voiceGateMessage
-                    : supported
-                      ? `Tap to start or stop recording and send to ${petName}. Works like push-to-talk.`
-                      : 'Voice input is not available in this browser.'
-                }
-              >
-                <span className="inline-flex rounded-full">
-                  <button
-                    type="button"
-                    disabled={!supported || (voiceGateDisabled && !recording)}
-                    onClick={() => void pushToTalk()}
-                    aria-label={recording ? 'Stop recording' : `Talk to ${petName}`}
-                    className={cn(
-                      'relative flex h-14 w-14 items-center justify-center rounded-full border-2',
-                      SLIME_CTA_BTN_CLASS,
-                      'hover:scale-[1.03] disabled:cursor-not-allowed',
-                      recording && 'ring-4 ring-cyan-300/80',
-                    )}
-                    style={slimeCtaButtonStyle(slimeTheme)}
-                  >
-                    {recording ? <Square className="h-6 w-6 fill-current" aria-hidden /> : <Mic className="h-6 w-6" aria-hidden />}
-                  </button>
-                </span>
-              </BuddyTooltip>
-            </div>
-
-            {showBuddyLeftActionButton ? (
-              <div className="absolute left-1/2 top-1/2 flex -translate-x-[calc(100%+2.25rem)] -translate-y-1/2 items-center sm:-translate-x-[calc(100%+2.5rem)]">
-                {showVoiceCancel ? (
-                  <BuddyTooltip content="Stop this request and return to idle.">
-                    <button
-                      type="button"
-                      onClick={() => cancelVoiceRequest()}
-                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-red-200/90 bg-red-50/95 text-red-700 shadow-sm transition hover:bg-red-100"
-                      aria-label="Stop current request"
-                    >
-                      <Square className="h-4 w-4 fill-current" aria-hidden />
-                    </button>
-                  </BuddyTooltip>
-                ) : null}
-                {!showVoiceCancel && showBuddyReplayButton ? (
-                  <BuddyTooltip content="Play the assistant's last reply with the saved TTS voice.">
-                    <button
-                      type="button"
-                      className={cn(
-                        'inline-flex h-11 w-11 items-center justify-center rounded-full border bg-white/90 text-slate-700 shadow-sm transition',
-                        buddyAudioPlaying && 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800',
-                      )}
-                      style={
-                        buddyAudioPlaying
-                          ? undefined
-                          : { borderColor: `${slimeTheme.border}cc`, color: slimeTheme.heading }
-                      }
-                      onClick={() => {
-                        setTtsHint(null);
-                        unlockSlimeAudioContext();
-                        runTts(lastReplyText ?? '', { force: true });
-                      }}
-                      aria-label={buddyAudioPlaying ? 'Replaying last reply' : 'Replay last reply'}
-                    >
-                      <RotateCcw className={cn('h-4 w-4', buddyAudioPlaying && 'animate-spin')} aria-hidden />
-                    </button>
-                  </BuddyTooltip>
-                ) : null}
-              </div>
-            ) : null}
-
-            {showBuddyInlineControls &&
-            onToggleDecisionMode &&
-            slimeSupportsDecisionMode(slimeType) ? (
-              <div className="absolute left-1/2 top-1/2 ml-14 flex -translate-y-1/2 items-center sm:ml-16">
-                <DecisionModeToggle
-                  active={decisionModeActive}
-                  disabled={decisionModeToggleDisabled}
-                  onToggle={onToggleDecisionMode}
-                  testId="slime-decision-mode-toggle"
-                  className="bg-white/90"
-                  slimeType={slimeType}
-                />
-              </div>
-            ) : null}
-          </div>
-
-          {showBuddyInlineControls && !hideModelSelector ? (
-            <div className="relative z-10 flex w-full justify-center">
-              <div className="w-[min(52vw,12rem)]">
-                <ModelSelector
-                  feature="slime_voice"
-                  selectedModelId={voiceModelOptionId || defaultVoiceModelId}
-                  onChange={setVoiceModelOptionId}
-                  models={slimeModels.models}
-                  selectorEnabled={slimeModels.selectorEnabled}
-                  showCostPreview={false}
-                  variant="compact"
-                  elevated={false}
-                  hideCompactHeader
-                  compactSelectAriaLabel="Slime model tier for voice"
-                  selectContentClassName="z-[300]"
-                  selectContentSide="top"
-                  selectContentAvoidCollisions={false}
-                  disabled={recording}
-                />
-              </div>
-            </div>
           ) : null}
 
           {!showBuddyInlineControls && recording && speechPhaseLabel(speechPhase, recording) ? (

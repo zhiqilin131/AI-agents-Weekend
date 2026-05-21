@@ -8,6 +8,8 @@ import {
   SLIME_MOUTH_SPEAK_WELLBEING,
 } from '../../../features/slime/slimeMotionTokens';
 import { slimeCatMouthPathD } from '../../../features/slime/slimeMouthShape';
+import { SLIME_EYE_SIZE_SCALE } from '../../../features/slime/visual3d/mascotFaceLayout';
+import { SESAME_EYE_COLOR, SESAME_EYE_OPACITY } from '../../../features/slime/visual3d/sesameEyeStyle';
 import { useSlimeSpeakAmplitude } from '../../../features/slime/visual3d/slimeSpeakAmplitude';
 import type { SlimeAdvisorProps } from './slimeAdvisorTypes';
 import { SLIME_SIZE_MAP } from './slimeAdvisorTypes';
@@ -26,6 +28,7 @@ export function SlimeAdvisor2D({
   profile,
   slimeType = 'generalized',
   companionMode = false,
+  buddyPage = false,
   studioScene = false,
 }: SlimeAdvisorProps) {
   const p = profile ?? DEFAULT_SLIME_PROFILE;
@@ -67,13 +70,13 @@ export function SlimeAdvisor2D({
   if (isSpeaking) blinkDuration *= 1.15;
   const mouthSpeak = isWellbeing ? SLIME_MOUTH_SPEAK_WELLBEING : SLIME_MOUTH_SPEAK_GENERALIZED;
   const mouthSpeakDuration = mouthSpeak.duration * (p.motion === 'expressive' ? 0.92 : 1);
-  const spread = studioScene ? dim * 2.05 : dim * 2.45;
+  const spread = studioScene ? dim * 2.05 : buddyPage ? dim * 2.45 * 0.8 * 1.1 : dim * 2.45;
   const bodyOpacity = 0.98;
   const coreOpacity = isWellbeing ? 0.92 : 0.88;
   const leftEyeX = 39.5;
   const rightEyeX = 60.5;
-  const sesameRx = 2.35;
-  const sesameRy = 4.6;
+  const sesameRx = 2.35 * SLIME_EYE_SIZE_SCALE;
+  const sesameRy = 4.6 * SLIME_EYE_SIZE_SCALE;
 
   const shape =
     p.shape === 'orb'
@@ -508,7 +511,8 @@ export function SlimeAdvisor2D({
                   }
                   rx={sesameRx * (isListening ? 1.08 : companionMode && !isSpeaking && buddyMood === 2 ? 1.12 : 1)}
                   ry={sesameRy * (isListening ? 1.05 : companionMode && !isSpeaking && buddyMood === 2 ? 1.1 : 1)}
-                  fill="#141414"
+                  fill={SESAME_EYE_COLOR}
+                  fillOpacity={SESAME_EYE_OPACITY}
                 />
                 <ellipse
                   cx={rightEyeX}
@@ -519,7 +523,8 @@ export function SlimeAdvisor2D({
                   }
                   rx={sesameRx * (isListening ? 1.08 : companionMode && !isSpeaking && buddyMood === 2 ? 1.12 : 1)}
                   ry={sesameRy * (isListening ? 1.05 : companionMode && !isSpeaking && buddyMood === 2 ? 1.1 : 1)}
-                  fill="#141414"
+                  fill={SESAME_EYE_COLOR}
+                  fillOpacity={SESAME_EYE_OPACITY}
                 />
               </motion.g>
               {p.accessory === 'antenna' ? (
