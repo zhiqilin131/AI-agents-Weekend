@@ -4,9 +4,9 @@ import type { SlimeType } from '../../slimeIdentity';
 /** Buddy stage — neutral white for Mochi, soft blush for Rimumu. */
 export function BuddyStageEnvironment({ slimeType }: { slimeType: SlimeType }) {
   const pink = slimeType === 'wellbeing';
-  const key = pink ? '#fff8fa' : '#ffffff';
-  const fill = pink ? '#ffe8f2' : '#f8fafc';
-  const rim = pink ? '#ffd6e8' : '#e2e8f0';
+  const key = pink ? '#fff8fa' : '#f0f7ff';
+  const fill = pink ? '#ffe8f2' : '#bfdbfe';
+  const rim = pink ? '#ffd6e8' : '#60a5fa';
 
   return (
     <>

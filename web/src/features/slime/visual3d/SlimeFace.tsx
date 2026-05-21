@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
+import type * as THREE from 'three';
 import type { SlimeAdvisorState } from '../../../app/components/report/slimeAdvisorTypes';
 import type { SlimeType } from '../slimeIdentity';
 import { mascotFaceLayout } from './mascotFaceLayout';

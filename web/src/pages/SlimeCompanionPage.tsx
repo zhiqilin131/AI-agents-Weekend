@@ -66,7 +66,8 @@ import {
   type SlimeType,
 } from '../features/slime/slimeIdentity';
 import { slimeTypeFromThread } from '../utils/patchThreadSlimeType';
-import { BUDDY_TOPBAR_CLEARANCE } from '../features/slime/buddyLayout';
+import { BUDDY_RAIL_LEFT_FALLBACK, BUDDY_TOPBAR_CLEARANCE } from '../features/slime/buddyLayout';
+import { buddyCompanionSwitchChrome } from '../features/slime/buddyRailChrome';
 import { useSlimeSpeakAmplitude } from '../features/slime/visual3d/slimeSpeakAmplitude';
 import { isDraftThread, listDraftThreads, resolveThreadSlimeType } from '../features/slime/newChatGuard';
 
@@ -668,6 +669,7 @@ export default function SlimeCompanionPage() {
   const [buddyRailTop, setBuddyRailTop] = useState<string>(
     `calc(${BUDDY_TOPBAR_CLEARANCE} + 3rem)`,
   );
+  const [buddyRailLeft, setBuddyRailLeft] = useState<string>(BUDDY_RAIL_LEFT_FALLBACK);
   const buddyRailMaxHeight = `calc(100dvh - ${buddyRailTop} - env(safe-area-inset-bottom,0px))`;
 
   useEffect(() => {
@@ -675,16 +677,23 @@ export default function SlimeCompanionPage() {
     let raf: number | null = null;
     let ro: ResizeObserver | null = null;
 
-    const fallback = `calc(${BUDDY_TOPBAR_CLEARANCE} + 3rem)`;
+    const fallbackTop = `calc(${BUDDY_TOPBAR_CLEARANCE} + 3rem)`;
     const measure = () => {
       const topbar = document.querySelector<HTMLElement>('[data-main-nav-topbar]');
       if (!topbar) {
-        setBuddyRailTop((prev) => (prev === fallback ? prev : fallback));
-        return;
+        setBuddyRailTop((prev) => (prev === fallbackTop ? prev : fallbackTop));
+      } else {
+        const nextTop = `${Math.ceil(topbar.getBoundingClientRect().bottom + 16)}px`;
+        setBuddyRailTop((prev) => (prev === nextTop ? prev : nextTop));
       }
-      // Leave explicit breathing room below the floating top bar at any zoom level.
-      const next = `${Math.ceil(topbar.getBoundingClientRect().bottom + 16)}px`;
-      setBuddyRailTop((prev) => (prev === next ? prev : next));
+
+      const align =
+        document.querySelector<HTMLElement>('[data-buddy-rail-align]') ??
+        topbar;
+      if (align) {
+        const nextLeft = `${Math.max(0, Math.floor(align.getBoundingClientRect().left))}px`;
+        setBuddyRailLeft((prev) => (prev === nextLeft ? prev : nextLeft));
+      }
     };
     const schedule = () => {
       if (raf != null) window.cancelAnimationFrame(raf);
@@ -769,7 +778,7 @@ export default function SlimeCompanionPage() {
       style={{ background: buddyCanvasBg.base }}
     >
       <div
-        className="pointer-events-none absolute inset-0 opacity-[0.45]"
+        className="pointer-events-none absolute inset-0 opacity-[0.28]"
         style={{ background: buddyCanvasBg.overlay }}
       />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-white/72 to-transparent" />
@@ -783,11 +792,10 @@ export default function SlimeCompanionPage() {
         data-testid="buddy-left-rail"
         className={cn(
           'pointer-events-auto fixed z-[58] flex min-h-0 flex-col gap-2',
-          'left-[max(0.75rem,env(safe-area-inset-left,0px))] sm:left-4',
           'w-[min(17.5rem,calc(100vw-2rem-env(safe-area-inset-left,0px)))] sm:w-72',
           buddyFlowModalOpen && 'pointer-events-none opacity-40',
         )}
-        style={{ top: buddyRailTop, maxHeight: buddyRailMaxHeight }}
+        style={{ top: buddyRailTop, left: buddyRailLeft, maxHeight: buddyRailMaxHeight }}
       >
         <motion.div
           data-testid="buddy-left-rail-actions"
@@ -800,11 +808,7 @@ export default function SlimeCompanionPage() {
             <div
               data-testid="buddy-companion-switch"
               className="grid w-full grid-cols-2 gap-1 rounded-2xl border p-1 backdrop-blur-xl"
-              style={{
-                borderColor: buddyIdent.theme.border,
-                background: `linear-gradient(180deg, ${buddyIdent.theme.surface}e6, rgba(255,255,255,0.92))`,
-                boxShadow: `0 8px 28px ${buddyIdent.theme.glow}`,
-              }}
+              style={buddyCompanionSwitchChrome(buddySlimeType, buddyIdent.theme)}
             >
               <button
                 type="button"

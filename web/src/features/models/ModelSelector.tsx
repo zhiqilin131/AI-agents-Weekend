@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Cpu, Sparkles } from 'lucide-react';
+import { slimeModelDockAbbrev } from './slimeModelDockAbbrev';
+import { getSlimeModelDockVisual, SlimeModelDockTierGlyph } from './slimeModelDockVisual';
 import {
   Select,
   SelectContent,
@@ -9,6 +11,7 @@ import {
 } from '../../app/components/ui/select';
 import { cn } from '../../app/components/ui/utils';
 import { fetchCostPreview } from './slimeModelsApi';
+import type { SlimeThemeColors } from '../slime/slimeIdentity';
 import type { SlimeCreditFeature, SlimeModelRow } from './types';
 
 type Props = {
@@ -20,7 +23,9 @@ type Props = {
   /** When false, hide if only one tier exists. Default true so every surface shows the control. */
   showWhenSingle?: boolean;
   showCostPreview?: boolean;
-  variant?: 'compact' | 'cards' | 'panel';
+  variant?: 'compact' | 'cards' | 'panel' | 'dockIcon';
+  /** Buddy dock icon trigger — uses slime theme chrome. */
+  dockIconTheme?: Pick<SlimeThemeColors, 'border' | 'primary' | 'secondary' | 'highlight' | 'surface'>;
   /** When false, use inline layout without the glass card wrapper (toolbar-only). */
   elevated?: boolean;
   /** Short heading (compact/panel). */
@@ -60,6 +65,7 @@ export function ModelSelector({
   selectContentAvoidCollisions,
   className,
   disabled = false,
+  dockIconTheme,
 }: Props) {
   const [previewCost, setPreviewCost] = useState<number | null>(null);
   const [previewErr, setPreviewErr] = useState(false);
@@ -113,6 +119,79 @@ export function ModelSelector({
       {inner}
     </div>
   );
+
+  if (variant === 'dockIcon') {
+    const t = dockIconTheme;
+    const dockVisual = getSlimeModelDockVisual(selectedModelId, selected?.display_name);
+    const dockAria =
+      compactSelectAriaLabel ||
+      `Slime speed tier: ${dockVisual.label} (${dockVisual.abbrev}). Tap to change model.`;
+    return (
+      <div className={className}>
+        <Select value={selectedModelId} onValueChange={onChange} disabled={disabled}>
+          <SelectTrigger
+            aria-label={dockAria}
+            title={dockAria}
+            className={cn(
+              'h-11 min-w-[3.35rem] shrink-0 rounded-2xl border px-1 shadow-sm transition hover:brightness-[1.02] active:scale-[0.97]',
+              'focus:ring-2 focus:ring-offset-1',
+              'justify-center gap-0 overflow-hidden',
+              '[&>svg]:hidden',
+              '*:data-[slot=select-value]:sr-only',
+            )}
+            style={
+              t
+                ? {
+                    borderColor: `${t.border}88`,
+                    background: `linear-gradient(145deg, white, ${t.highlight})`,
+                    color: t.primary,
+                    boxShadow: '0 2px 8px rgba(15, 23, 42, 0.05)',
+                  }
+                : undefined
+            }
+          >
+            <SelectValue>{selected?.display_name ?? selectedModelId}</SelectValue>
+            <SlimeModelDockTierGlyph
+              modelId={selectedModelId}
+              displayName={selected?.display_name}
+              size="dock"
+            />
+          </SelectTrigger>
+          <SelectContent
+            side={selectContentSide ?? 'top'}
+            avoidCollisions={selectContentAvoidCollisions}
+            className={cn(
+              'max-w-md rounded-xl border bg-white/95 backdrop-blur-md',
+              selectContentClassName,
+            )}
+            style={t ? { borderColor: `${t.border}66` } : undefined}
+          >
+            <p className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Slime speed &amp; model
+            </p>
+            {models.map((m) => {
+              return (
+                <SelectItem key={m.id} value={m.id} className="rounded-lg text-xs">
+                  <SlimeModelDockTierGlyph
+                    modelId={m.id}
+                    displayName={m.display_name}
+                    size="menu"
+                    className="mr-2"
+                  />
+                  <span className="font-medium text-slate-900">{m.display_name}</span>
+                  {(m.engine || '').trim() ? (
+                    <span className="text-slate-600"> · {(m.engine || '').trim()}</span>
+                  ) : null}
+                  <span className="text-slate-500"> · {m.credit_multiplier}×</span>
+                  {m.badge ? <span className="ml-1 text-[10px] text-indigo-600">({m.badge})</span> : null}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+      </div>
+    );
+  }
 
   if (variant === 'cards') {
     return shellWrap(

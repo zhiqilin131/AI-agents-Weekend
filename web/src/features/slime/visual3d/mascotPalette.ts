@@ -46,7 +46,26 @@ export type MascotInnerCore = {
 
 export type MascotFaceColors = {
   mouth: THREE.Vector3;
+  sclera: THREE.Vector3;
+  iris: THREE.Vector3;
+  irisDeep: THREE.Vector3;
+  pupil: THREE.Vector3;
+  shine: THREE.Vector3;
+  /** Subtle theme rim on upper eye catch light */
+  rimTint: THREE.Vector3;
 };
+
+function animeFaceColors(rimHex: string): MascotFaceColors {
+  return {
+    mouth: hex('#06060C'),
+    sclera: hex('#1A1A22'),
+    iris: hex('#0C0C14'),
+    irisDeep: hex('#000000'),
+    pupil: hex('#000000'),
+    shine: hex('#FFFFFF'),
+    rimTint: hex(rimHex),
+  };
+}
 
 export type MascotPalette = {
   /** Light jelly shell (~100% sphere). */
@@ -60,30 +79,35 @@ export type MascotPalette = {
   rimColor: string;
   jellySoftness: number;
   specularStrength: number;
+  /** Shell shader: lerp toward white highlight (lower = richer body color). */
+  shellHighlightMix: number;
+  shellDarken: number;
 };
 
-/** Mochi — vivid sky-blue (low gray), shell + inner core. */
+/** Mochi — saturated blue shell + deeper inner core (not washed-out ice). */
 const MOCHI: MascotPalette = {
   body: {
-    c0: hex('#FAFEFF'),
-    c1: hex('#EFF9FF'),
-    c2: hex('#DDF3FF'),
-    c3: hex('#C8ECFF'),
-    c4: hex('#B2E4FF'),
+    c0: hex('#9DD4FF'),
+    c1: hex('#7BC4FF'),
+    c2: hex('#58B0FF'),
+    c3: hex('#3D9EFF'),
+    c4: hex('#2888F5'),
   },
   inner: {
-    base: hex('#C8ECFF'),
-    mid: hex('#52B8FF'),
-    deep: hex('#2E9EFF'),
-    glow: hex('#1A8EF5'),
+    base: hex('#4DA8FF'),
+    mid: hex('#1A7FE8'),
+    deep: hex('#0B63D4'),
+    glow: hex('#0854B8'),
   },
-  face: { mouth: hex('#06060C') },
-  coreColor: '#52B8FF',
-  bodyColor: '#DDF3FF',
-  highlightColor: '#FFFFFF',
-  rimColor: '#C8ECFF',
-  jellySoftness: 0.72,
-  specularStrength: 1.05,
+  face: animeFaceColors('#6BB8FF'),
+  coreColor: '#1A7FE8',
+  bodyColor: '#58B0FF',
+  highlightColor: '#B8E4FF',
+  rimColor: '#3D9EFF',
+  jellySoftness: 0.66,
+  specularStrength: 1.02,
+  shellHighlightMix: 0.06,
+  shellDarken: 1,
 };
 
 /** Rimumu — light pink shell + pink inner core (same structure as Mochi). */
@@ -101,13 +125,15 @@ const RIMUMU: MascotPalette = {
     deep: hex('#FF4A9E'),
     glow: hex('#F02E88'),
   },
-  face: { mouth: hex('#06060C') },
+  face: animeFaceColors('#FF9EC8'),
   coreColor: '#FF7AB8',
   bodyColor: '#FFD6EC',
   highlightColor: '#FFF5FA',
   rimColor: '#FFC2E4',
   jellySoftness: 0.74,
   specularStrength: 1.0,
+  shellHighlightMix: 0.22,
+  shellDarken: 0.94,
 };
 
 export function mascotPaletteFor(slimeType: SlimeType): MascotPalette {

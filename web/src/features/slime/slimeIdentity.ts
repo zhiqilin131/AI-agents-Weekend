@@ -37,22 +37,22 @@ export type SlimeIdentity = {
   theme: SlimeThemeColors;
 };
 
-/** Layered Mochi — classic blue with depth */
+/** Layered Mochi — deeper, obvious blue (2D + UI chrome) */
 const MOCHI_THEME: SlimeThemeColors = {
-  deep: '#1E3A8A',
-  primary: '#2563EB',
-  secondary: '#4F8FF7',
-  accent: '#60A5FA',
-  highlight: '#93C5FD',
-  glow: '#BFDBFE',
-  background: '#E8F2FF',
-  surface: '#D4E8FF',
-  border: '#7CB3FF',
-  heading: '#1E3A8A',
-  ctaFrom: '#1E40AF',
-  ctaTo: '#2563EB',
-  ctaPress: '#1E3A8A',
-  ctaGlow: 'rgba(37, 99, 235, 0.38)',
+  deep: '#0F2D6E',
+  primary: '#1D5FD4',
+  secondary: '#2B7CE8',
+  accent: '#3B94F0',
+  highlight: '#5CAFFF',
+  glow: '#7EC0FA',
+  background: '#B8DCFF',
+  surface: '#9CC8F5',
+  border: '#3B94F0',
+  heading: '#0F2D6E',
+  ctaFrom: '#1A4FB8',
+  ctaTo: '#1D5FD4',
+  ctaPress: '#0F2D6E',
+  ctaGlow: 'rgba(29, 95, 212, 0.42)',
 };
 
 /** Layered Rimumu — soft rose / blush (calm, light, comforting — no dark tones) */
@@ -179,19 +179,22 @@ export function studioBackgroundStyle(slimeType: SlimeType): string {
   );
 }
 
-/** Slime Buddy stage canvas — ~30% whiter than theme gradients. */
+/** Slime Buddy stage canvas — near-white with a whisper of slime theme. */
 export function buddyPageCanvasBackground(slimeType: SlimeType): { base: string; overlay: string } {
   const t = getSlimeIdentity(slimeType).theme;
-  const mix = (color: string) => `color-mix(in srgb, ${color} 70%, white)`;
-  const midStop = slimeType === 'wellbeing' ? '#fff5f7' : '#fff5fb';
+  const whisper = (color: string, pct: number) =>
+    `color-mix(in srgb, white ${100 - pct}%, ${color} ${pct}%)`;
+  const tintPct = slimeType === 'wellbeing' ? 3.5 : 3;
+  const edgePct = 4.5;
+  const accent = whisper(t.highlight, tintPct);
+  const edge = whisper(t.surface, edgePct);
+
   return {
-    base:
-      `radial-gradient(circle at 50% 18%, color-mix(in srgb, ${mix(t.highlight)} 82%, transparent), transparent 28%), ` +
-      `linear-gradient(135deg, ${mix(t.background)} 0%, ${mix(midStop)} 42%, ${mix(t.surface)} 100%)`,
+    base: `linear-gradient(165deg, #ffffff 0%, ${accent} 52%, ${edge} 100%)`,
     overlay:
-      `radial-gradient(ellipse at 50% 38%, color-mix(in srgb, ${t.glow} 72%, white), transparent 58%), ` +
-      `radial-gradient(circle at 18% 72%, color-mix(in srgb, ${t.secondary} 24%, transparent), transparent 32%), ` +
-      `radial-gradient(circle at 82% 70%, color-mix(in srgb, ${t.accent} 19%, transparent), transparent 34%)`,
+      `radial-gradient(ellipse 78% 58% at 50% 30%, color-mix(in srgb, ${t.glow} 4%, transparent), transparent 74%), ` +
+      `radial-gradient(circle at 22% 78%, color-mix(in srgb, ${t.secondary} 2.5%, transparent), transparent 44%), ` +
+      `radial-gradient(circle at 78% 76%, color-mix(in srgb, ${t.accent} 2%, transparent), transparent 42%)`,
   };
 }
 
@@ -201,5 +204,5 @@ export function chatPageBackgroundStyle(slimeType: SlimeType): string {
   if (slimeType === 'wellbeing') {
     return `linear-gradient(135deg, ${t.background} 0%, #fff5f7 45%, #fdf8ff 100%)`;
   }
-  return `linear-gradient(135deg, ${t.background} 0%, #fff5fb 40%, #f0f9ff 100%)`;
+  return `linear-gradient(135deg, ${t.background} 0%, #d4e8ff 40%, #b8dcff 100%)`;
 }

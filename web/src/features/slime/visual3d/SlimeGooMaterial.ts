@@ -84,23 +84,19 @@ const fragmentShader = /* glsl */ `
 
 const SHELL_HIGHLIGHT = new THREE.Vector3(1, 1, 1);
 
-/** Shell tone trim — keep vivid blue, minimal gray crush. */
-const SHELL_DARKEN = 0.94;
-
 function shellStopColor(
-  body: MascotPalette['body'],
+  palette: MascotPalette,
   stop: keyof MascotPalette['body'],
   inner: THREE.Vector3,
 ): THREE.Vector3 {
-  return body[stop]
+  return palette.body[stop]
     .clone()
     .lerp(inner, 0.1)
-    .lerp(SHELL_HIGHLIGHT, 0.22)
-    .multiplyScalar(SHELL_DARKEN);
+    .lerp(SHELL_HIGHLIGHT, palette.shellHighlightMix)
+    .multiplyScalar(palette.shellDarken);
 }
 
 export function createSlimeGooMaterial(palette: MascotPalette): THREE.ShaderMaterial {
-  const { body } = palette;
   const innerAnchor = palette.inner.deep.clone().lerp(palette.inner.mid, 0.35);
   return new THREE.ShaderMaterial({
     vertexShader,
@@ -110,11 +106,11 @@ export function createSlimeGooMaterial(palette: MascotPalette): THREE.ShaderMate
       uSquashY: { value: 1 },
       uSquashX: { value: 1 },
       uVertexWobble: { value: 0 },
-      uC0: { value: shellStopColor(body, 'c0', innerAnchor) },
-      uC1: { value: shellStopColor(body, 'c1', innerAnchor) },
-      uC2: { value: shellStopColor(body, 'c2', innerAnchor) },
-      uC3: { value: shellStopColor(body, 'c3', innerAnchor) },
-      uC4: { value: shellStopColor(body, 'c4', innerAnchor) },
+      uC0: { value: shellStopColor(palette, 'c0', innerAnchor) },
+      uC1: { value: shellStopColor(palette, 'c1', innerAnchor) },
+      uC2: { value: shellStopColor(palette, 'c2', innerAnchor) },
+      uC3: { value: shellStopColor(palette, 'c3', innerAnchor) },
+      uC4: { value: shellStopColor(palette, 'c4', innerAnchor) },
       uInnerTint: { value: innerAnchor.clone().multiplyScalar(0.9) },
       uSpecular: { value: palette.specularStrength * 0.92 },
       uJellySoftness: { value: palette.jellySoftness },

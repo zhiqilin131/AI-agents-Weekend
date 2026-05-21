@@ -189,7 +189,13 @@ export function MainNavButtons({
         aria-label="Open Foresight-X home"
       >
         {useTopbar ? (
-          <img src="/ForesightXLogoDark.svg" alt="Foresight-X" className="h-10 w-auto sm:h-11" decoding="async" />
+          <img
+            src="/ForesightXLogoDark.svg"
+            alt="Foresight-X"
+            className="h-10 w-auto sm:h-11"
+            decoding="async"
+            data-buddy-rail-align
+          />
         ) : (
           <BrandMark compact={compact} iconOnly={compact} />
         )}
