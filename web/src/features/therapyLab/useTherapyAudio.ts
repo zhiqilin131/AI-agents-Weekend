@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BreathingPhaseId } from './components/BreathingOrb';
 
 const STOP_FADE_SECONDS = 0.04;
-const MAX_GAIN = 0.26;
+export const THERAPY_AUDIO_MAX_GAIN = 0.72;
 
 type RuntimeAudioCtx = AudioContext;
 
@@ -97,7 +97,7 @@ export function createTherapyAudioEngine(
   const applyMaster = () => {
     if (!ctx || !master) return;
     const t = now(ctx);
-    const target = muted ? 0 : Math.min(MAX_GAIN, Math.max(0, volume));
+    const target = muted ? 0 : Math.min(THERAPY_AUDIO_MAX_GAIN, Math.max(0, volume));
     rampGain(master.gain, target, t, 0.06);
   };
 
@@ -163,7 +163,7 @@ export function createTherapyAudioEngine(
       applyMaster();
     },
     setVolume(value) {
-      volume = Math.max(0, Math.min(MAX_GAIN, value));
+      volume = Math.max(0, Math.min(THERAPY_AUDIO_MAX_GAIN, value));
       applyMaster();
     },
     async resumeContext() {
@@ -270,24 +270,17 @@ const MUTE_KEY = 'therapyLabAudioMuted';
 const VOLUME_KEY = 'therapyLabAudioVolume';
 
 function readMutedDefault(): boolean {
-  try {
-    const raw = localStorage.getItem(MUTE_KEY);
-    if (raw === '0') return false;
-    if (raw === '1') return true;
-  } catch {
-    /* ignore */
-  }
-  return true; // opt-in by default
+  return false;
 }
 
 function readVolumeDefault(): number {
   try {
     const raw = Number(localStorage.getItem(VOLUME_KEY));
-    if (!Number.isNaN(raw) && raw >= 0 && raw <= MAX_GAIN) return raw;
+    if (!Number.isNaN(raw) && raw >= 0 && raw <= THERAPY_AUDIO_MAX_GAIN) return raw;
   } catch {
     /* ignore */
   }
-  return 0.18;
+  return 0.42;
 }
 
 export function stopTherapyAudioNow() {
@@ -298,6 +291,21 @@ export function useTherapyAudio() {
   const engine = useMemo(() => getSingleton(), []);
   const [muted, setMutedState] = useState<boolean>(() => readMutedDefault());
   const [volume, setVolumeState] = useState<number>(() => readVolumeDefault());
+  const setMuted = useCallback(
+    (value: boolean) => {
+      setMutedState(value);
+      engine.setMuted(value);
+    },
+    [engine],
+  );
+  const setVolume = useCallback(
+    (value: number) => {
+      const next = Math.max(0, Math.min(THERAPY_AUDIO_MAX_GAIN, value));
+      setVolumeState(next);
+      engine.setVolume(next);
+    },
+    [engine],
+  );
 
   useEffect(() => {
     engine.setMuted(muted);
@@ -331,14 +339,14 @@ export function useTherapyAudio() {
     () => ({
       muted,
       volume,
-      setMuted: setMutedState,
-      setVolume: setVolumeState,
+      setMuted,
+      setVolume,
       startBreathBed: engine.startBreathBed,
       updateBreathPhase: engine.updateBreathPhase,
       playPhaseTransitionCue: engine.playPhaseTransitionCue,
       stopAll: engine.stopAll,
       resumeContext: engine.resumeContext,
     }),
-    [engine, muted, volume],
+    [engine, muted, setMuted, setVolume, volume],
   );
 }

@@ -29,6 +29,7 @@ vi.mock('../useTherapyLabTts', () => ({
 }));
 
 vi.mock('../useTherapyAudio', () => ({
+  THERAPY_AUDIO_MAX_GAIN: 0.72,
   useTherapyAudio: () => audioApi,
 }));
 

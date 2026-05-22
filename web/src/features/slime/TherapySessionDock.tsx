@@ -16,7 +16,7 @@ import {
   readTherapySessionDockExpanded,
   writeTherapySessionDockExpanded,
 } from './therapySessionDockExpanded';
-import { useTherapyAudio } from '../therapyLab/useTherapyAudio';
+import { THERAPY_AUDIO_MAX_GAIN, useTherapyAudio } from '../therapyLab/useTherapyAudio';
 
 type Props = {
   threadId: string | null;
@@ -81,9 +81,7 @@ export function TherapySessionDock({
 }: Props) {
   const ident = getSlimeIdentity('wellbeing');
   const {
-    muted,
     volume,
-    setMuted,
     setVolume,
     startBreathBed,
     updateBreathPhase,
@@ -340,25 +338,16 @@ export function TherapySessionDock({
         <div className="mt-2.5 rounded-xl border border-rose-200/70 bg-white/85 px-2.5 py-2">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold text-rose-900">Ambient sound</p>
-            <button
-              type="button"
-              className="rounded-full border border-rose-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-rose-900 transition hover:bg-rose-50"
-              onClick={() => {
-                const next = !muted;
-                setMuted(next);
-                if (!next) void resumeContext();
-              }}
-              aria-pressed={!muted}
-            >
-              {muted ? 'Enable' : 'Mute'}
-            </button>
+            <span className="rounded-full border border-rose-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-rose-900">
+              Always on
+            </span>
           </div>
           <label className="mt-1.5 block text-[10px] text-rose-800/80">
             Volume
             <input
               type="range"
               min={0}
-              max={0.26}
+              max={THERAPY_AUDIO_MAX_GAIN}
               step={0.01}
               value={volume}
               onChange={(e) => setVolume(Number(e.target.value))}

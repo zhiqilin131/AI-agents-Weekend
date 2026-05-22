@@ -4,9 +4,10 @@ import { therapyLabTheme } from './TherapyLabChrome';
 
 export type BreathingPhaseId = 'inhale' | 'hold_in' | 'exhale' | 'hold_out';
 
-const ORB_SIZE = 148;
+const ORB_SIZE = 190;
 const SCALE_MIN = 0.62;
 const SCALE_MAX = 1;
+const FLOW_EASE: [number, number, number, number] = [0.37, 0, 0.63, 1];
 
 const t = therapyLabTheme;
 
@@ -27,7 +28,8 @@ export const BreathingOrb = memo(function BreathingOrb({
   const expanded = phaseId === 'inhale' || phaseId === 'hold_in';
   const targetScale = expanded ? SCALE_MAX : SCALE_MIN;
   const isHold = phaseId === 'hold_in' || phaseId === 'hold_out';
-  const animateDuration = paused || isHold ? 0 : phaseSeconds;
+  // Keep short easing even in hold phases to avoid hard visual snapping.
+  const animateDuration = paused ? 0 : isHold ? 0.22 : phaseSeconds;
 
   useEffect(() => {
     onRender?.();
@@ -39,19 +41,32 @@ export const BreathingOrb = memo(function BreathingOrb({
     <div className="flex flex-col items-center gap-3">
       <div
         className="relative flex items-center justify-center"
-        style={{ width: ORB_SIZE * SCALE_MAX + 48, height: ORB_SIZE * SCALE_MAX + 48 }}
+        style={{ width: ORB_SIZE * SCALE_MAX + 90, height: ORB_SIZE * SCALE_MAX + 90 }}
       >
+        {/* Dreamy haze layer */}
+        <motion.div
+          className="pointer-events-none absolute rounded-full"
+          style={{
+            width: ORB_SIZE + 110,
+            height: ORB_SIZE + 110,
+            background: `radial-gradient(circle, ${t.highlight}66 0%, ${t.accent}26 44%, transparent 76%)`,
+            filter: 'blur(28px)',
+          }}
+          animate={{ scale: targetScale * 1.18, opacity: expanded ? 0.9 : 0.72 }}
+          transition={{ duration: Math.max(0.6, animateDuration), ease: FLOW_EASE }}
+        />
+
         {/* Ambient halo — follows orb scale */}
         <motion.div
           className="pointer-events-none absolute rounded-full"
           style={{
-            width: ORB_SIZE + 24,
-            height: ORB_SIZE + 24,
+            width: ORB_SIZE + 56,
+            height: ORB_SIZE + 56,
             background: `radial-gradient(circle, ${t.accent}30 0%, ${t.glow} 45%, transparent 72%)`,
-            filter: 'blur(14px)',
+            filter: 'blur(18px)',
           }}
-          animate={{ scale: targetScale * 1.08 }}
-          transition={{ duration: animateDuration, ease: [0.45, 0.05, 0.55, 0.95] }}
+          animate={{ scale: targetScale * 1.12, opacity: expanded ? 0.9 : 0.78 }}
+          transition={{ duration: animateDuration, ease: FLOW_EASE }}
         />
 
         {/* Ground shadow */}
@@ -64,7 +79,7 @@ export const BreathingOrb = memo(function BreathingOrb({
             filter: 'blur(10px)',
           }}
           animate={{ scale: targetScale * 0.95, opacity: expanded ? 0.5 : 0.32 }}
-          transition={{ duration: animateDuration, ease: [0.45, 0.05, 0.55, 0.95] }}
+          transition={{ duration: animateDuration, ease: FLOW_EASE }}
         />
 
         {/* Main breathing orb */}
@@ -73,7 +88,7 @@ export const BreathingOrb = memo(function BreathingOrb({
           style={{ width: ORB_SIZE, height: ORB_SIZE }}
           initial={{ scale: initialScale }}
           animate={{ scale: targetScale }}
-          transition={{ duration: animateDuration, ease: [0.45, 0.05, 0.55, 0.95] }}
+          transition={{ duration: animateDuration, ease: FLOW_EASE }}
         >
           {/* Outer rim */}
           <div
@@ -81,7 +96,7 @@ export const BreathingOrb = memo(function BreathingOrb({
             style={{
               background: `linear-gradient(145deg, ${t.highlight} 0%, ${t.secondary} 38%, ${t.primary} 72%, ${t.deep} 100%)`,
               boxShadow: `
-                0 14px 36px ${t.ctaGlow},
+                0 18px 44px ${t.ctaGlow},
                 0 4px 12px rgba(158, 74, 90, 0.12),
                 inset 0 2px 8px rgba(255, 255, 255, 0.55),
                 inset 0 -6px 16px rgba(142, 42, 64, 0.18)
@@ -126,9 +141,7 @@ export const BreathingOrb = memo(function BreathingOrb({
 
 export const BREATHING_PATTERN = [
   { id: 'inhale' as const, label: 'Inhale', seconds: 4 },
-  { id: 'hold_in' as const, label: 'Hold', seconds: 2 },
   { id: 'exhale' as const, label: 'Exhale', seconds: 6 },
-  { id: 'hold_out' as const, label: 'Hold', seconds: 2 },
 ] as const;
 
 export const BREATHING_CYCLE_SECONDS = BREATHING_PATTERN.reduce((s, p) => s + p.seconds, 0);

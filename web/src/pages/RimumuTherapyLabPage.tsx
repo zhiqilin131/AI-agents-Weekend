@@ -25,6 +25,7 @@ const ident = getSlimeIdentity('wellbeing');
 
 export default function RimumuTherapyLabPage() {
   const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
+  const [exerciseRunId, setExerciseRunId] = useState(0);
   const [session, setSession] = useState<TherapyLabSessionState>({
     selectedExercise: null,
     currentStep: 'menu',
@@ -37,6 +38,7 @@ export default function RimumuTherapyLabPage() {
   };
 
   const selectExercise = (type: TherapyExerciseType) => {
+    setExerciseRunId((n) => n + 1);
     patchSession({
       selectedExercise: type,
       currentStep: 'start',
@@ -47,13 +49,51 @@ export default function RimumuTherapyLabPage() {
     });
   };
 
+  const isBreathingImmersive = session.selectedExercise === 'breathing_guide';
+
   return (
     <div
-      className="min-h-[100dvh] px-4 py-6 sm:px-6 sm:py-8"
+      className={cn('min-h-[100dvh]', isBreathingImmersive ? 'px-0 py-0' : 'px-4 py-6 sm:px-6 sm:py-8')}
       style={{
         background: `linear-gradient(165deg, #fff 0%, ${ident.theme.highlight} 55%, ${ident.theme.surface} 100%)`,
       }}
     >
+      {isBreathingImmersive ? (
+        <div className="relative min-h-[100dvh] overflow-hidden">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,rgba(255,255,255,0.92),transparent_58%)]" />
+          <div className="relative mx-auto flex min-h-[100dvh] max-w-7xl flex-col px-5 py-5 sm:px-8">
+            <div className="mb-3 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => patchSession({ selectedExercise: null, currentStep: 'menu', lastResult: null })}
+                className="rounded-full border border-white/70 bg-white/75 px-3 py-1 text-xs font-semibold text-rose-900 shadow-sm backdrop-blur-md"
+              >
+                All exercises
+              </button>
+              <Link
+                to="/buddy"
+                className="inline-flex items-center gap-1 rounded-full border border-white/70 bg-white/75 px-3 py-1 text-xs font-semibold text-rose-900 shadow-sm backdrop-blur-md"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+                Buddy
+              </Link>
+            </div>
+
+            <div className="flex flex-1 items-center justify-center">
+              <div className="w-full max-w-5xl">
+                <TherapyLabExerciseHost
+                  key={`${session.selectedExercise}-${exerciseRunId}`}
+                  exercise={session.selectedExercise}
+                  session={session}
+                  onSessionUpdate={patchSession}
+                  storageUserKey={storageUserKey}
+                  storageReady={storageReady}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className="mx-auto max-w-6xl">
         <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -111,6 +151,7 @@ export default function RimumuTherapyLabPage() {
               </TherapyLabPanel>
             ) : (
               <TherapyLabExerciseHost
+                key={`${session.selectedExercise}-${exerciseRunId}`}
                 exercise={session.selectedExercise}
                 session={session}
                 onSessionUpdate={patchSession}
@@ -126,7 +167,10 @@ export default function RimumuTherapyLabPage() {
                 <button
                   type="button"
                   className="mt-3 text-sm font-medium text-rose-800 underline"
-                  onClick={() => patchSession({ selectedExercise: session.selectedExercise, currentStep: 'restart' })}
+                  onClick={() => {
+                    if (!session.selectedExercise) return;
+                    selectExercise(session.selectedExercise);
+                  }}
                 >
                   Run again
                 </button>
@@ -150,6 +194,7 @@ export default function RimumuTherapyLabPage() {
           988 (U.S.).
         </p>
       </div>
+      )}
     </div>
   );
 }
