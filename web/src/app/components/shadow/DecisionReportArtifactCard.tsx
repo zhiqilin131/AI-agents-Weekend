@@ -73,14 +73,14 @@ export function DecisionReportArtifactCard({
             Revise with chat
           </button>
         </BuddyTooltip>
-        <BuddyTooltip content="Jump to the execution planner calendar for this decision.">
+        <BuddyTooltip content="Open the execution planner and draft calendar blocks from this report.">
           <button
             type="button"
             onClick={onOpenExecutionCalendar}
             className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 hover:bg-gray-50"
           >
             <Calendar className="h-3.5 w-3.5" aria-hidden />
-            Execution calendar
+            Plan on calendar
           </button>
         </BuddyTooltip>
       </div>
