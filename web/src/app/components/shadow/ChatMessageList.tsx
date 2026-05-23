@@ -8,10 +8,10 @@ import { ChatMessageBody } from './ChatMessageBody';
 import type { TherapyReport } from '../../../features/slime/therapySession';
 
 const SUGGESTION_CHIPS = [
-  'Help me decide something concrete',
-  'I want to reflect on a situation',
-  'Plan my next step',
-  'Just feeling chatty today',
+  { label: 'Help me choose between options', bubbleTone: 'from-white to-indigo-50/90' },
+  { label: 'I need to think through a situation', bubbleTone: 'from-white to-sky-50/90' },
+  { label: 'Help me plan one next step', bubbleTone: 'from-white to-violet-50/90' },
+  { label: 'Just want a quick check-in', bubbleTone: 'from-white to-emerald-50/90' },
 ] as const;
 
 export function ChatMessageList({
@@ -37,19 +37,19 @@ export function ChatMessageList({
     return (
       <div className="flex min-h-[45vh] items-center justify-center">
         <div className="text-center px-2">
-          <p className="text-xl text-gray-900 font-semibold">What are we thinking through today?</p>
-          <p className="mt-2 text-sm text-gray-500">Tap a starter or type below — no clarification until you send a message.</p>
-          <div className="mt-5 flex flex-wrap justify-center gap-2">
-            {SUGGESTION_CHIPS.map((label) => (
-              <BuddyTooltip key={label} content={`Insert this starter into the composer: “${label}”.`}>
+          <p className="text-xl font-semibold text-gray-900">What feels most useful to sort out right now?</p>
+          <p className="mt-2 text-sm text-gray-500">Pick a bubble to start, or type your own first line below.</p>
+          <div className="mt-5 flex flex-wrap justify-center gap-2.5">
+            {SUGGESTION_CHIPS.map((chip) => (
+              <BuddyTooltip key={chip.label} content={`Insert this starter into the composer: “${chip.label}”.`}>
                 <button
                   type="button"
                   disabled={!onSuggestionChip}
-                  onClick={() => onSuggestionChip?.(label)}
-                  className="rounded-full border border-indigo-200/90 bg-white/90 px-3 py-1.5 text-xs font-medium text-indigo-900 shadow-sm hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => onSuggestionChip?.(chip.label)}
+                  className={`rounded-full border bg-gradient-to-br px-3.5 py-2 text-xs font-medium shadow-[0_6px_18px_rgba(99,102,241,0.12)] transition hover:-translate-y-0.5 hover:shadow-[0_10px_22px_rgba(99,102,241,0.16)] disabled:cursor-not-allowed disabled:opacity-50 ${chip.bubbleTone}`}
                   style={{ borderColor: theme.border, color: theme.primary }}
                 >
-                  {label}
+                  {chip.label}
                 </button>
               </BuddyTooltip>
             ))}

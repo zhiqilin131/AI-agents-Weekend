@@ -74,8 +74,8 @@ describe('ChatMessageList (shadow)', () => {
         onSuggestionChip={() => {}}
       />,
     );
-    expect(html).toContain('What are we thinking through today?');
-    expect(html).toContain('Help me decide something concrete');
-    expect(html).toContain('no clarification until you send');
+    expect(html).toContain('What feels most useful to sort out right now?');
+    expect(html).toContain('Help me choose between options');
+    expect(html).toContain('Pick a bubble to start');
   });
 });
