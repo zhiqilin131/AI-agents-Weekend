@@ -71,7 +71,7 @@ export function DecisionReportStreamingPanel({
                     className="rounded-full border border-indigo-200 bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
                     onClick={() => onOpenExecutionCalendar(decisionId)}
                   >
-                    Execution calendar
+                    Plan on calendar
                   </button>
                 </>
               ) : null}

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { DecisionReport, SlimeProfile } from '../../model';
 import { RESOURCE_DROP_CALENDAR_ID } from '../../model';
+import { NextActionCard } from './NextActionCard';
 import { RecommendationCard } from './RecommendationCard';
 
 const { slimeMock } = vi.hoisted(() => {
@@ -108,7 +109,7 @@ describe('RecommendationCard', () => {
     expect(html).toContain('Show full reasoning');
   });
 
-  it('renders execution calendar control when executionCalendar is set', () => {
+  it('keeps calendar planning out of the recommendation card to avoid duplicate CTAs', () => {
     const navigate = vi.fn();
     const html = renderToStaticMarkup(
       <RecommendationCard
@@ -116,8 +117,21 @@ describe('RecommendationCard', () => {
         executionCalendar={{ decisionId: 'dec-1', navigate, onExecutionCalendarNavigate: vi.fn() }}
       />,
     );
-    expect(html).toContain('data-testid="create-execution-calendar"');
-    expect(html).toContain('Ship the prototype');
+    expect(html).not.toContain('data-testid="create-execution-calendar"');
+    expect(html).not.toContain('Plan these steps on calendar');
+  });
+
+  it('renders the single calendar planning CTA in the next-steps card', () => {
+    const html = renderToStaticMarkup(
+      <NextActionCard
+        actions={[{ text: 'Ship the prototype', deadline: 'Friday' }]}
+        decisionId="dec-1"
+        navigate={vi.fn()}
+      />,
+    );
+    expect(html).toContain('data-testid="plan-next-steps-calendar"');
+    expect(html).toContain('Plan these steps on calendar');
+    expect(html).toContain('Creates draft blocks');
   });
 
   it('does not duplicate calendar CTA when calendar chip is in resource drops', () => {

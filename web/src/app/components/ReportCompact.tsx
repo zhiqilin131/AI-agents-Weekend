@@ -118,7 +118,7 @@ interface ReportCompactProps {
     source?: string;
   } | null;
   isStreaming?: boolean;
-  /** When set, "Create execution calendar" uses this instead of default router navigation (e.g. preserve Shadow Chat context). */
+  /** When set, calendar planning uses this instead of default router navigation (e.g. preserve Shadow Chat context). */
   onExecutionCalendarNavigate?: (decisionId: string) => void;
   /** Shadow / multi-tab: thread id for Calendar Agent linkage */
   shadowThreadId?: string | null;
@@ -203,9 +203,9 @@ export function ReportCompact({
     };
   }, [decisionId, isStreaming, modelOptionId]);
 
-  const suppressNextCalendar = useMemo(
-    () => !resourceDropsLoading && resourceDrops.some((d) => d.id === RESOURCE_DROP_CALENDAR_ID),
-    [resourceDrops, resourceDropsLoading],
+  const recommendationResourceDrops = useMemo(
+    () => resourceDrops.filter((d) => d.id !== RESOURCE_DROP_CALENDAR_ID && d.action_type !== 'calendar'),
+    [resourceDrops],
   );
 
   const tradeoffsPanel =
@@ -370,7 +370,7 @@ export function ReportCompact({
                   }
                 : undefined
             }
-            resourceDrops={resourceDrops}
+            resourceDrops={recommendationResourceDrops}
             resourceDropsLoading={resourceDropsLoading}
           />
           <DecisionBriefStrip
@@ -389,7 +389,7 @@ export function ReportCompact({
             decisionId={decisionId}
             onExecutionCalendarNavigate={onExecutionCalendarNavigate}
             navigate={navigate}
-            suppressCalendarButton={suppressNextCalendar}
+            suppressCalendarButton={false}
             preNavigate={decisionId ? prefetchExecutionDraft : undefined}
           />
           <PersonalizedFitCard
@@ -478,7 +478,7 @@ export function ReportCompact({
               }
             : undefined
         }
-        resourceDrops={resourceDrops}
+        resourceDrops={recommendationResourceDrops}
         resourceDropsLoading={resourceDropsLoading}
       />
 

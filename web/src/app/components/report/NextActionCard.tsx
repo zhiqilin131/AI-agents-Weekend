@@ -125,16 +125,22 @@ export function NextActionCard({
       ) : null}
 
       {decisionId && !suppressCalendarButton ? (
-        <button
-          type="button"
-          onClick={goCal}
-          className={cn(
-            'inline-flex items-center gap-2 rounded-full border border-indigo-300 bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700',
-          )}
-        >
-          <CalendarClock className="h-4 w-4" aria-hidden />
-          Add to Execution Calendar
-        </button>
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            data-testid="plan-next-steps-calendar"
+            onClick={goCal}
+            className={cn(
+              'inline-flex items-center gap-2 rounded-full border border-indigo-300 bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700',
+            )}
+          >
+            <CalendarClock className="h-4 w-4" aria-hidden />
+            Plan these steps on calendar
+          </button>
+          <p className="text-[11px] leading-relaxed text-indigo-900/75">
+            Creates draft blocks from this report&apos;s next steps, then opens the execution planner so you can adjust them.
+          </p>
+        </div>
       ) : null}
     </section>
   );

@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router';
-import { CheckCircle2 } from 'lucide-react';
 import type { DecisionReport, ResourceDrop } from '../../model';
-import { RESOURCE_DROP_CALENDAR_ID } from '../../model';
 import { MarkdownContent } from '../MarkdownContent';
 import { TypewriterText } from '../TypewriterText';
 import { conciseReasoningPreview, isLongReasoning } from '../../../utils/recommendationNarration';
@@ -287,12 +285,6 @@ export function RecommendationCard({
     })();
   };
 
-  /** Avoid duplicate CTAs: slim chip replaces the big button once drops have loaded. */
-  const hideBigCalendarButton =
-    Boolean(executionCalendar) &&
-    !dropsLoading &&
-    dropsList.some((d) => d.id === RESOURCE_DROP_CALENDAR_ID);
-
   return (
     <section className="rounded-[24px] border border-white/90 bg-gradient-to-br from-white/85 to-purple-50/45 p-6 shadow-[0_8px_40px_rgba(0,0,0,0.06)] backdrop-blur-md">
       <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start">
@@ -379,32 +371,6 @@ export function RecommendationCard({
         </div>
       </div>
 
-      {executionCalendar && report.actions.length > 0 ? (
-        <ul className="mt-4 space-y-2">
-          {report.actions.slice(0, 3).map((a, i) => (
-            <li key={i} className="flex items-start gap-2 text-sm text-gray-800">
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
-              <span>
-                {a.text}
-                {a.deadline && <span className="ml-1 text-xs text-gray-500">({a.deadline})</span>}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {executionCalendar && !hideBigCalendarButton ? (
-        <div className="mt-4">
-          <button
-            type="button"
-            data-testid="create-execution-calendar"
-            onClick={goCalendar}
-            className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-600 px-3 py-2 text-xs text-white hover:bg-indigo-700"
-          >
-            Create execution calendar
-          </button>
-        </div>
-      ) : null}
     </section>
   );
 }
