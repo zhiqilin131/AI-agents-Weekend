@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import { buildExerciseResult } from '../buildExerciseResult';
 import type { TherapyExerciseCallbacks } from '../types';
 import {
@@ -9,8 +10,6 @@ import {
 import {
   TherapyLabGhostButton,
   TherapyLabPrimaryButton,
-  TherapyLabStepCard,
-  therapyLabTheme,
 } from '../components/TherapyLabChrome';
 import { useTherapyAudio } from '../useTherapyAudio';
 
@@ -27,8 +26,8 @@ export function BreathingGuideExercise({
   onStepChange,
   onOrbRenderDebug,
 }: Props) {
-  const [phase, setPhase] = useState<'intro' | 'running' | 'after'>('intro');
-  const [justSaved, setJustSaved] = useState(false);
+  const [phase, setPhase] = useState<'prepare' | 'countdown' | 'running' | 'after'>('prepare');
+  const [preflightCount, setPreflightCount] = useState(3);
   const [running, setRunning] = useState(false);
   const [phaseIndex, setPhaseIndex] = useState(0);
   const [countdown, setCountdown] = useState(BREATHING_PATTERN[0]!.seconds);
@@ -43,7 +42,13 @@ export function BreathingGuideExercise({
 
   useEffect(() => {
     onStepChange(
-      phase === 'intro' ? 'before_intensity' : phase === 'after' ? 'after_intensity' : `breath_${current.id}`,
+      phase === 'after'
+        ? 'after_intensity'
+        : phase === 'prepare'
+          ? 'breath_prepare'
+          : phase === 'countdown'
+            ? 'breath_countdown'
+            : `breath_${current.id}`,
     );
   }, [phase, current.id, onStepChange]);
 
@@ -53,6 +58,17 @@ export function BreathingGuideExercise({
       lastAudioPhaseRef.current = phaseId;
       if (withCue) therapyAudio.playPhaseTransitionCue(phaseId);
       therapyAudio.updateBreathPhase(phaseId, phaseSeconds);
+    },
+    [therapyAudio],
+  );
+
+  const playCountdownCue = useCallback(
+    (count: number) => {
+      const cuePhase: BreathingPhaseId = count >= 3 ? 'hold_out' : count === 2 ? 'hold_in' : 'inhale';
+      void (async () => {
+        await therapyAudio.resumeContext();
+        therapyAudio.playPhaseTransitionCue(cuePhase);
+      })();
     },
     [therapyAudio],
   );
@@ -97,11 +113,9 @@ export function BreathingGuideExercise({
     };
   }, [therapyAudio]);
 
-  const startBreathing = () => {
-    setJustSaved(false);
+  const startBreathing = useCallback(() => {
     onStart?.();
     startedAtRef.current = new Date().toISOString();
-    setPhase('running');
     setRunning(true);
     phaseIndexRef.current = 0;
     setPhaseIndex(0);
@@ -111,7 +125,35 @@ export function BreathingGuideExercise({
     lastAudioPhaseRef.current = null;
     therapyAudio.setMuted(false);
     resumePhaseAudio(BREATHING_PATTERN[0]!.id, BREATHING_PATTERN[0]!.seconds);
-  };
+  }, [onStart, resumePhaseAudio, therapyAudio]);
+
+  const beginCountdown = useCallback(() => {
+    setPhase('countdown');
+  }, []);
+
+  useEffect(() => {
+    if (phase !== 'countdown') return;
+    setRunning(false);
+    lastAudioPhaseRef.current = null;
+    therapyAudio.stopAll();
+    setPreflightCount(3);
+    const id = window.setInterval(() => {
+      setPreflightCount((n) => {
+        if (n > 1) return n - 1;
+        window.clearInterval(id);
+        setPhase('running');
+        startBreathing();
+        return 3;
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [phase, startBreathing, therapyAudio]);
+
+  useEffect(() => {
+    if (phase !== 'countdown') return;
+    if (preflightCount < 1 || preflightCount > 3) return;
+    playCountdownCue(preflightCount);
+  }, [phase, playCountdownCue, preflightCount]);
 
   const toggleRunning = () => {
     if (running) {
@@ -140,31 +182,41 @@ export function BreathingGuideExercise({
           afterIntensity: status === 'completed' ? 4 : undefined,
           resultSummary:
             status === 'completed'
-              ? `Breathing practice (~${cyclesDone} cycles, 4-6 pattern).`
+              ? `Breathing practice (~${cyclesDone} cycles, 4-2-6-2 pattern).`
               : 'Breathing practice skipped.',
-          payload: { cycles: cyclesDone, pattern: '4-6' },
+          payload: { cycles: cyclesDone, pattern: '4-2-6-2' },
         }),
       );
     },
     [cyclesDone, onComplete, therapyAudio],
   );
 
-  if (phase === 'intro') {
+  if (phase === 'countdown') {
     return (
-      <TherapyLabStepCard title="Breathing" stepIndex={1} stepTotal={3}>
-        <div className="space-y-3 text-center">
-          <p className="text-sm text-slate-600">Follow the orb.</p>
-          {justSaved ? <p className="text-xs font-semibold text-emerald-700">Saved</p> : null}
-          <div className="flex justify-center py-1">
-            <BreathingOrb phaseId="inhale" phaseSeconds={4} paused />
-          </div>
+      <div
+        className="relative flex min-h-[100dvh] w-full items-center justify-center overflow-hidden px-4"
+        style={{
+          background: 'radial-gradient(circle at 50% 42%, #34232C 0%, #160E13 78%)',
+        }}
+      >
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(255,255,255,0.08),transparent_62%)]" />
+        <div className="relative flex w-full max-w-xl flex-col items-center gap-4 text-center">
+          <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-white/45">Guided Breathing</p>
+          <BreathingOrb phaseId="hold_out" phaseSeconds={1} label="Ready" paused />
+          <motion.div
+            key={preflightCount}
+            initial={{ opacity: 0.28, scale: 0.88, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.45, ease: [0.22, 0.76, 0.24, 1] }}
+            className="text-6xl font-semibold tabular-nums text-white/80"
+          >
+            {preflightCount}
+          </motion.div>
+          <p className="text-sm text-white/55">Follow Rimuru&apos;s rhythm</p>
         </div>
-        <div className="rounded-2xl border border-white/70 bg-white/70 px-3 py-2 text-center text-[11px] font-medium text-slate-500 backdrop-blur-sm">
-          Ambient sound is on
-        </div>
-        <div className="flex flex-wrap justify-center gap-2">
-          <TherapyLabPrimaryButton onClick={startBreathing}>Start</TherapyLabPrimaryButton>
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2">
           <TherapyLabGhostButton
+            className="border-white/35 bg-white/15 text-white hover:bg-white/20"
             onClick={() => {
               onSkip?.();
               endExercise('skipped');
@@ -173,25 +225,79 @@ export function BreathingGuideExercise({
             Skip
           </TherapyLabGhostButton>
         </div>
-      </TherapyLabStepCard>
+      </div>
+    );
+  }
+
+  if (phase === 'prepare') {
+    return (
+      <div
+        className="relative flex min-h-[100dvh] w-full items-center justify-center overflow-hidden px-4"
+        style={{
+          background: 'radial-gradient(circle at 50% 42%, #34232C 0%, #160E13 78%)',
+        }}
+      >
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_36%,rgba(255,255,255,0.08),transparent_66%)]" />
+        <div className="pointer-events-none absolute left-1/2 top-1/2 h-[44vh] w-[44vh] -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-200/8 blur-3xl" />
+
+        <div className="relative flex w-full max-w-xl flex-col items-center gap-4 text-center">
+          <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-white/45">Calm Mode</p>
+          <h2 className="text-3xl font-semibold tracking-tight text-white/95 sm:text-4xl">Take a breath</h2>
+          <p className="max-w-md text-sm leading-relaxed text-white/65">Follow the rhythm as it expands and softens.</p>
+          <BreathingOrb phaseId="hold_out" phaseSeconds={2} label="Ready" paused />
+          <div className="flex flex-wrap justify-center gap-2">
+            <TherapyLabPrimaryButton onClick={beginCountdown}>Start</TherapyLabPrimaryButton>
+          </div>
+        </div>
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2">
+          <TherapyLabGhostButton
+            className="border-white/35 bg-white/15 text-white hover:bg-white/20"
+            onClick={() => {
+              onSkip?.();
+              endExercise('skipped');
+            }}
+          >
+            Skip
+          </TherapyLabGhostButton>
+        </div>
+      </div>
     );
   }
 
   if (phase === 'running') {
     return (
-      <TherapyLabStepCard title={current.label} stepIndex={2} stepTotal={3}>
-        <div className="flex flex-col items-center gap-6 py-4">
-          <BreathingOrb phaseId={current.id} phaseSeconds={current.seconds} paused={!running} onRender={onOrbRenderDebug} />
-          <div className="text-center">
-            <span className="font-semibold tabular-nums text-5xl" style={{ color: therapyLabTheme.heading }}>
-              {countdown}
-            </span>
-            <div className="mt-1 text-xs text-slate-500">
-              {current.label} · cycle {cyclesDone + 1}
-            </div>
-          </div>
+      <div
+        className="relative flex min-h-[100dvh] w-full flex-col justify-end overflow-hidden"
+        data-phase={current.id}
+        style={{
+          background: 'radial-gradient(circle at 50% 42%, #34232C 0%, #160E13 78%)',
+        }}
+      >
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(255,255,255,0.08),transparent_62%)]" />
+        <div className="relative flex flex-1 flex-col items-center justify-center gap-5 px-4 py-8">
+          <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-white/45">Guided Breathing</p>
+          <BreathingOrb
+            phaseId={current.id}
+            phaseSeconds={current.seconds}
+            label={
+              current.id === 'inhale' ? 'Breathe in' : current.id === 'exhale' ? 'Breathe out' : 'Hold'
+            }
+            paused={!running}
+            onRender={onOrbRenderDebug}
+          />
+          <p
+            className="text-xs font-light tracking-wide text-white/55 transition-all"
+            style={{
+              opacity: current.id === 'hold_out' ? 0.42 : current.id === 'exhale' ? 0.52 : 0.62,
+              transform: current.id === 'inhale' || current.id === 'hold_in' ? 'translateY(0) scale(1.02)' : 'translateY(2px) scale(0.98)',
+              transitionDuration: `${current.seconds}s`,
+            }}
+          >
+            {countdown}
+          </p>
+          <p className="text-sm text-white/55">Follow Rimuru&apos;s rhythm</p>
         </div>
-        <div className="flex flex-wrap justify-center gap-2">
+        <div className="relative z-10 flex flex-wrap justify-center gap-2 px-4 pb-5 pt-2">
           <TherapyLabPrimaryButton onClick={toggleRunning}>{running ? 'Pause' : 'Resume'}</TherapyLabPrimaryButton>
           <TherapyLabGhostButton
             onClick={() => {
@@ -204,25 +310,39 @@ export function BreathingGuideExercise({
             End
           </TherapyLabGhostButton>
         </div>
-      </TherapyLabStepCard>
+      </div>
     );
   }
 
   return (
-    <TherapyLabStepCard title="Nice work" stepIndex={3} stepTotal={3}>
-      <p className="text-center text-sm text-slate-600">One cycle at a time.</p>
-      <div className="flex flex-wrap justify-center gap-2">
-        <TherapyLabPrimaryButton
-          onClick={() => {
-            endExercise('completed');
-            setJustSaved(true);
-            setPhase('intro');
-          }}
-        >
-          Save result
-        </TherapyLabPrimaryButton>
-        <TherapyLabGhostButton onClick={startBreathing}>Again</TherapyLabGhostButton>
+    <div
+      className="relative flex min-h-[100dvh] w-full items-center justify-center overflow-hidden px-4"
+      style={{
+        background: 'radial-gradient(circle at 50% 38%, #34232C 0%, #160E13 78%)',
+      }}
+    >
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_36%,rgba(255,255,255,0.08),transparent_64%)]" />
+      <div className="relative w-full max-w-xl rounded-[2rem] border border-white/20 bg-white/10 p-6 text-center shadow-[0_18px_50px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:p-8">
+        <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-white/45">Guided Breathing</p>
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-emerald-200/40 bg-emerald-200/15 text-2xl text-emerald-100">
+          ✓
+        </div>
+        <h3 className="text-2xl font-semibold tracking-tight text-white/95">Nice work</h3>
+        <p className="mt-2 text-sm text-white/70">One cycle at a time.</p>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          <TherapyLabPrimaryButton
+            onClick={() => {
+              endExercise('completed');
+            }}
+          >
+            Save result
+          </TherapyLabPrimaryButton>
+          <TherapyLabGhostButton className="border-white/35 bg-white/15 text-white hover:bg-white/20" onClick={() => setPhase('prepare')}>
+            Again
+          </TherapyLabGhostButton>
+        </div>
+        <p className="mt-3 text-[11px] text-white/45">Press Esc to exit session.</p>
       </div>
-    </TherapyLabStepCard>
+    </div>
   );
 }

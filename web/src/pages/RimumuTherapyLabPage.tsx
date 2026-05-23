@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowLeft, FlaskConical } from 'lucide-react';
 import { getSlimeIdentity } from '../features/slime/slimeIdentity';
@@ -23,9 +23,19 @@ const EXERCISE_ORDER: TherapyExerciseType[] = [
 
 const ident = getSlimeIdentity('wellbeing');
 
+type FullscreenDoc = Document & {
+  webkitExitFullscreen?: () => Promise<void> | void;
+  webkitFullscreenElement?: Element | null;
+};
+
+type FullscreenEl = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void;
+};
+
 export default function RimumuTherapyLabPage() {
   const { storageUserKey, ready: storageReady } = useExecutionStorageUserKey();
   const [exerciseRunId, setExerciseRunId] = useState(0);
+  const [exitNotice, setExitNotice] = useState<string | null>(null);
   const [session, setSession] = useState<TherapyLabSessionState>({
     selectedExercise: null,
     currentStep: 'menu',
@@ -37,7 +47,46 @@ export default function RimumuTherapyLabPage() {
     setSession((s) => ({ ...s, ...patch }));
   };
 
+  const exitFullscreenIfActive = useCallback(async () => {
+    if (typeof document === 'undefined') return;
+    const doc = document as FullscreenDoc;
+    const active = doc.fullscreenElement ?? doc.webkitFullscreenElement;
+    if (!active) return;
+    try {
+      if (doc.exitFullscreen) {
+        await doc.exitFullscreen();
+        return;
+      }
+      if (doc.webkitExitFullscreen) {
+        await doc.webkitExitFullscreen();
+      }
+    } catch {
+      /* ignored */
+    }
+  }, []);
+
+  const requestFullscreenIfAvailable = useCallback(async () => {
+    if (typeof document === 'undefined') return;
+    const doc = document as FullscreenDoc;
+    const root = document.documentElement as FullscreenEl;
+    if (doc.fullscreenElement ?? doc.webkitFullscreenElement) return;
+    try {
+      if (root.requestFullscreen) {
+        await root.requestFullscreen();
+        return;
+      }
+      if (root.webkitRequestFullscreen) {
+        await root.webkitRequestFullscreen();
+      }
+    } catch {
+      /* ignored */
+    }
+  }, []);
+
   const selectExercise = (type: TherapyExerciseType) => {
+    if (type === 'breathing_guide') {
+      void requestFullscreenIfAvailable();
+    }
     setExerciseRunId((n) => n + 1);
     patchSession({
       selectedExercise: type,
@@ -51,6 +100,54 @@ export default function RimumuTherapyLabPage() {
 
   const isBreathingImmersive = session.selectedExercise === 'breathing_guide';
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const doc = document as FullscreenDoc;
+    const onFullscreenChange = () => {
+      if (!isBreathingImmersive) return;
+      if (doc.fullscreenElement ?? doc.webkitFullscreenElement) return;
+      patchSession({ selectedExercise: null, currentStep: 'menu', lastResult: null });
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange as EventListener);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange as EventListener);
+    };
+  }, [isBreathingImmersive]);
+
+  useEffect(() => {
+    if (!isBreathingImmersive) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      patchSession({ selectedExercise: null, currentStep: 'menu', lastResult: null });
+      void exitFullscreenIfActive();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [exitFullscreenIfActive, isBreathingImmersive]);
+
+  useEffect(() => {
+    if (isBreathingImmersive) return;
+    void exitFullscreenIfActive();
+  }, [exitFullscreenIfActive, isBreathingImmersive]);
+
+  useEffect(() => {
+    if (!isBreathingImmersive) return;
+    if (session.lastResult?.exerciseType !== 'breathing_guide') return;
+    if (session.lastResult.status === 'completed') {
+      setExitNotice('Result saved');
+    }
+    patchSession({ selectedExercise: null, currentStep: 'menu' });
+    void exitFullscreenIfActive();
+  }, [exitFullscreenIfActive, isBreathingImmersive, session.lastResult]);
+
+  useEffect(() => {
+    if (!exitNotice) return;
+    const id = window.setTimeout(() => setExitNotice(null), 2200);
+    return () => window.clearTimeout(id);
+  }, [exitNotice]);
+
   return (
     <div
       className={cn('min-h-[100dvh]', isBreathingImmersive ? 'px-0 py-0' : 'px-4 py-6 sm:px-6 sm:py-8')}
@@ -58,29 +155,17 @@ export default function RimumuTherapyLabPage() {
         background: `linear-gradient(165deg, #fff 0%, ${ident.theme.highlight} 55%, ${ident.theme.surface} 100%)`,
       }}
     >
+      {exitNotice ? (
+        <div className="fixed left-1/2 top-4 z-40 -translate-x-1/2 rounded-full border border-emerald-200/70 bg-white/90 px-4 py-1.5 text-sm font-medium text-emerald-800 shadow-md backdrop-blur">
+          {exitNotice}
+        </div>
+      ) : null}
       {isBreathingImmersive ? (
         <div className="relative min-h-[100dvh] overflow-hidden">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,rgba(255,255,255,0.92),transparent_58%)]" />
-          <div className="relative mx-auto flex min-h-[100dvh] max-w-7xl flex-col px-5 py-5 sm:px-8">
-            <div className="mb-3 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => patchSession({ selectedExercise: null, currentStep: 'menu', lastResult: null })}
-                className="rounded-full border border-white/70 bg-white/75 px-3 py-1 text-xs font-semibold text-rose-900 shadow-sm backdrop-blur-md"
-              >
-                All exercises
-              </button>
-              <Link
-                to="/buddy"
-                className="inline-flex items-center gap-1 rounded-full border border-white/70 bg-white/75 px-3 py-1 text-xs font-semibold text-rose-900 shadow-sm backdrop-blur-md"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-                Buddy
-              </Link>
-            </div>
-
-            <div className="flex flex-1 items-center justify-center">
-              <div className="w-full max-w-5xl">
+          <div className="relative flex min-h-[100dvh] w-full flex-col p-0">
+            <div className="flex flex-1 items-stretch justify-center">
+              <div className="h-full w-full">
                 <TherapyLabExerciseHost
                   key={`${session.selectedExercise}-${exerciseRunId}`}
                   exercise={session.selectedExercise}

@@ -33,13 +33,6 @@ vi.mock('../useTherapyAudio', () => ({
   useTherapyAudio: () => audioApi,
 }));
 
-function buttonText(node: { props: { children?: unknown } }): string {
-  const v = node.props.children;
-  if (typeof v === 'string') return v;
-  if (Array.isArray(v)) return v.join('');
-  return '';
-}
-
 describe('BreathingGuideExercise render behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -56,23 +49,35 @@ describe('BreathingGuideExercise render behavior', () => {
   it('does not re-render BreathingOrb on per-second countdown ticks', async () => {
     const { BreathingGuideExercise } = await import('./BreathingGuideExercise');
     const onOrbRenderDebug = vi.fn();
-    const renderer = create(
-      <BreathingGuideExercise
-        onStart={vi.fn()}
-        onComplete={vi.fn()}
-        onSkip={vi.fn()}
-        onStepChange={vi.fn()}
-        onOrbRenderDebug={onOrbRenderDebug}
-      />,
-    );
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(
+        <BreathingGuideExercise
+          onStart={vi.fn()}
+          onComplete={vi.fn()}
+          onSkip={vi.fn()}
+          onStepChange={vi.fn()}
+          onOrbRenderDebug={onOrbRenderDebug}
+        />,
+      );
+    });
 
     const startButton = renderer.root
       .findAllByType('button')
-      .find((btn) => buttonText(btn).includes('Start'));
+      .find((btn) => {
+        const v = btn.props.children;
+        if (typeof v === 'string') return v.includes('Start');
+        if (Array.isArray(v)) return v.join('').includes('Start');
+        return false;
+      });
     expect(startButton).toBeTruthy();
 
     act(() => {
       startButton!.props.onClick();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
     });
 
     const rendersAtPhaseStart = onOrbRenderDebug.mock.calls.length;
