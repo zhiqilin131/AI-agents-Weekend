@@ -34,7 +34,7 @@ import {
   type CalendarEvent,
   type ExecutionTask,
 } from '../utils/executionScheduler';
-import { parseIcsToCalendarEvents, exportEventsToIcs } from '../utils/ics';
+import { parseIcsToCalendarImport, exportEventsToIcs } from '../utils/ics';
 import { mapRecommendationActionsToTasks } from '../utils/executionTasks';
 import { dedupeOverlappingCalendarEvents } from '../utils/executionCalendarDedupe';
 import {
@@ -918,9 +918,14 @@ export default function ExecutionPlannerPage() {
 
   const onUploadIcs = async (file: File) => {
     const text = await file.text();
-    const parsed = parseIcsToCalendarEvents(text);
+    const { events: parsed, skipped } = parseIcsToCalendarImport(text);
     if (parsed.length === 0) {
-      setUploadNotice('No valid calendar events found in this .ics file.');
+      const reasons = [...new Set(skipped.map((s) => s.reason).filter(Boolean))].slice(0, 3);
+      setUploadNotice(
+        reasons.length
+          ? `No valid calendar events found in this .ics file. Skipped ${skipped.length}: ${reasons.join('; ')}.`
+          : 'No valid calendar events found in this .ics file.',
+      );
       return;
     }
     // Jump to the week with most imported events (more reliable than first event).
@@ -935,8 +940,11 @@ export default function ExecutionPlannerPage() {
     const topWeek = [...weekBuckets.values()].sort((a, b) => b.count - a.count)[0];
     if (topWeek) setWeekStart(topWeek.ws);
     setEvents((prev) => [...prev, ...parsed]);
+    const skippedSummary = skipped.length
+      ? ` Skipped ${skipped.length}: ${[...new Set(skipped.map((s) => s.reason))].slice(0, 2).join('; ')}.`
+      : '';
     setUploadNotice(
-      `Imported ${parsed.length} event${parsed.length > 1 ? 's' : ''} from ${file.name}. Jumped to week with most events (${topWeek?.count ?? 0}).`,
+      `Imported ${parsed.length} event${parsed.length > 1 ? 's' : ''} from ${file.name}.${skippedSummary} Jumped to week with most events (${topWeek?.count ?? 0}).`,
     );
   };
 
