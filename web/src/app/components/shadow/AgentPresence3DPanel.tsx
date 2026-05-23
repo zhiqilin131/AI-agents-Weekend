@@ -244,7 +244,7 @@ export function AgentPresence3DPanel({
       className="rounded-3xl border p-4 shadow-[0_10px_28px_rgba(0,0,0,0.08)] backdrop-blur-md"
       style={{
         borderColor: ident.theme.border,
-        background: `linear-gradient(180deg, ${ident.theme.surface}ee 0%, rgba(255,255,255,0.72) 100%)`,
+        background: '#ffffff',
       }}
     >
       <div className="flex items-center justify-between">

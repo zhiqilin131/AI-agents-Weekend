@@ -16,6 +16,7 @@ import {
   readTherapySessionDockExpanded,
   writeTherapySessionDockExpanded,
 } from './therapySessionDockExpanded';
+import { THERAPY_AUDIO_MAX_GAIN, useTherapyAudio } from '../therapyLab/useTherapyAudio';
 
 type Props = {
   threadId: string | null;
@@ -79,6 +80,14 @@ export function TherapySessionDock({
   className,
 }: Props) {
   const ident = getSlimeIdentity('wellbeing');
+  const {
+    volume,
+    setVolume,
+    startBreathBed,
+    updateBreathPhase,
+    stopAll,
+    resumeContext,
+  } = useTherapyAudio();
   const [busy, setBusy] = useState<'start' | 'end' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(() => readTherapySessionDockExpanded());
@@ -102,6 +111,7 @@ export function TherapySessionDock({
   );
   const report = therapyReportFromThread(thread);
   const hasThread = Boolean(threadId);
+  const sessionActive = hasThread && status === 'active';
   const badge = statusBadge(status, intakeComplete, hasThread);
   const btnBase =
     'inline-flex items-center justify-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50';
@@ -161,6 +171,19 @@ export function TherapySessionDock({
     const r = therapyReportFromThread(thread);
     if (r) onOpenReport(r);
   };
+
+  useEffect(() => {
+    if (!sessionActive) {
+      stopAll();
+      return;
+    }
+    void resumeContext();
+    startBreathBed();
+    // Gentle baseline envelope while the session is active in the dock.
+    updateBreathPhase('inhale', 6);
+  }, [resumeContext, sessionActive, startBreathBed, stopAll, updateBreathPhase]);
+
+  useEffect(() => () => stopAll(), [stopAll]);
 
   return (
     <div
@@ -311,6 +334,26 @@ export function TherapySessionDock({
               Check-in
             </button>
           ) : null}
+        </div>
+        <div className="mt-2.5 rounded-xl border border-rose-200/70 bg-white/85 px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-semibold text-rose-900">Ambient sound</p>
+            <span className="rounded-full border border-rose-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-rose-900">
+              Always on
+            </span>
+          </div>
+          <label className="mt-1.5 block text-[10px] text-rose-800/80">
+            Volume
+            <input
+              type="range"
+              min={0}
+              max={THERAPY_AUDIO_MAX_GAIN}
+              step={0.01}
+              value={volume}
+              onChange={(e) => setVolume(Number(e.target.value))}
+              className="mt-1 w-full accent-rose-400"
+            />
+          </label>
         </div>
         {error ? <p className="mt-2 text-xs text-red-700">{error}</p> : null}
       </div>

@@ -53,7 +53,7 @@ function BuddyStyleSlimeScene({
       data-slime-type={slimeType}
       aria-label={mood.label}
       style={{
-        background: `radial-gradient(ellipse at 50% 40%, ${ident.theme.glow}, transparent 58%), linear-gradient(180deg, color-mix(in srgb, ${ident.theme.highlight} 55%, white) 0%, color-mix(in srgb, ${ident.theme.surface} 88%, white) 100%)`,
+        background: '#ffffff',
       }}
     >
       <SlimeAdvisor
@@ -90,7 +90,7 @@ export function Agent3DCompanion({
 
   const frameStyle = {
     borderColor: ident.theme.border,
-    background: ident.theme.surface,
+    background: '#ffffff',
   };
 
   if (disableSceneClick) {

@@ -1,6 +1,6 @@
 import { useCallback, type ComponentType, type SVGProps } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { BookOpen, CalendarDays, Ghost, History, Home, LogOut, MessagesSquare } from 'lucide-react';
+import { BookOpen, CalendarDays, Ghost, HeartHandshake, History, Home, LogOut, MessagesSquare } from 'lucide-react';
 import { SlimeAdvisor } from './report/SlimeAdvisor';
 import { PersonaSwitcher } from './PersonaSwitcher';
 import { cn } from './ui/utils';
@@ -247,6 +247,17 @@ export function MainNavButtons({
         <button type="button" onClick={() => navigate('/buddy')} className={navBtnClass(isActivePath('/buddy'))} style={navBtnStyle}>
           <NavIconSlot Icon={Ghost} compact={compact} colorClass={iconTone('text-fuchsia-600', 'text-fuchsia-700')} />
           {compact ? 'Buddy' : 'Slime buddy'}
+        </button>
+      </BuddyTooltip>
+      <BuddyTooltip content="Open the standalone Rimumu Therapy Lab experience.">
+        <button
+          type="button"
+          onClick={() => navigate('/therapy-lab')}
+          className={navBtnClass(isActivePath('/therapy-lab') || isActivePath('/rimumu-lab'))}
+          style={navBtnStyle}
+        >
+          <NavIconSlot Icon={HeartHandshake} compact={compact} colorClass={iconTone('text-rose-600', 'text-rose-700')} />
+          {compact ? 'Therapy' : 'Therapy Lab'}
         </button>
       </BuddyTooltip>
       {isSupabaseEnvConfigured() && !session ? (

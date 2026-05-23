@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Crown } from 'lucide-react';
+import {
+  Archive,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Compass,
+  Crown,
+  Database,
+  Heart,
+  ListChecks,
+  Pencil,
+  Save,
+  User,
+} from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { MainNavButtons } from '../app/components/MainNavButtons';
 import { apiFetch } from '../utils/apiFetch';
@@ -459,13 +472,24 @@ export default function ProfilePage() {
             <h1 className="text-2xl text-gray-900 md:text-3xl" style={{ fontWeight: 700 }}>
               Profile
             </h1>
-            <button
-              type="button"
-              onClick={() => navigate('/onboarding?mode=resume')}
-              className="mt-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-900 hover:bg-indigo-100"
-            >
-              Continue onboarding
-            </button>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => navigate('/onboarding?mode=resume')}
+                className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200/90 bg-gradient-to-r from-white via-indigo-50 to-violet-50 px-4 py-2 text-xs font-semibold text-indigo-900 shadow-[0_8px_20px_rgba(99,102,241,0.16)] transition hover:border-indigo-300 hover:from-indigo-50 hover:to-violet-100 hover:shadow-[0_10px_24px_rgba(99,102,241,0.2)] md:text-sm"
+              >
+                <Compass size={14} aria-hidden />
+                Continue onboarding
+              </button>
+              <button
+                type="button"
+                onClick={() => void save()}
+                className="inline-flex items-center gap-1.5 rounded-full border border-violet-200/90 bg-gradient-to-r from-white via-violet-50 to-fuchsia-50 px-4 py-2 text-xs font-semibold text-violet-700 shadow-[0_8px_20px_rgba(99,102,241,0.16)] transition hover:border-violet-300 hover:from-violet-50 hover:to-fuchsia-100 hover:shadow-[0_10px_24px_rgba(99,102,241,0.2)] md:text-sm"
+              >
+                <Save size={14} aria-hidden />
+                Save profile
+              </button>
+            </div>
           </div>
           {isSupabaseEnvConfigured() && session ? (
             <div className="mt-3 flex shrink-0 flex-col items-stretch gap-2 sm:items-end md:mt-0">
@@ -492,41 +516,33 @@ export default function ProfilePage() {
         ) : null}
 
         <div className="space-y-2">
-          <div className="flex items-center justify-end">
-            <button
-              type="button"
-              onClick={() => void save()}
-              className="rounded-full bg-gradient-to-r from-purple-600 to-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-md md:text-sm"
-            >
-              Save profile
-            </button>
-          </div>
-
           <main className="space-y-2">
             <section
               id="profile-slime-credits"
               className="rounded-xl border border-emerald-100/90 bg-gradient-to-br from-white/90 via-emerald-50/40 to-violet-50/50 p-3 shadow-[0_8px_24px_rgba(16,185,129,0.08)] backdrop-blur-md md:rounded-2xl md:p-3.5"
             >
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
+                  <label className="inline-flex items-center gap-1.5 text-sm text-gray-900" style={{ fontWeight: 700 }}>
+                    Slime Credits
+                  </label>
                   <button
                     type="button"
                     onClick={() => void onLegendaryEggClick()}
-                    className="-m-1 rounded-full p-1 text-left transition hover:opacity-90 active:scale-95"
+                    className="rounded-full p-0.5 text-left transition hover:opacity-90 active:scale-95"
                     aria-label="Slime credits mark"
                   >
-                    <SlimeCreditIcon className="h-7 w-7" />
+                    <SlimeCreditIcon className="h-4 w-4" />
                   </button>
-                  <label className="text-sm text-gray-900" style={{ fontWeight: 700 }}>
-                    Slime Credits
-                  </label>
                 </div>
                 <button
                   type="button"
                   onClick={() => toggleSection('credits')}
-                  className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs"
+                  className="shrink-0 rounded-full border border-gray-200 p-1.5 text-gray-700 md:p-2"
+                  aria-expanded={openSections.credits}
+                  aria-label={openSections.credits ? 'Collapse section' : 'Expand section'}
                 >
-                  {openSections.credits ? 'Collapse' : 'Expand'}
+                  {openSections.credits ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
               </div>
               {openSections.credits ? (
@@ -682,11 +698,18 @@ export default function ProfilePage() {
               className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl md:p-3.5"
             >
             <div className="mb-1.5 flex items-center justify-between gap-2">
-            <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
+            <label className="inline-flex items-center gap-1.5 text-sm text-gray-700" style={{ fontWeight: 600 }}>
               Your priorities
+              <ListChecks size={14} className="text-indigo-500" aria-hidden />
             </label>
-            <button type="button" onClick={() => toggleSection('priorities')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
-              {openSections.priorities ? 'Collapse' : 'Expand'}
+            <button
+              type="button"
+              onClick={() => toggleSection('priorities')}
+              className="shrink-0 rounded-full border border-gray-200 p-1.5 text-gray-700 md:p-2"
+              aria-expanded={openSections.priorities}
+              aria-label={openSections.priorities ? 'Collapse section' : 'Expand section'}
+            >
+              {openSections.priorities ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
             </div>
             {openSections.priorities ? (
@@ -709,19 +732,28 @@ export default function ProfilePage() {
               className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl md:p-3.5"
             >
               <div className="mb-1.5 flex items-center justify-between gap-2">
-                <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
+                <label className="inline-flex items-center gap-1.5 text-sm text-gray-700" style={{ fontWeight: 600 }}>
                   Structured memory (Shadow, clarifications &amp; imports)
+                  <Database size={14} className="text-indigo-500" aria-hidden />
                 </label>
                 <div className="flex shrink-0 items-center gap-1.5">
-                  <button type="button" onClick={() => toggleSection('memory')} className="rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
-                    {openSections.memory ? 'Collapse' : 'Expand'}
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('memory')}
+                    className="rounded-full border border-gray-200 p-1.5 text-gray-700 md:p-2"
+                    aria-expanded={openSections.memory}
+                    aria-label={openSections.memory ? 'Collapse section' : 'Expand section'}
+                  >
+                    {openSections.memory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                   </button>
                   <button
                     type="button"
                     onClick={() => setMemoryEditMode((v) => !v)}
-                    className={`rounded-full px-2.5 py-0.5 text-[11px] md:px-3 md:py-1 md:text-xs ${memoryEditMode ? 'bg-indigo-600 text-white' : 'border border-gray-200 bg-white text-gray-700'}`}
+                    className={`rounded-full p-1.5 md:p-2 ${memoryEditMode ? 'bg-indigo-600 text-white' : 'border border-gray-200 bg-white text-gray-700'}`}
+                    aria-pressed={memoryEditMode}
+                    aria-label={memoryEditMode ? 'Finish editing memory' : 'Edit memory'}
                   >
-                    {memoryEditMode ? 'Done' : 'Edit'}
+                    {memoryEditMode ? <Check size={14} /> : <Pencil size={14} />}
                   </button>
                 </div>
               </div>
@@ -884,15 +916,18 @@ export default function ProfilePage() {
               className="rounded-xl border border-rose-100/90 bg-gradient-to-br from-rose-50/50 via-white/80 to-white/70 p-3 shadow-[0_8px_24px_rgba(244,114,182,0.08)] backdrop-blur-md md:rounded-2xl md:p-3.5"
             >
               <div className="mb-1.5 flex items-center justify-between gap-2">
-                <label className="text-sm text-rose-950" style={{ fontWeight: 600 }}>
+                <label className="inline-flex items-center gap-1.5 text-sm text-rose-950" style={{ fontWeight: 600 }}>
                   Wellbeing (Rimumu)
+                  <Heart size={14} className="text-rose-500" aria-hidden />
                 </label>
                 <button
                   type="button"
                   onClick={() => toggleSection('wellbeing')}
-                  className="shrink-0 rounded-full border border-rose-200 px-2.5 py-0.5 text-[11px] text-rose-900 md:px-3 md:py-1 md:text-xs"
+                  className="shrink-0 rounded-full border border-rose-200 p-1.5 text-rose-900 md:p-2"
+                  aria-expanded={openSections.wellbeing}
+                  aria-label={openSections.wellbeing ? 'Collapse section' : 'Expand section'}
                 >
-                  {openSections.wellbeing ? 'Collapse' : 'Expand'}
+                  {openSections.wellbeing ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
               </div>
               {openSections.wellbeing ? (
@@ -953,11 +988,18 @@ export default function ProfilePage() {
 
             <section id="profile-legacy" className="rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
             <div className="mb-1.5 flex items-center justify-between gap-2">
-            <label className="text-sm text-gray-700" style={{ fontWeight: 600 }}>
+            <label className="inline-flex items-center gap-1.5 text-sm text-gray-700" style={{ fontWeight: 600 }}>
               Legacy system lines
+              <Archive size={14} className="text-indigo-500" aria-hidden />
             </label>
-            <button type="button" onClick={() => toggleSection('legacy')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
-              {openSections.legacy ? 'Collapse' : 'Expand'}
+            <button
+              type="button"
+              onClick={() => toggleSection('legacy')}
+              className="shrink-0 rounded-full border border-gray-200 p-1.5 text-gray-700 md:p-2"
+              aria-expanded={openSections.legacy}
+              aria-label={openSections.legacy ? 'Collapse section' : 'Expand section'}
+            >
+              {openSections.legacy ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
             </div>
             {openSections.legacy ? (
@@ -995,9 +1037,18 @@ export default function ProfilePage() {
 
           <section id="profile-context" className="space-y-2 rounded-xl border border-white/90 bg-white/70 p-3 shadow-[0_8px_24px_rgba(99,102,241,0.05)] backdrop-blur-md md:rounded-2xl">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm text-gray-700" style={{ fontWeight: 600 }}>Personal context</p>
-              <button type="button" onClick={() => toggleSection('context')} className="shrink-0 rounded-full border border-gray-200 px-2.5 py-0.5 text-[11px] text-gray-700 md:px-3 md:py-1 md:text-xs">
-                {openSections.context ? 'Collapse' : 'Expand'}
+              <p className="inline-flex items-center gap-1.5 text-sm text-gray-700" style={{ fontWeight: 600 }}>
+                Personal context
+                <User size={14} className="text-indigo-500" aria-hidden />
+              </p>
+              <button
+                type="button"
+                onClick={() => toggleSection('context')}
+                className="shrink-0 rounded-full border border-gray-200 p-1.5 text-gray-700 md:p-2"
+                aria-expanded={openSections.context}
+                aria-label={openSections.context ? 'Collapse section' : 'Expand section'}
+              >
+                {openSections.context ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </button>
             </div>
             {openSections.context ? (
