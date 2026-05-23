@@ -34,6 +34,24 @@ from foresight_x.voice.calendar_command_parser import CalendarDraft as VoiceCale
 REPORT_EXECUTION_TASK_LIMIT = 4
 
 
+def _confirmed_events_for_draft(
+    *,
+    settings: Settings,
+    user_id: str,
+    draft_id: str,
+) -> list[CalendarEvent]:
+    from foresight_x.calendar_agent.store import list_events as cal_list_events
+
+    did = draft_id.strip()
+    if not did:
+        return []
+    return [
+        e
+        for e in cal_list_events(settings, user_id)
+        if str((e.metadata or {}).get("from_draft_id") or "").strip() == did
+    ]
+
+
 def _trace_tasks(
     trace: DecisionTrace,
     *,
@@ -330,7 +348,7 @@ def confirm_draft(
 ) -> tuple[list[CalendarEvent], CalendarDraft | None]:
     d = get_draft(settings, user_id, draft_id)
     if not d:
-        return [], None
+        return _confirmed_events_for_draft(settings=settings, user_id=user_id, draft_id=draft_id), None
     chosen = d.proposed_events
     if selected_event_ids:
         sel = set(selected_event_ids)
