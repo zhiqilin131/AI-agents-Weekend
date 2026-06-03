@@ -390,7 +390,7 @@ def _execute_smoke_pipeline(
 
     ctx = PipelineContext(settings=s, llm=None, user_memory=None, world=None)
     try:
-        kwargs: dict[str, Any] = {"preserve_raw_input": True, "persist_trace": False}
+        kwargs: dict[str, Any] = {"preserve_raw_input": True, "persist_trace": False, "pause_for_scoring_clarify": False}
         if seed and not full_pipeline:
             kwargs["resume_from_stage"] = "finalize"
             kwargs["resume_partial"] = seed
@@ -461,6 +461,7 @@ def iter_smoke_progress(*, settings: Settings | None = None) -> Iterator[dict[st
             _SMOKE_QUESTION,
             preserve_raw_input=True,
             persist_trace=False,
+            pause_for_scoring_clarify=False,
         ):
             if isinstance(ev, dict):
                 events.append(ev)

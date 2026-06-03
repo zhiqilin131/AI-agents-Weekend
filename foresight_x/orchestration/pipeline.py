@@ -66,6 +66,7 @@ from foresight_x.orchestration.degradation_policy import (
     safe_step_infer,
 )
 from foresight_x.simulation.evaluator import evaluate_options
+from foresight_x.simulation.feature_merge import ensure_option_tags
 from foresight_x.simulation.future_simulator import simulate_futures
 from foresight_x.simulation.scoring_clarify_gate import (
     MAX_GATE_QUESTIONS,
@@ -541,8 +542,8 @@ def finalize_trace(
     from foresight_x.memory.profile_store import empty_profile, load_profile
 
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
-    settings = load_settings()
-    profile = load_profile(settings.foresight_user_id) or empty_profile(settings.foresight_user_id)
+    s = settings or load_settings()
+    profile = load_profile(s.foresight_user_id) or empty_profile(s.foresight_user_id)
     recommendation, _rec_provider, _rec_deg = safe_recommend(
         evaluations,
         options,
@@ -599,10 +600,10 @@ def finalize_trace(
     trace = trace.model_copy(update={"reflection": reflection})
     trace = trace.model_copy(update={"report_surface": build_report_surface(trace)})
     if persist_trace:
-        save_decision_trace(trace, settings=settings)
-        if settings.graph_enabled:
+        save_decision_trace(trace, settings=s)
+        if s.graph_enabled:
             try:
-                TemporalGraphMemory(settings.foresight_user_id, settings=settings).record_decision_trace(trace)
+                TemporalGraphMemory(s.foresight_user_id, settings=s).record_decision_trace(trace)
             except Exception:
                 pass
         # Vector memory is written only when an outcome is recorded (see
@@ -626,6 +627,7 @@ def iter_pipeline_events(
     resume_partial: dict[str, Any] | None = None,
     scoring_clarification: dict[str, str] | None = None,
     scoring_clarification_skip: bool = False,
+    pause_for_scoring_clarify: bool = True,
     confirmed_candidates: list[dict[str, str]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield meta, partial trace fragments per stage, then ``complete`` (SSE)."""
@@ -819,10 +821,11 @@ def iter_pipeline_events(
                     scoring_clarification,
                     scoring_clarification_skip,
                 )
+                allow_provisional = scoring_clarification_skip or not pause_for_scoring_clarify
                 if should_pause_pipeline_for_scoring_clarify(
                     feature_audit,
                     clarification_attempted=clarify_attempted,
-                    allow_provisional=scoring_clarification_skip,
+                    allow_provisional=allow_provisional,
                 ):
                     resume_blob = _build_scoring_clarify_resume_partial(
                         decision_id=did,
@@ -853,9 +856,10 @@ def iter_pipeline_events(
             scoring_clarification,
             scoring_clarification_skip,
         )
+        stream_allow_provisional = scoring_clarification_skip or not pause_for_scoring_clarify
         provisional = recommendation_is_provisional(
             feature_audit,
-            allow_provisional=scoring_clarification_skip,
+            allow_provisional=stream_allow_provisional,
             clarification_attempted=clarify_attempted,
         )
 

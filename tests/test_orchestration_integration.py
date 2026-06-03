@@ -290,8 +290,6 @@ def test_routing_llm_full_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         "OptionSet",
         "SimulatedFuture",
         "SimulatedFuture",
-        "OptionEvaluation",
-        "OptionEvaluation",
         "Recommendation",
         "Reflection",
     ]
