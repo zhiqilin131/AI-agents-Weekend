@@ -12,7 +12,6 @@ import {
   Undo2,
 } from 'lucide-react';
 import type { DecisionReport, ResourceDrop } from '../model';
-import { RESOURCE_DROP_CALENDAR_ID } from '../model';
 import {
   Accordion,
   AccordionContent,
@@ -27,13 +26,15 @@ import { cn } from './ui/utils';
 import { apiFetch } from '../../utils/apiFetch';
 import { useSlimeModelCatalog } from '../../features/models/useSlimeModelCatalog';
 import { OptionCoachPanel, type CoachOptionContext } from './report/OptionCoachPanel';
+import { ScoringAuditPanel } from './report/ScoringAuditPanel';
+import { ScoringClarifyPanel } from './report/ScoringClarifyPanel';
+import { parseFeatureAudit } from '../../utils/featureAudit';
 import { fetchCalendarDraftFromReport } from '../../utils/calendarAgentApi';
 import { CALENDAR_AGENT_SESSION_DRAFT_KEY, isReportCalendarApplied } from '../../utils/executionStorageKeys';
 import { useExecutionStorageUserKey } from '../../hooks/useExecutionStorageUserKey';
 import type { TraceUserStateLite } from '../../utils/evidenceDetailFromTrace';
 import { AssumptionsCard } from './report/AssumptionsCard';
 import { FuturePathsCard } from './report/FuturePathsCard';
-import { NextActionCard } from './report/NextActionCard';
 import { PersonalizedFitCard } from './report/PersonalizedFitCard';
 import { RecommendationCard } from './report/RecommendationCard';
 
@@ -122,6 +123,8 @@ interface ReportCompactProps {
   onExecutionCalendarNavigate?: (decisionId: string) => void;
   /** Shadow / multi-tab: thread id for Calendar Agent linkage */
   shadowThreadId?: string | null;
+  /** Called after scoring clarification rescore updates the trace. */
+  onTraceRescored?: (trace: Record<string, unknown>) => void;
 }
 
 export function ReportCompact({
@@ -131,6 +134,7 @@ export function ReportCompact({
   isStreaming,
   onExecutionCalendarNavigate,
   shadowThreadId = null,
+  onTraceRescored,
 }: ReportCompactProps) {
   const navigate = useNavigate();
   const { storageUserKey } = useExecutionStorageUserKey();
@@ -147,6 +151,7 @@ export function ReportCompact({
   const chosenOptionId = report.recommendation.chosenOption?.trim() ?? '';
   const optionTitleById = new Map(report.options.map((o) => [o.id, o.name]));
   const decisionId = typeof fullTrace?.decision_id === 'string' ? fullTrace.decision_id : '';
+  const featureAudit = useMemo(() => parseFeatureAudit(fullTrace), [fullTrace]);
 
   const prefetchExecutionDraft = useCallback(async () => {
     if (!decisionId) return;
@@ -169,13 +174,6 @@ export function ReportCompact({
     () => report.tradeoffs?.rows.find((r) => r.optionId === mcdaOptionId) ?? report.tradeoffs?.rows[0],
     [mcdaOptionId, report.tradeoffs?.rows],
   );
-  const firstAction = report.actions[0]?.text || surface?.primaryNextAction?.text || '';
-  const primaryRisk =
-    report.reflection.uncertaintySources?.[0] ||
-    report.reflection.possibleErrors?.[0] ||
-    report.reflection.informationGaps?.[0] ||
-    surface?.keyAssumptions?.[0] ||
-    '';
 
   useEffect(() => {
     if (!decisionId) {
@@ -202,11 +200,6 @@ export function ReportCompact({
       cancelled = true;
     };
   }, [decisionId, isStreaming, modelOptionId]);
-
-  const suppressNextCalendar = useMemo(
-    () => !resourceDropsLoading && resourceDrops.some((d) => d.id === RESOURCE_DROP_CALENDAR_ID),
-    [resourceDrops, resourceDropsLoading],
-  );
 
   const tradeoffsPanel =
     report.tradeoffs && report.tradeoffs.rows.length > 0 ? (
@@ -373,25 +366,6 @@ export function ReportCompact({
             resourceDrops={resourceDrops}
             resourceDropsLoading={resourceDropsLoading}
           />
-          <DecisionBriefStrip
-            recommendation={
-              report.recommendation.chosenOptionName ||
-              optionTitleById.get(chosenOptionId) ||
-              report.recommendation.chosenOption
-            }
-            groundingNote={surface.groundingNote}
-            firstAction={firstAction}
-            primaryRisk={primaryRisk}
-          />
-          <NextActionCard
-            actions={report.actions.map((a) => ({ text: a.text, deadline: a.deadline }))}
-            fallbackPrimary={surface.primaryNextAction}
-            decisionId={decisionId}
-            onExecutionCalendarNavigate={onExecutionCalendarNavigate}
-            navigate={navigate}
-            suppressCalendarButton={suppressNextCalendar}
-            preNavigate={decisionId ? prefetchExecutionDraft : undefined}
-          />
           <PersonalizedFitCard
             surface={surface}
             memoryTrace={memoryTrace}
@@ -524,6 +498,21 @@ export function ReportCompact({
         </div>
       </div>
 
+      {!isStreaming &&
+      fullTrace?.scoring_recommendation_provisional === true &&
+      featureAudit?.needs_scoring_clarification &&
+      featureAudit.clarify_questions?.length ? (
+        <ScoringClarifyPanel
+          variant="refine"
+          decisionId={decisionId}
+          questions={featureAudit.clarify_questions}
+          coverage={featureAudit.grounded_feature_coverage}
+          onRescored={onTraceRescored}
+        />
+      ) : null}
+
+      {!isStreaming && featureAudit ? <ScoringAuditPanel audit={featureAudit} /> : null}
+
       {tradeoffsPanel}
 
       {tier3Profile?.profile && (
@@ -599,63 +588,6 @@ export function ReportCompact({
         onClose={() => setCoachOption(null)}
       />
     </div>
-  );
-}
-
-function DecisionBriefStrip({
-  recommendation,
-  groundingNote,
-  firstAction,
-  primaryRisk,
-}: {
-  recommendation?: string;
-  groundingNote: string;
-  firstAction: string;
-  primaryRisk: string;
-}) {
-  const cells = [
-    {
-      label: 'Decision',
-      value: recommendation?.trim() || 'Recommendation pending',
-      Icon: Star,
-      tone: 'text-amber-600 bg-amber-50 border-amber-100',
-    },
-    {
-      label: 'Why',
-      value: groundingNote.trim() || 'Uses the strongest available fit signals.',
-      Icon: Brain,
-      tone: 'text-violet-600 bg-violet-50 border-violet-100',
-    },
-    {
-      label: 'First move',
-      value: firstAction.trim() || 'Choose one small next action before adding more detail.',
-      Icon: ListChecks,
-      tone: 'text-emerald-700 bg-emerald-50 border-emerald-100',
-    },
-    {
-      label: 'Watch',
-      value: primaryRisk.trim() || 'Revisit if new information changes the assumptions.',
-      Icon: AlertTriangle,
-      tone: 'text-rose-600 bg-rose-50 border-rose-100',
-    },
-  ];
-
-  return (
-    <section className="rounded-2xl border border-white/90 bg-white/78 p-3 shadow-sm backdrop-blur-md md:p-4">
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {cells.map(({ label, value, Icon, tone }) => (
-          <div key={label} className="flex min-w-0 items-start gap-2 rounded-xl border border-gray-100 bg-white/85 px-3 py-2.5">
-            <span className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border', tone)}>
-              <Icon className="h-4 w-4" aria-hidden />
-            </span>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{label}</p>
-              <p className="mt-0.5 line-clamp-2 text-xs font-semibold leading-snug text-gray-900">{value}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
   );
 }
 

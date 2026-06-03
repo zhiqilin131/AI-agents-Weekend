@@ -72,7 +72,8 @@ def _fallback_future(option: Option, user_state: UserState, evidence: EvidenceBu
                 Scenario(
                     label="base",
                     trajectory=(
-                        f"Mixed outcomes for {option.name}: partial progress, some tradeoffs remain."
+                        f"Mixed outcomes for {option.name}: partial progress, some tradeoffs remain. "
+                        f"Assumption: execution risk under {user_state.reversibility.value} reversibility."
                     ),
                     probability=p_base,
                     key_drivers=["uncertainty", "resource constraints"],

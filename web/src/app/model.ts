@@ -1,4 +1,4 @@
-export type AppState = 'empty' | 'loading' | 'result';
+export type AppState = 'empty' | 'loading' | 'scoring_clarify' | 'result';
 
 export type EvidenceRefType =
   | 'profile'

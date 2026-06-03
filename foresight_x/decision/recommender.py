@@ -39,6 +39,27 @@ DEFAULT_EVALUATION_WEIGHTS: dict[str, float] = {
     "goal_alignment_score": 0.25,
 }
 
+
+def evaluation_weights_for_risk_posture(
+    risk_posture: str | None = None,
+) -> dict[str, float]:
+    """Adjust composite weights from persisted profile risk posture."""
+    w = dict(DEFAULT_EVALUATION_WEIGHTS)
+    rp = (risk_posture or "unknown").strip().lower()
+    if rp == "risk-averse":
+        w["risk_score"] = -0.22
+        w["regret_score"] = -0.20
+        w["uncertainty_score"] = -0.18
+        w["expected_value_score"] = 0.22
+        w["goal_alignment_score"] = 0.23
+    elif rp == "risk-seeking":
+        w["risk_score"] = -0.10
+        w["regret_score"] = -0.10
+        w["uncertainty_score"] = -0.12
+        w["expected_value_score"] = 0.30
+        w["goal_alignment_score"] = 0.18
+    return w
+
 MAX_EXECUTION_READY_ACTIONS = 4
 _COMPOSITE_TIE_EPSILON = 1e-3
 
@@ -211,7 +232,9 @@ def recommend(
     """Argmax composite score, then optional LLM narrative for reasoning and actions."""
     if not options:
         raise ValueError("recommend requires at least one option")
-    w = weights or DEFAULT_EVALUATION_WEIGHTS
+    s = load_settings()
+    profile = load_profile(s.foresight_user_id) or empty_profile(s.foresight_user_id)
+    w = weights or evaluation_weights_for_risk_posture(profile.risk_posture)
     by_eval = {e.option_id: e for e in evaluations}
     composite_by_option_id: dict[str, float] = {}
     for opt in options:
@@ -222,8 +245,6 @@ def recommend(
     chosen = _pick_chosen_option(composite_by_option_id, options, user_state)
 
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or _utc_now_iso()
-    s = load_settings()
-    profile = load_profile(s.foresight_user_id) or empty_profile(s.foresight_user_id)
     user_profile_json = profile.model_dump_json()
 
     if llm is None:

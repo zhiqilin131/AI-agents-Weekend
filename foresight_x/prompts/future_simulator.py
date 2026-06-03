@@ -32,6 +32,7 @@ def future_simulator_prompt(
         + ANALYTICAL_FAITHFULNESS
         + mem_block
         + "Objective: for the given option, describe best / base / worst plausible futures over ONE concrete time horizon.\n"
+        "Role: explanatory and stress-test narratives — NOT inputs for numeric EV/Risk/Regret scoring.\n"
         "Calibration:\n"
         "- Assign probabilities that reflect uncertainty honestly: if evidence is thin, avoid extreme 0.9/0.05/0.05 splits "
         "unless UserState or EvidenceBundle strongly supports them.\n"
@@ -46,7 +47,10 @@ def future_simulator_prompt(
         "similar past decisions (if present), or uncertainty/tradeoffs explicit in the option framing—do not spin "
         "purely generic futures.\n"
         "- time_horizon should be concrete (e.g. '3 months', '6 months').\n"
-        "- key_drivers must be short phrases tied to user goals, constraints, or evidence (not buzzwords).\n\n"
+        "- key_drivers must be short phrases tied to user goals, constraints, or evidence (not buzzwords).\n"
+        "- Do NOT invent numeric scoring facts (EV, risk percentages, dollar amounts unless in EvidenceBundle).\n"
+        "- Treat unknowns as assumptions; surface early warning signals and missing information explicitly.\n"
+        "- Futures are for explanation, stress testing, and reassessment triggers — not direct MCDA scoring.\n\n"
         f"Option: {option.model_dump_json()}\n"
         f"UserState: {user_state.model_dump_json()}\n"
         f"EvidenceBundle: {evidence.model_dump_json()}\n"

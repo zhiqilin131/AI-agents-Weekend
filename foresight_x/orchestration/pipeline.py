@@ -67,6 +67,12 @@ from foresight_x.orchestration.degradation_policy import (
 )
 from foresight_x.simulation.evaluator import evaluate_options
 from foresight_x.simulation.future_simulator import simulate_futures
+from foresight_x.simulation.scoring_clarify_gate import (
+    MAX_GATE_QUESTIONS,
+    recommendation_is_provisional,
+    scoring_clarification_attempted,
+    should_pause_pipeline_for_scoring_clarify,
+)
 
 _PIPELINE_STAGE_ORDER = ["enhance", "perceive", "retrieve", "infer", "simulate", "evaluate", "finalize"]
 _GRAPH_DISPLAY_STOPWORDS = {
@@ -83,6 +89,48 @@ _GRAPH_DISPLAY_STOPWORDS = {
     "your",
     "about",
 }
+
+
+def _resume_decision_id(
+    decision_id: str | None,
+    resume_partial: dict[str, Any] | None,
+) -> str | None:
+    if decision_id and str(decision_id).strip():
+        return str(decision_id).strip()
+    raw = _resume_get_obj(resume_partial, "decision_id")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    return None
+
+
+def _build_scoring_clarify_resume_partial(
+    *,
+    decision_id: str,
+    timestamp: str,
+    original_user_input: str,
+    enhanced_preview: str,
+    user_state: UserState,
+    memory_bundle: MemoryBundle,
+    evidence_bundle: EvidenceBundle,
+    rationality: RationalityReport,
+    options: list[Option],
+    futures: list[SimulatedFuture],
+    feature_audit_blob: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Snapshot for resuming from ``evaluate`` after pre-recommendation scoring clarify."""
+    return {
+        "decision_id": decision_id,
+        "timestamp": timestamp,
+        "original_user_input": original_user_input,
+        "enhanced_preview": enhanced_preview,
+        "user_state": user_state.model_dump(mode="json"),
+        "memory": memory_bundle.model_dump(mode="json"),
+        "evidence": evidence_bundle.model_dump(mode="json"),
+        "rationality": rationality.model_dump(mode="json"),
+        "options": [o.model_dump(mode="json") for o in options],
+        "futures": [f.model_dump(mode="json") for f in futures],
+        "feature_audit": feature_audit_blob,
+    }
 
 
 def _stage_index(stage: str | None) -> int:
@@ -461,7 +509,7 @@ def step_infer(
 ) -> tuple[RationalityReport, list[Option]]:
     rationality = detect_irrationality(user_state, memory_bundle, llm)
     options = generate_options(user_state, memory_bundle, evidence_bundle, llm)
-    return rationality, options
+    return rationality, ensure_option_tags(options)
 
 
 def finalize_trace(
@@ -484,8 +532,17 @@ def finalize_trace(
     resilience_events: list[dict[str, Any]] | None = None,
     runtime_context: RuntimeContext | None = None,
     degradations: list[Degradation] | None = None,
+    feature_audit: dict[str, Any] | None = None,
+    scoring_clarification: dict[str, str] | None = None,
+    scoring_recommendation_provisional: bool = False,
 ) -> DecisionTrace:
+    from foresight_x.config import load_settings
+    from foresight_x.decision.weight_audit import build_weight_audit, composite_map
+    from foresight_x.memory.profile_store import empty_profile, load_profile
+
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
+    settings = load_settings()
+    profile = load_profile(settings.foresight_user_id) or empty_profile(settings.foresight_user_id)
     recommendation, _rec_provider, _rec_deg = safe_recommend(
         evaluations,
         options,
@@ -494,6 +551,14 @@ def finalize_trace(
         user_state=user_state,
         llm=llm,
         anchor_now_iso=anchor,
+    )
+    composite_by_id, applied_w = composite_map(evaluations, profile.risk_posture)
+    weight_audit = build_weight_audit(
+        evaluations,
+        composite_by_option_id=composite_by_id,
+        winner_id=recommendation.chosen_option_id,
+        risk_posture=profile.risk_posture,
+        applied_weights=applied_w,
     )
     placeholder = Reflection(
         possible_errors=["pending"],
@@ -525,6 +590,10 @@ def finalize_trace(
             ),
             "events": list(resilience_events or []),
         },
+        feature_audit=feature_audit,
+        scoring_clarification=scoring_clarification,
+        scoring_recommendation_provisional=scoring_recommendation_provisional,
+        weight_audit=weight_audit,
     )
     reflection, _ref_provider, _ref_deg = safe_reflect(trace, llm)
     trace = trace.model_copy(update={"reflection": reflection})
@@ -555,6 +624,9 @@ def iter_pipeline_events(
     clarification_profile_merge_done_externally: bool = False,
     resume_from_stage: str | None = None,
     resume_partial: dict[str, Any] | None = None,
+    scoring_clarification: dict[str, str] | None = None,
+    scoring_clarification_skip: bool = False,
+    confirmed_candidates: list[dict[str, str]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield meta, partial trace fragments per stage, then ``complete`` (SSE)."""
     settings = ctx.settings or load_settings()
@@ -572,8 +644,8 @@ def iter_pipeline_events(
                 retryable=True,
                 error_kind=mode,
             )
-    did = decision_id or str(uuid.uuid4())
-    ts = timestamp or utc_timestamp()
+    did = _resume_decision_id(decision_id, resume_partial) or str(uuid.uuid4())
+    ts = timestamp or str(_resume_get_obj(resume_partial, "timestamp") or "") or utc_timestamp()
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
     resume_idx = _stage_index(resume_from_stage)
     resumed = resume_idx > 0
@@ -702,10 +774,25 @@ def iter_pipeline_events(
             }
 
         evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
+        feature_audit_blob: dict[str, Any] | None = None
+        feature_audit = None
+        if resume_partial and isinstance(resume_partial.get("feature_audit"), dict):
+            feature_audit_blob = resume_partial["feature_audit"]
         if resume_idx <= 5 or evaluations is None:
             yield {"event": "stage", "stage": "evaluate"}
             t_stage = time.perf_counter()
-            evaluations, eval_provider, deg_eval = safe_evaluate_options(futures, user_state, ctx.llm)
+            evaluations, eval_provider, deg_eval, feature_audit, options = safe_evaluate_options(
+                futures,
+                user_state,
+                ctx.llm,
+                options=options,
+                evidence=evidence_bundle,
+                memory=memory_bundle,
+                scoring_clarification=scoring_clarification,
+                confirmed_candidates=confirmed_candidates,
+            )
+            if feature_audit is not None:
+                feature_audit_blob = feature_audit.model_dump(mode="json")
             per_stage_latency_ms["evaluate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
             provider_per_stage["evaluate"] = eval_provider
             if deg_eval:
@@ -713,8 +800,64 @@ def iter_pipeline_events(
             yield {
                 "event": "partial",
                 "stage": "evaluate",
-                "data": {"evaluations": [e.model_dump(mode="json") for e in evaluations]},
+                "data": {
+                    "evaluations": [e.model_dump(mode="json") for e in evaluations],
+                    "feature_audit": feature_audit_blob,
+                },
             }
+            if feature_audit and feature_audit.needs_scoring_clarification:
+                gate_questions = feature_audit.clarify_questions[:MAX_GATE_QUESTIONS]
+                clarify_payload = {
+                    "needs_scoring_clarification": True,
+                    "grounded_feature_coverage": feature_audit.grounded_feature_coverage,
+                    "clarify_questions": [q.model_dump(mode="json") for q in gate_questions],
+                    "missing_fields": feature_audit.missing_fields,
+                }
+                yield {"event": "scoring_clarify", "data": clarify_payload}
+                clarify_attempted = scoring_clarification_attempted(
+                    resume_from_stage,
+                    scoring_clarification,
+                    scoring_clarification_skip,
+                )
+                if should_pause_pipeline_for_scoring_clarify(
+                    feature_audit,
+                    clarification_attempted=clarify_attempted,
+                    allow_provisional=scoring_clarification_skip,
+                ):
+                    resume_blob = _build_scoring_clarify_resume_partial(
+                        decision_id=did,
+                        timestamp=ts,
+                        original_user_input=original,
+                        enhanced_preview=enhanced,
+                        user_state=user_state,
+                        memory_bundle=memory_bundle,
+                        evidence_bundle=evidence_bundle,
+                        rationality=rationality,
+                        options=options,
+                        futures=futures,
+                        feature_audit_blob=feature_audit_blob,
+                    )
+                    yield {
+                        "event": "awaiting_scoring_clarify",
+                        "data": {
+                            **clarify_payload,
+                            "decision_id": did,
+                            "resume_from_stage": "evaluate",
+                            "resume_partial": resume_blob,
+                        },
+                    }
+                    return
+
+        clarify_attempted = scoring_clarification_attempted(
+            resume_from_stage,
+            scoring_clarification,
+            scoring_clarification_skip,
+        )
+        provisional = recommendation_is_provisional(
+            feature_audit,
+            allow_provisional=scoring_clarification_skip,
+            clarification_attempted=clarify_attempted,
+        )
 
         yield {"event": "stage", "stage": "finalize"}
         runtime_context = RuntimeContext(
@@ -748,6 +891,9 @@ def iter_pipeline_events(
             resilience_events=run_events_buf,
             runtime_context=runtime_context,
             degradations=degradations,
+            feature_audit=feature_audit_blob,
+            scoring_clarification=scoring_clarification,
+            scoring_recommendation_provisional=provisional,
         )
         per_stage_latency_ms["finalize"] = int(round((time.perf_counter() - t_finalize) * 1000.0))
         provider_per_stage["finalize"] = _provider_label_from_llm(ctx.llm) or "unknown"
@@ -801,6 +947,9 @@ def run_pipeline(
     clarification_profile_merge_done_externally: bool = False,
     resume_from_stage: str | None = None,
     resume_partial: dict[str, Any] | None = None,
+    scoring_clarification: dict[str, str] | None = None,
+    scoring_clarification_skip: bool = False,
+    confirmed_candidates: list[dict[str, str]] | None = None,
 ) -> DecisionTrace:
     """Execute the full RIS stack and return a ``DecisionTrace``; optionally save JSON under ``data/traces/``."""
     settings = ctx.settings or load_settings()
@@ -818,8 +967,8 @@ def run_pipeline(
                 retryable=True,
                 error_kind=mode,
             )
-    did = decision_id or str(uuid.uuid4())
-    ts = utc_timestamp()
+    did = _resume_decision_id(decision_id, resume_partial) or str(uuid.uuid4())
+    ts = str(_resume_get_obj(resume_partial, "timestamp") or "") or utc_timestamp()
     anchor = (anchor_now_iso.strip() if anchor_now_iso else None) or utc_timestamp()
     pipeline_started_at = utc_timestamp()
     t0_total = time.perf_counter()
@@ -888,11 +1037,37 @@ def run_pipeline(
             provider_per_stage["simulate"] = simulate_provider
 
         evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
+        feature_audit_blob: dict[str, Any] | None = None
+        feature_audit = None
+        if resume_partial and isinstance(resume_partial.get("feature_audit"), dict):
+            feature_audit_blob = resume_partial["feature_audit"]
         if resume_idx <= 5 or evaluations is None:
             t_stage = time.perf_counter()
-            evaluations, eval_provider, _ = safe_evaluate_options(futures, user_state, ctx.llm)
+            evaluations, eval_provider, _, feature_audit, options = safe_evaluate_options(
+                futures,
+                user_state,
+                ctx.llm,
+                options=options,
+                evidence=evidence_bundle,
+                memory=memory_bundle,
+                scoring_clarification=scoring_clarification,
+                confirmed_candidates=confirmed_candidates,
+            )
+            if feature_audit is not None:
+                feature_audit_blob = feature_audit.model_dump(mode="json")
             per_stage_latency_ms["evaluate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
             provider_per_stage["evaluate"] = eval_provider
+
+        clarify_attempted = scoring_clarification_attempted(
+            resume_from_stage,
+            scoring_clarification,
+            scoring_clarification_skip,
+        )
+        provisional = recommendation_is_provisional(
+            feature_audit,
+            allow_provisional=scoring_clarification_skip,
+            clarification_attempted=clarify_attempted,
+        )
 
         runtime_context = RuntimeContext(
             pipeline_started_at=pipeline_started_at,
@@ -925,6 +1100,9 @@ def run_pipeline(
             resilience_events=run_events_buf,
             runtime_context=runtime_context,
             degradations=degradations,
+            feature_audit=feature_audit_blob,
+            scoring_clarification=scoring_clarification,
+            scoring_recommendation_provisional=provisional,
         )
         per_stage_latency_ms["finalize"] = int(round((time.perf_counter() - t_finalize) * 1000.0))
         provider_per_stage["finalize"] = _provider_label_from_llm(ctx.llm) or "unknown"

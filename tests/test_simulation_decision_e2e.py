@@ -16,7 +16,7 @@ from foresight_x.schemas import (
     TimePressure,
     UserState,
 )
-from foresight_x.simulation.evaluator import evaluate_options
+from foresight_x.simulation.evaluator import evaluate_options_from_features
 from foresight_x.simulation.future_simulator import simulate_futures
 
 
@@ -66,7 +66,7 @@ def test_pipeline_yields_valid_decision_trace() -> None:
     ]
 
     futures = simulate_futures(options, state, evidence, llm=None)
-    evaluations = evaluate_options(futures, state, llm=None)
+    evaluations = evaluate_options_from_features(options, state, evidence, memory, futures=futures)
     recommendation = recommend(evaluations, options, evidence, memory, user_state=state, llm=None)
 
     placeholder = Reflection(

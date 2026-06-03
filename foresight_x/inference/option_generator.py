@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from foresight_x.structured_predict import structured_predict
 from foresight_x.prompts.option_generator import option_generator_prompt
 from foresight_x.schemas import EvidenceBundle, MemoryBundle, Option, UserState
+from foresight_x.simulation.feature_merge import ensure_option_tags
 
 
 class StructuredPredictLLM(Protocol):
@@ -309,4 +310,5 @@ def generate_options(
         non_generic = [o for o in options if not _looks_generic(o, user_state)]
         if non_generic:
             options = non_generic
-    return options[:max_options]
+        return ensure_option_tags(options[:max_options])
+    return ensure_option_tags(options[:max_options])

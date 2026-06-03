@@ -174,7 +174,14 @@ class ForesightWorkflow(Workflow):
 
     @step
     async def evaluate(self, ev: SimulatedEvent) -> EvaluatedEvent:
-        evaluations = evaluate_options(ev.futures, ev.user_state, self.pipe_ctx.llm)
+        evaluations = evaluate_options(
+            ev.futures,
+            ev.user_state,
+            None,
+            options=ev.options,
+            evidence=ev.evidence,
+            memory=ev.memory,
+        )
         return EvaluatedEvent(
             user_state=ev.user_state,
             decision_id=ev.decision_id,

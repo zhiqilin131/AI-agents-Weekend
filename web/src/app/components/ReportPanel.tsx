@@ -37,6 +37,7 @@ interface ReportPanelProps {
   runStageLabel?: string;
   /** True while SSE is still streaming after first partial payload. */
   isStreaming?: boolean;
+  onTraceRescored?: (trace: Record<string, unknown>) => void;
 }
 
 export function ReportPanel({
@@ -56,6 +57,7 @@ export function ReportPanel({
   runProgress = 0,
   runStageLabel = 'Working…',
   isStreaming = false,
+  onTraceRescored,
 }: ReportPanelProps) {
   if (state === 'empty') {
     return (
@@ -81,11 +83,32 @@ export function ReportPanel({
     return <LoadingState progress={runProgress} stageLabel={runStageLabel} />;
   }
 
+  if (state === 'scoring_clarify') {
+    return (
+      <div className="rounded-2xl border border-slate-200/70 bg-white/85 px-5 py-6 shadow-sm">
+        <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Pre-recommendation gate</p>
+        <h3 className="mt-2 text-lg tracking-tight text-slate-800" style={{ fontWeight: 600 }}>
+          Options modeled — ranking paused
+        </h3>
+        <p className="mt-2 max-w-xl text-sm leading-relaxed text-slate-600">
+          Tradeoff features are not yet grounded enough for a final MAVT recommendation. Answer the
+          targeted questions on the left, or continue with an explicitly provisional ranking.
+        </p>
+      </div>
+    );
+  }
+
   if (state === 'loading' && report) {
     return (
       <div className="space-y-4">
         <LoadingState compact progress={runProgress} stageLabel={runStageLabel} />
-        <ReportCompact report={report} fullTrace={fullTrace} tier3Profile={tier3Profile} isStreaming />
+        <ReportCompact
+          report={report}
+          fullTrace={fullTrace}
+          tier3Profile={tier3Profile}
+          isStreaming
+          onTraceRescored={onTraceRescored}
+        />
       </div>
     );
   }
@@ -102,6 +125,7 @@ export function ReportPanel({
           fullTrace={fullTrace}
           tier3Profile={tier3Profile}
           isStreaming={false}
+          onTraceRescored={onTraceRescored}
         />
 
         {decisionId && onCommitAdopt && (

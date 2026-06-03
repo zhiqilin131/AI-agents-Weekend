@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import type { ClarifyQuestion } from '../app/components/ClarifyDialog';
+import { ScoringClarifyPanel } from '../app/components/report/ScoringClarifyPanel';
+import type { ScoringClarifyQuestion } from '../utils/featureAudit';
 import { ThreadActionDock } from '../app/components/shadow/ThreadActionDock';
 import { buildClarificationPendingAction, type PendingAction } from '../app/components/shadow/pendingActionTypes';
 import { InputPanel } from '../app/components/InputPanel';
@@ -51,6 +53,16 @@ type StreamOpts = {
   preserve_raw_input?: boolean;
   resume_from_stage?: string;
   resume_partial?: Record<string, unknown>;
+  decision_id?: string;
+  scoring_clarification?: Record<string, string>;
+  scoring_clarification_skip?: boolean;
+};
+
+type ScoringClarifyPending = {
+  decisionId: string;
+  questions: ScoringClarifyQuestion[];
+  coverage?: number;
+  resumePartial: Record<string, unknown>;
 };
 
 type DegradeNotice = {
@@ -106,6 +118,7 @@ export default function HomePage() {
   const [tier3Profile, setTier3Profile] = useState<Tier3ProfileView | null>(null);
   const [clarifyChecking, setClarifyChecking] = useState(false);
   const [homePendingAction, setHomePendingAction] = useState<PendingAction | null>(null);
+  const [scoringClarifyPending, setScoringClarifyPending] = useState<ScoringClarifyPending | null>(null);
   const clarifyOpen = homePendingAction?.type === 'clarification';
   /** Shown only when clarify fails or LLM is missing — not when the model simply says no extra questions. */
   const [clarifyGateHint, setClarifyGateHint] = useState<string | null>(null);
@@ -176,12 +189,19 @@ export default function HomePage() {
   }, [routeTraceId, fullTrace]);
 
   const displayReport = useMemo((): DecisionReport | null => {
+    if (state === 'scoring_clarify') return null;
     if (state === 'result' && fullTrace) return mapTraceToReport(fullTrace);
     if (liveTrace) return mapTraceToReport(liveTrace);
     return null;
   }, [state, fullTrace, liveTrace]);
 
-  const traceForPanel = state === 'result' ? fullTrace : liveTrace;
+  const traceForPanel = state === 'result' ? fullTrace : state === 'scoring_clarify' ? liveTrace : liveTrace;
+
+  const handleTraceRescored = useCallback((trace: Record<string, unknown>) => {
+    setFullTrace(trace);
+    setLiveTrace(null);
+    setState('result');
+  }, []);
 
   const loadTier3Profile = useCallback(async () => {
     try {
@@ -297,8 +317,10 @@ export default function HomePage() {
       setLoadingStage('enhance');
       setRunProgress(4);
       setRunStageLabel('Connecting to pipeline…');
-      setLiveTrace(null);
-      setFullTrace(null);
+      if (!opts?.resume_from_stage) {
+        setLiveTrace(null);
+        setFullTrace(null);
+      }
       setLastFailedStage(null);
       setDegradeNotices([]);
       if (!opts?.resume_from_stage) retrySnapshotRef.current = null;
@@ -307,6 +329,10 @@ export default function HomePage() {
       const RUN_TIMEOUT_MS = 300_000;
       const timeoutId = window.setTimeout(() => controller.abort(), RUN_TIMEOUT_MS);
       let streamTrace: Record<string, unknown> | null = opts?.resume_partial ?? null;
+      if (streamTrace) {
+        setLiveTrace(streamTrace);
+        retrySnapshotRef.current = streamTrace;
+      }
 
       try {
         const body: Record<string, unknown> = {
@@ -325,6 +351,15 @@ export default function HomePage() {
           if (opts.resume_partial && typeof opts.resume_partial === 'object') {
             body.resume_partial = opts.resume_partial;
           }
+        }
+        if (opts?.decision_id) {
+          body.decision_id = opts.decision_id;
+        }
+        if (opts?.scoring_clarification && Object.keys(opts.scoring_clarification).length > 0) {
+          body.scoring_clarification = opts.scoring_clarification;
+        }
+        if (opts?.scoring_clarification_skip) {
+          body.scoring_clarification_skip = true;
         }
         if (runModelOptionId) {
           body.model_option_id = runModelOptionId;
@@ -381,6 +416,7 @@ export default function HomePage() {
         let gotNotes: string[] = [];
         let trace: Record<string, unknown> | null = null;
         let path: string | null = null;
+        let pausedForScoringClarify = false;
 
         const consume = (data: Record<string, unknown>) => {
           if (data.event === 'error') {
@@ -403,6 +439,53 @@ export default function HomePage() {
           }
           if (data.event === 'partial' && data.data && typeof data.data === 'object') {
             streamTrace = mergeStreamingPartial(streamTrace, data.data as Record<string, unknown>);
+            retrySnapshotRef.current = streamTrace;
+            setLiveTrace(streamTrace);
+          }
+          if (data.event === 'awaiting_scoring_clarify' && data.data && typeof data.data === 'object') {
+            pausedForScoringClarify = true;
+            const gate = data.data as Record<string, unknown>;
+            const resumePartial =
+              gate.resume_partial && typeof gate.resume_partial === 'object'
+                ? (gate.resume_partial as Record<string, unknown>)
+                : retrySnapshotRef.current;
+            const questions = Array.isArray(gate.clarify_questions)
+              ? (gate.clarify_questions as ScoringClarifyQuestion[])
+              : [];
+            const decisionId =
+              typeof gate.decision_id === 'string'
+                ? gate.decision_id
+                : typeof streamTrace?.decision_id === 'string'
+                  ? streamTrace.decision_id
+                  : '';
+            if (resumePartial && decisionId && questions.length) {
+              setScoringClarifyPending({
+                decisionId,
+                questions,
+                coverage:
+                  typeof gate.grounded_feature_coverage === 'number'
+                    ? gate.grounded_feature_coverage
+                    : undefined,
+                resumePartial,
+              });
+              streamTrace = mergeStreamingPartial(streamTrace, resumePartial);
+              retrySnapshotRef.current = streamTrace;
+              setLiveTrace(streamTrace);
+              setRunStageLabel('Grounding tradeoff features…');
+              setRunProgress(stageToProgress('evaluate'));
+              setState('scoring_clarify');
+            }
+          }
+          if (data.event === 'scoring_clarify' && data.data && typeof data.data === 'object') {
+            const clarify = data.data as Record<string, unknown>;
+            streamTrace = {
+              ...(streamTrace ?? {}),
+              feature_audit: {
+                ...((streamTrace?.feature_audit as Record<string, unknown> | undefined) ?? {}),
+                ...clarify,
+                needs_scoring_clarification: true,
+              },
+            };
             retrySnapshotRef.current = streamTrace;
             setLiveTrace(streamTrace);
           }
@@ -448,11 +531,16 @@ export default function HomePage() {
         if (buf.trim()) {
           parseSseBlocks(`${buf}\n\n`, consume);
         }
+        if (pausedForScoringClarify && !trace) {
+          setLoadingStage(null);
+          return;
+        }
         if (!trace) throw new Error('Incomplete response (no trace)');
 
         void refreshCredits();
         setLiveTrace(null);
         setFullTrace(trace);
+        setScoringClarifyPending(null);
         setNotes(gotNotes);
         setTracePath(path);
         setClarifyGateHint(null);
@@ -484,8 +572,35 @@ export default function HomePage() {
     [decisionInput, loadTier3Profile, navigate, refreshCredits, runModelOptionId, showInsufficient, slimeModels],
   );
 
+  const handleScoringClarifyApply = useCallback(
+    (answers: Record<string, string>) => {
+      if (!scoringClarifyPending) return;
+      const pending = scoringClarifyPending;
+      setScoringClarifyPending(null);
+      void runPipelineStream({
+        resume_from_stage: 'evaluate',
+        resume_partial: pending.resumePartial,
+        decision_id: pending.decisionId,
+        scoring_clarification: answers,
+      });
+    },
+    [scoringClarifyPending, runPipelineStream],
+  );
+
+  const handleScoringClarifySkip = useCallback(() => {
+    if (!scoringClarifyPending) return;
+    const pending = scoringClarifyPending;
+    setScoringClarifyPending(null);
+    void runPipelineStream({
+      resume_from_stage: 'evaluate',
+      resume_partial: pending.resumePartial,
+      decision_id: pending.decisionId,
+      scoring_clarification_skip: true,
+    });
+  }, [scoringClarifyPending, runPipelineStream]);
+
   const handleRunDecision = async () => {
-    if (state === 'loading' || clarifyChecking || clarifyOpen) return;
+    if (state === 'loading' || state === 'scoring_clarify' || clarifyChecking || clarifyOpen) return;
     setError(null);
     setClarifyGateHint(null);
     setClarifyChecking(true);
@@ -583,6 +698,7 @@ export default function HomePage() {
     setError(null);
     setClarifyGateHint(null);
     setHomePendingAction(null);
+    setScoringClarifyPending(null);
     setLoadingStage(null);
     setCommitInfo(null);
     setCommitError(null);
@@ -733,9 +849,21 @@ export default function HomePage() {
               variant="compact"
               label="Model for this run"
               hint="Defaults to the lowest-cost tier; upgrade for heavier reasoning."
-              disabled={state === 'loading'}
+              disabled={state === 'loading' || state === 'scoring_clarify'}
             />
           </div>
+          {scoringClarifyPending ? (
+            <div className="mb-3">
+              <ScoringClarifyPanel
+                variant="gate"
+                questions={scoringClarifyPending.questions}
+                coverage={scoringClarifyPending.coverage}
+                busy={state === 'loading'}
+                onApply={handleScoringClarifyApply}
+                onSkip={handleScoringClarifySkip}
+              />
+            </div>
+          ) : null}
           {homePendingAction ? (
             <ThreadActionDock
               pendingAction={homePendingAction}
@@ -762,7 +890,7 @@ export default function HomePage() {
             onReset={handleReset}
             state={state}
             isClarifyChecking={clarifyChecking}
-            clarifyOpen={clarifyOpen}
+            clarifyOpen={clarifyOpen || state === 'scoring_clarify'}
             loadingStage={loadingStage}
             stageLabel={STAGE_LABEL}
             onVoiceTranscript={(t) =>
@@ -791,6 +919,7 @@ export default function HomePage() {
             commitError={commitError}
             runProgress={runProgress}
             runStageLabel={runStageLabel}
+            onTraceRescored={handleTraceRescored}
           />
         </section>
       </div>

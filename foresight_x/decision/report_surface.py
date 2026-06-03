@@ -256,7 +256,66 @@ def _grounding_signals(
             strength="thin" if gaps else strength,
         )
     )
-    return signals[:4]
+
+    fa = trace.feature_audit if isinstance(trace.feature_audit, dict) else None
+    if fa and isinstance(fa.get("grounded_feature_coverage"), (int, float)):
+        cov = float(fa["grounded_feature_coverage"])
+        if cov < 0.55:
+            missing = fa.get("missing_fields") or []
+            hint = (
+                _truncate(str(missing[0]), 120)
+                if missing
+                else "Several tradeoff features are still unknown for one or more options."
+            )
+            signals.append(
+                GroundingSignal(
+                    type="scoring_coverage",
+                    label="Scoring coverage",
+                    text=f"Only {int(cov * 100)}% of tradeoff features are grounded. {hint}",
+                    strength="thin",
+                )
+            )
+        elif cov >= 0.75:
+            signals.append(
+                GroundingSignal(
+                    type="scoring_coverage",
+                    label="Scoring coverage",
+                    text=f"{int(cov * 100)}% of tradeoff features are grounded from tags, profile, or evidence.",
+                    strength="mixed" if cov < 0.9 else "strong",
+                )
+            )
+
+    if getattr(trace, "scoring_recommendation_provisional", False):
+        signals.append(
+            GroundingSignal(
+                type="scoring_coverage",
+                label="Provisional ranking",
+                text=(
+                    "Recommendation was issued before tradeoff features were fully grounded. "
+                    "Answer scoring clarify questions or rescore to tighten the ranking."
+                ),
+                strength="thin",
+            )
+        )
+
+    wa = trace.weight_audit if isinstance(trace.weight_audit, dict) else None
+    if wa and wa.get("fragile_criteria"):
+        fragile = wa.get("fragile_criteria") or []
+        margin = wa.get("winner_margin")
+        margin_txt = f" (margin {margin:.2f})" if isinstance(margin, (int, float)) else ""
+        signals.append(
+            GroundingSignal(
+                type="uncertainty",
+                label="Ranking sensitivity",
+                text=(
+                    f"Winner ranking is sensitive to weighting on: {', '.join(str(x) for x in fragile[:3])}"
+                    f"{margin_txt}. Treat as provisional."
+                ),
+                strength="thin",
+            )
+        )
+
+    return signals[:6]
 
 
 def _scenario_map(sf: SimulatedFuture) -> dict[str, Scenario]:

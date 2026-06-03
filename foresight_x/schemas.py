@@ -758,12 +758,27 @@ class RationalityReport(BaseModel):
     recommended_slowdowns: list[str]
 
 
+class OptionTradeoffTags(BaseModel):
+    """Structured tradeoff hints for auditable feature extraction (not MCDA scores)."""
+
+    time_cost_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    money_cost_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    stress_load_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    workload_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    upside_potential_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    downside_severity_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    goal_alignment_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    tag_confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+    tag_source: Literal["template", "llm_tagging", "user", "rule"] = "template"
+
+
 class Option(BaseModel):
     option_id: str
     name: str
     description: str
     key_assumptions: list[str]
     cost_of_reversal: Literal["low", "medium", "high"]
+    tradeoff_tags: OptionTradeoffTags | None = None
 
 
 class Scenario(BaseModel):
@@ -833,7 +848,7 @@ EvidenceRefType = Literal[
     "assumption",
 ]
 GroundingStrength = Literal["strong", "mixed", "thin"]
-GroundingSignalType = Literal["user_context", "personal_memory", "external_evidence", "uncertainty"]
+GroundingSignalType = Literal["user_context", "personal_memory", "external_evidence", "uncertainty", "scoring_coverage"]
 
 
 class EvidenceReference(BaseModel):
@@ -972,6 +987,25 @@ class DecisionTrace(BaseModel):
     resilience: ResilienceTraceInfo | None = Field(
         default=None,
         description="Runtime resilience context for this decision run.",
+    )
+    feature_audit: dict[str, Any] | None = Field(
+        default=None,
+        description="Auditable feature vectors, reliability gate, and scoring clarify questions (JSON blob).",
+    )
+    scoring_clarification: dict[str, str] | None = Field(
+        default=None,
+        description="User answers to targeted scoring clarify questions (question_id → answer).",
+    )
+    scoring_recommendation_provisional: bool = Field(
+        default=False,
+        description=(
+            "True when the recommendation was finalized with insufficient grounded "
+            "tradeoff coverage (user skipped pre-score clarify or sync fallback)."
+        ),
+    )
+    weight_audit: dict[str, Any] | None = Field(
+        default=None,
+        description="Composite weight audit, sensitivity, and ranking fragility.",
     )
 
 

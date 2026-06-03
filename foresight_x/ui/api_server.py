@@ -43,6 +43,7 @@ from foresight_x.harness.trace_index import delete_trace, list_traces
 from foresight_x.orchestration.degradation_policy import should_surface_degradation_to_user
 from foresight_x.orchestration.llm_factory import build_openai_llm
 from foresight_x.orchestration.pipeline import PipelineContext, iter_pipeline_events, run_pipeline
+from foresight_x.orchestration.rescore import rescore_trace
 from foresight_x.perception.clarify_gate import merge_clarification_answers, run_clarify_gate
 from foresight_x.perception.clarification_gate import (
     default_clarification_state,
@@ -759,6 +760,21 @@ class RunRequest(BaseModel):
     resume_from_stage: str | None = Field(default=None, max_length=32)
     #: Partial trace/state snapshot from client for true stage resume.
     resume_partial: dict[str, Any] | None = Field(default=None)
+    #: Targeted scoring clarify answers (question_id → low|medium|high|not sure).
+    scoring_clarification: dict[str, str] | None = Field(default=None)
+    #: When true, finalize with provisional ranking despite low grounded coverage.
+    scoring_clarification_skip: bool = Field(default=False)
+    #: Resume an in-flight decision (must match ``resume_partial.decision_id``).
+    decision_id: str | None = Field(default=None, max_length=64)
+    #: Confirmed feature candidates from futures narratives.
+    confirmed_candidates: list[dict[str, str]] | None = Field(default=None)
+
+
+class RescoreRequest(BaseModel):
+    decision_id: str = Field(min_length=1)
+    scoring_clarification: dict[str, str] = Field(default_factory=dict)
+    confirmed_candidates: list[dict[str, str]] | None = Field(default=None)
+    client_now_iso: str | None = Field(default=None)
 
 
 class ExternalEventRequest(BaseModel):
@@ -1300,6 +1316,10 @@ def run_decision(body: RunRequest, request: Request):
             clarification_profile_merge_done_externally=merge_done,
             resume_from_stage=body.resume_from_stage,
             resume_partial=body.resume_partial,
+            decision_id=body.decision_id,
+            scoring_clarification=body.scoring_clarification,
+            scoring_clarification_skip=body.scoring_clarification_skip,
+            confirmed_candidates=body.confirmed_candidates,
         )
         _try_create_decision_followup(settings, trace, None)
         trace_path = settings.traces_dir / f"{trace.decision_id}.json"
@@ -1360,6 +1380,10 @@ def run_decision_stream(body: RunRequest, request: Request):
                 clarification_profile_merge_done_externally=merge_done,
                 resume_from_stage=body.resume_from_stage,
                 resume_partial=body.resume_partial,
+                decision_id=body.decision_id,
+                scoring_clarification=body.scoring_clarification,
+                scoring_clarification_skip=body.scoring_clarification_skip,
+                confirmed_candidates=body.confirmed_candidates,
             ):
                 run_degrade = current_run_events()
                 if sent_degrade < len(run_degrade):
@@ -1384,6 +1408,32 @@ def run_decision_stream(body: RunRequest, request: Request):
             yield _sse_chunk({"event": "error", "detail": f"{type(e).__name__}: {e!s}"})
 
     return _sse_streaming_response(gen())
+
+
+@app.post("/api/run/rescore", response_model=None)
+def rescore_decision(body: RescoreRequest, request: Request):
+    """Re-score a saved trace after targeted scoring clarification answers."""
+    settings = _settings_for_active_user()
+    trace = load_decision_trace(body.decision_id.strip(), settings=settings)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace_not_found")
+    prof = load_user_profile(settings)
+    pm = _resolved_chat_model(settings, "decision_report", None, profile=prof)
+    ctx, _ = _build_context(settings, llm_model=pm)
+    updated = rescore_trace(
+        trace,
+        scoring_clarification=body.scoring_clarification,
+        confirmed_candidates=body.confirmed_candidates,
+        llm=ctx.llm,
+        persist_trace=True,
+        settings=settings,
+        anchor_now_iso=_client_anchor_iso(body.client_now_iso),
+    )
+    trace_path = settings.traces_dir / f"{updated.decision_id}.json"
+    return {
+        "trace": updated.model_dump(mode="json"),
+        "trace_path": str(trace_path),
+    }
 
 
 @app.post("/run", response_model=None)

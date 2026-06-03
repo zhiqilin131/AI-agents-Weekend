@@ -25,6 +25,8 @@ from foresight_x.schemas import (
     UserState,
 )
 from foresight_x.simulation.evaluator import evaluate_options
+from foresight_x.simulation.feature_audit import evaluate_with_audit
+from foresight_x.simulation.feature_schemas import FeatureAuditBundle
 from foresight_x.simulation.future_simulator import simulate_futures
 from foresight_x.structured_predict import structured_predict
 
@@ -283,33 +285,48 @@ def safe_evaluate_options(
     futures: list[SimulatedFuture],
     user_state: UserState,
     llm: Any | None,
-) -> tuple[list[OptionEvaluation], str, StageDegradation | None]:
-    offline = llm_unavailable(llm, probe=False)
-    if offline:
-        if strict_llm_required():
-            raise RuntimeError(
-                "evaluate stage requires LLM (FX_STRICT_LLM=1). Check OPENAI_API_KEY in .env."
-            )
-        ev = _record_stage_fallback(
-            "evaluate",
-            reason="LLM unavailable; heuristic scoring from scenario weights",
-            fallback_path="heuristic_mcda_scores",
-            provider="none",
+    *,
+    options: list[Option] | None = None,
+    evidence: EvidenceBundle | None = None,
+    memory: MemoryBundle | None = None,
+    scoring_clarification: dict[str, str] | None = None,
+    confirmed_candidates: list[dict[str, str]] | None = None,
+) -> tuple[list[OptionEvaluation], str, StageDegradation | None, FeatureAuditBundle | None, list[Option] | None]:
+    """Feature-based deterministic evaluation; LLM is never used for numeric scores."""
+    del llm
+    if strict_llm_required() and not options:
+        raise RuntimeError(
+            "evaluate stage requires options for feature-based scoring (FX_STRICT_LLM=1)."
         )
-        evaluations = evaluate_options(futures, user_state, None)
-        return evaluations, "deterministic", ev
     try:
-        evaluations = evaluate_options(futures, user_state, llm)
-        return evaluations, _provider_label(llm, offline=False), None
+        if options and evidence is not None:
+            from foresight_x.config import load_settings
+            from foresight_x.memory.profile_store import empty_profile, load_profile
+
+            settings = load_settings()
+            profile = load_profile(settings.foresight_user_id) or empty_profile(settings.foresight_user_id)
+            evaluations, audit, opts = evaluate_with_audit(
+                options,
+                user_state,
+                evidence,
+                memory,
+                futures,
+                scoring_clarification,
+                confirmed_candidates,
+                risk_posture=profile.risk_posture,
+            )
+            return evaluations, "deterministic", None, audit, opts
+        evaluations = evaluate_options(futures, user_state, None)
+        return evaluations, "deterministic", None, None, options
     except Exception as exc:
         ev = _record_stage_fallback(
             "evaluate",
-            reason=f"evaluate failed ({type(exc).__name__}); heuristic scoring",
-            fallback_path="heuristic_mcda_scores",
+            reason=f"evaluate failed ({type(exc).__name__}); legacy scenario heuristic",
+            fallback_path="legacy_scenario_heuristic",
             error_kind=type(exc).__name__,
         )
         evaluations = evaluate_options(futures, user_state, None)
-        return evaluations, "deterministic", ev
+        return evaluations, "deterministic", ev, None, options
 
 
 def safe_recommend(
