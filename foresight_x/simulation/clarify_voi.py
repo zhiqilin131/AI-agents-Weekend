@@ -4,23 +4,12 @@ from __future__ import annotations
 
 from foresight_x.decision.recommender import DEFAULT_EVALUATION_WEIGHTS, composite_score, evaluation_weights_for_risk_posture
 from foresight_x.schemas import Option, OptionEvaluation
+from foresight_x.simulation.feature_registry import FEATURE_VOI_PRIOR
 from foresight_x.simulation.feature_schemas import CRITICAL_FEATURE_KEYS, FeatureLevel, OptionFeatureVector, ScoringClarifyQuestion
 from foresight_x.simulation.feature_scorer import score_option_from_features
 from foresight_x.simulation.feature_merge import option_grounded_coverage
 
 _LEVELS: tuple[FeatureLevel, ...] = ("low", "medium", "high")
-
-# Approximate composite sensitivity when a feature moves low→high (for fast VoI).
-_FEATURE_VOI_PRIOR: dict[str, float] = {
-    "upside_potential_level": 0.85,
-    "goal_alignment_level": 0.75,
-    "money_cost_level": 0.55,
-    "time_cost_level": 0.50,
-    "stress_load_level": 0.45,
-    "workload_level": 0.40,
-    "downside_severity_level": 0.50,
-    "reversibility_level": 0.35,
-}
 
 
 def _patch_fv(fv: OptionFeatureVector, feature_key: str, level: FeatureLevel) -> OptionFeatureVector:
@@ -105,11 +94,11 @@ def rank_questions_by_voi(
         fkey = q.feature_key
         fv = fv_map.get(oid)
         if fv is None:
-            voi = _FEATURE_VOI_PRIOR.get(fkey, 0.25)
+            voi = FEATURE_VOI_PRIOR.get(fkey, 0.25)
         else:
             swing = _composite_swing_for_field(fv, fkey, weights)
             flip = _winner_flip_bonus(fkey, oid, feature_vectors, evaluations, weights)
-            voi = swing + flip + _FEATURE_VOI_PRIOR.get(fkey, 0.1) * 0.1
+            voi = swing + flip + FEATURE_VOI_PRIOR.get(fkey, 0.1) * 0.1
         scored.append((voi, q.model_copy(update={"voi_score": round(voi, 3)})))
 
     scored.sort(key=lambda x: x[0], reverse=True)

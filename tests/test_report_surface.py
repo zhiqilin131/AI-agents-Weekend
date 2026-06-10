@@ -7,6 +7,8 @@ from foresight_x.schemas import (
     DecisionTrace,
     EvidenceBundle,
     Fact,
+    GraphInfluenceBundle,
+    InfluenceNode,
     MemoryBundle,
     NextAction,
     Option,
@@ -168,3 +170,44 @@ def _trace_with_futures() -> DecisionTrace:
         prior_outcomes_summary="",
     )
     return _make_trace(mem=mem, us=us)
+
+
+def test_personalized_reason_prefers_graph_influence_over_stale_behavioral_pattern() -> None:
+    """UI must not show stale Salmon lines from vector-retrieved old traces."""
+    us = _minimal_user_state(
+        raw_input="Should I accept compensation from my ex-girlfriend after our breakup?"
+    )
+    mem = MemoryBundle(
+        similar_past_decisions=[],
+        behavioral_patterns=[
+            "Graph influence: Salmon (0.77), Shadow chat turn (0.23)",
+            "Retrieval themes: choice, career",
+        ],
+        prior_outcomes_summary="",
+        graph_influence=GraphInfluenceBundle(
+            algorithm="graphiti_hybrid_rrf_v1",
+            top_nodes=[
+                InfluenceNode(
+                    node_id="graphiti:n1",
+                    label="5000 RMB",
+                    node_type="entity",
+                    layer="concept",
+                    score=1.0,
+                    why="compensation from ex",
+                ),
+                InfluenceNode(
+                    node_id="graphiti:n2",
+                    label="ex-girlfriend",
+                    node_type="entity",
+                    layer="concept",
+                    score=0.5,
+                    why="breakup context",
+                ),
+            ],
+        ),
+    )
+    surf = build_report_surface(_make_trace(mem=mem, us=us))
+    assert surf.personalized_reasons
+    reason0 = surf.personalized_reasons[0].text
+    assert "5000 RMB" in reason0
+    assert "Salmon" not in reason0

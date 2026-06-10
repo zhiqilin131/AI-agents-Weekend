@@ -3,6 +3,9 @@ import { mapTraceToReport } from '../../../utils/mapTrace';
 import { journeyStateFromProgress } from '../../../utils/reportAgentJourney';
 import { ReportCompact } from '../ReportCompact';
 import { ReportAgentJourney } from './ReportAgentJourney';
+import { ScoringClarifyPanel } from '../report/ScoringClarifyPanel';
+import type { ScoringClarifyPending } from '../../../utils/scoringClarifyGate';
+import type { ElicitationSubmitPayload } from '../../../utils/featureAudit';
 
 export function DecisionReportStreamingPanel({
   open,
@@ -17,6 +20,11 @@ export function DecisionReportStreamingPanel({
   onOpenExecutionCalendar,
   onReviseReport,
   shadowThreadId = null,
+  scoringClarifyPending = null,
+  gatePrefill,
+  onScoringClarifyApply,
+  onScoringClarifySkip,
+  onTraceRescored,
 }: {
   open: boolean;
   trace: Record<string, unknown> | null;
@@ -30,11 +38,23 @@ export function DecisionReportStreamingPanel({
   onOpenExecutionCalendar: (decisionId: string) => void;
   onReviseReport: (decisionId: string) => void;
   shadowThreadId?: string | null;
+  scoringClarifyPending?: ScoringClarifyPending | null;
+  gatePrefill?: { levelAnswers: Record<string, string>; rankAnswers: Record<string, string[]> };
+  onScoringClarifyApply?: (payload: ElicitationSubmitPayload) => void;
+  onScoringClarifySkip?: () => void;
+  onTraceRescored?: (trace: Record<string, unknown>) => void;
 }) {
   if (!open) return null;
   const report = trace ? mapTraceToReport(trace) : null;
   const decisionId = typeof trace?.decision_id === 'string' ? trace.decision_id : '';
-  const panelStatus: 'running' | 'complete' | 'error' = error ? 'error' : !isStreaming && trace && !error ? 'complete' : 'running';
+  const atGate = Boolean(scoringClarifyPending);
+  const panelStatus: 'running' | 'complete' | 'error' = error
+    ? 'error'
+    : atGate
+      ? 'running'
+      : !isStreaming && trace && !error
+        ? 'complete'
+        : 'running';
   const { currentStep, completedSteps } = journeyStateFromProgress(progressStep, panelStatus);
   const doneJourney = journeyStateFromProgress('', 'complete');
 
@@ -47,7 +67,11 @@ export function DecisionReportStreamingPanel({
           ) : null}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold text-gray-900">
-              {isStreaming ? 'Generating Decision Report' : 'Decision Report'}
+              {atGate
+                ? 'Ground tradeoffs before recommending'
+                : isStreaming
+                  ? 'Generating Decision Report'
+                  : 'Decision Report'}
             </h2>
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -57,7 +81,7 @@ export function DecisionReportStreamingPanel({
               >
                 Continue chatting
               </button>
-              {decisionId ? (
+              {decisionId && !atGate ? (
                 <>
                   <button
                     type="button"
@@ -83,7 +107,7 @@ export function DecisionReportStreamingPanel({
         </div>
 
         <div className="report-scroll-stability min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
-          {error ? (
+          {error && !atGate ? (
             <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
               <p>{error}</p>
               {onRetryStage ? (
@@ -98,7 +122,35 @@ export function DecisionReportStreamingPanel({
             </div>
           ) : null}
 
-          {!error && report && !isStreaming ? (
+          {atGate && scoringClarifyPending && onScoringClarifyApply && onScoringClarifySkip ? (
+            <div className="mb-4">
+              <ReportAgentJourney
+                currentStep="evaluate"
+                completedSteps={['enhance', 'perceive', 'retrieve', 'infer', 'simulate']}
+                status="running"
+              />
+              <div className="mt-4">
+                <ScoringClarifyPanel
+                  variant="gate"
+                  levelQuestions={scoringClarifyPending.levelQuestions}
+                  comparativeQuestions={scoringClarifyPending.comparativeQuestions}
+                  coverage={scoringClarifyPending.coverage}
+                  discrimination={scoringClarifyPending.discrimination}
+                  audit={scoringClarifyPending.audit}
+                  optionNames={scoringClarifyPending.optionNames}
+                  initialLevelAnswers={gatePrefill?.levelAnswers}
+                  initialRankAnswers={gatePrefill?.rankAnswers}
+                  elicitationRound={scoringClarifyPending.elicitationRound}
+                  maxElicitationRounds={scoringClarifyPending.maxElicitationRounds}
+                  validationErrors={scoringClarifyPending.validationErrors}
+                  onApply={onScoringClarifyApply}
+                  onSkip={onScoringClarifySkip}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {!error && report && !isStreaming && !atGate ? (
             <div className="mb-4">
               <ReportAgentJourney
                 currentStep={doneJourney.currentStep}
@@ -107,19 +159,19 @@ export function DecisionReportStreamingPanel({
               />
             </div>
           ) : null}
-          {(isStreaming || !report) && !error ? (
+          {(isStreaming || (!report && !atGate)) && !error ? (
             <div className="mb-4">
               <ReportAgentJourney currentStep={currentStep} completedSteps={completedSteps} status={panelStatus} />
             </div>
           ) : null}
 
-          {isStreaming && !report ? (
+          {isStreaming && !report && !atGate ? (
             <p className="mb-3 text-sm text-gray-600">
               Sections appear below as they stream in — same layout as the main decision view.
             </p>
           ) : null}
 
-          {report && trace ? (
+          {report && trace && !atGate ? (
             <div className="mt-1">
               <ReportCompact
                 report={report}
@@ -127,6 +179,7 @@ export function DecisionReportStreamingPanel({
                 isStreaming={isStreaming}
                 onExecutionCalendarNavigate={onOpenExecutionCalendar}
                 shadowThreadId={shadowThreadId}
+                onTraceRescored={onTraceRescored}
               />
             </div>
           ) : null}

@@ -1,15 +1,29 @@
-"""Temporal graph memory service: ingest events and compute influence."""
+"""Temporal graph memory service: ingest events and compute influence.
+
+Backend selection (industrial fallback chain):
+1. Graphiti (LLM entity extraction + hybrid semantic retrieval on embedded Kuzu)
+   when ``graph_backend`` is "auto"/"graphiti" and graphiti-core + OPENAI_API_KEY
+   are available.
+2. Legacy local PPR graph (lexical seeding + temporal PageRank) as fallback.
+
+Writes are dual-recorded so the fallback graph stays warm even while Graphiti
+is the primary retrieval path.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import logging
 
 from foresight_x.config import Settings, load_settings
 from foresight_x.memory_graph.activation import build_influence_bundle, run_temporal_ppr, seed_vector
 from foresight_x.memory_graph.extractor import concept_links_from_user_state, decision_event_node, outcome_event_node
+from foresight_x.memory_graph.graphiti_backend import get_graphiti_backend
 from foresight_x.memory_graph.models import GraphEdge, GraphNode
 from foresight_x.memory_graph.store import GraphStore, utc_now_iso
 from foresight_x.schemas import DecisionOutcome, DecisionTrace, GraphInfluenceBundle, UserState
+
+_log = logging.getLogger("foresight_x.memory_graph")
 
 
 class TemporalGraphMemory:
@@ -19,8 +33,21 @@ class TemporalGraphMemory:
         self.settings = settings or load_settings()
         self.user_id = user_id
         self.store = GraphStore(user_id, settings=self.settings)
+        try:
+            self._graphiti = get_graphiti_backend(user_id, self.settings)
+        except Exception:
+            _log.debug("graphiti backend unavailable", exc_info=True)
+            self._graphiti = None
 
     def record_decision_trace(self, trace: DecisionTrace) -> None:
+        if self._graphiti is not None:
+            try:
+                self._graphiti.enqueue_decision_trace(trace)
+            except Exception:
+                _log.debug("graphiti enqueue_decision_trace failed", exc_info=True)
+        self._legacy_record_decision_trace(trace)
+
+    def _legacy_record_decision_trace(self, trace: DecisionTrace) -> None:
         snap = self.store.load()
         now = trace.timestamp or utc_now_iso()
         prev = self.store.latest_event_node(snap)
@@ -116,6 +143,11 @@ class TemporalGraphMemory:
         self.store.save(snap)
 
     def record_outcome(self, trace: DecisionTrace, outcome: DecisionOutcome) -> None:
+        if self._graphiti is not None:
+            try:
+                self._graphiti.enqueue_outcome(trace, outcome)
+            except Exception:
+                _log.debug("graphiti enqueue_outcome failed", exc_info=True)
         snap = self.store.load()
         now = outcome.timestamp or utc_now_iso()
         out_node = outcome_event_node(trace, outcome)
@@ -149,6 +181,11 @@ class TemporalGraphMemory:
 
     def record_shadow_event(self, user_text: str, assistant_text: str, *, timestamp: str | None = None) -> None:
         """Store one shadow turn as an event node, linked to extracted concepts."""
+        if self._graphiti is not None:
+            try:
+                self._graphiti.enqueue_shadow_turn(user_text, assistant_text, timestamp=timestamp)
+            except Exception:
+                _log.debug("graphiti enqueue_shadow_turn failed", exc_info=True)
         ts = (timestamp or "").strip() or utc_now_iso()
         snap = self.store.load()
         digest = hashlib.sha1(f"{user_text}|{assistant_text}|{ts}".encode("utf-8")).hexdigest()[:18]
@@ -199,6 +236,11 @@ class TemporalGraphMemory:
 
     def record_external_event(self, text: str, *, timestamp: str | None = None, event_type: str = "external_event") -> None:
         """Public hook for external event ingestion (calendar/news/manual entries)."""
+        if self._graphiti is not None:
+            try:
+                self._graphiti.enqueue_external_event(text, timestamp=timestamp, event_type=event_type)
+            except Exception:
+                _log.debug("graphiti enqueue_external_event failed", exc_info=True)
         ts = (timestamp or "").strip() or utc_now_iso()
         snap = self.store.load()
         digest = hashlib.sha1(f"{text}|{ts}|{event_type}".encode("utf-8")).hexdigest()[:18]
@@ -215,6 +257,26 @@ class TemporalGraphMemory:
         self.store.save(snap)
 
     def influence_for(self, user_state: UserState, *, top_k: int = 8, now_iso: str | None = None) -> GraphInfluenceBundle | None:
+        if self._graphiti is not None:
+            try:
+                bundle = self._graphiti.influence_for(user_state, top_k=top_k)
+                if bundle is not None and bundle.top_nodes:
+                    return bundle
+            except Exception:
+                _log.debug("graphiti influence_for failed; using legacy PPR", exc_info=True)
+        return self._legacy_influence_for(user_state, top_k=top_k, now_iso=now_iso)
+
+    def backend_status(self) -> dict:
+        if self._graphiti is not None:
+            status = self._graphiti.status()
+        else:
+            status = {"backend": "local", "initialized": True}
+        snap = self.store.load()
+        status["legacy_nodes"] = len(snap.nodes)
+        status["legacy_edges"] = len(snap.edges)
+        return status
+
+    def _legacy_influence_for(self, user_state: UserState, *, top_k: int = 8, now_iso: str | None = None) -> GraphInfluenceBundle | None:
         snap = self.store.load()
         if not snap.nodes or not snap.edges:
             return None

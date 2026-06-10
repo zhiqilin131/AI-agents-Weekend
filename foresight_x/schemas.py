@@ -996,6 +996,14 @@ class DecisionTrace(BaseModel):
         default=None,
         description="User answers to targeted scoring clarify questions (question_id → answer).",
     )
+    comparative_answers: dict[str, list[str]] | None = Field(
+        default=None,
+        description="Cross-option rank answers (cmp:{feature}:rank → ordered option_ids).",
+    )
+    scoring_elicitation_rounds: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Append-only history of scoring elicitation rounds.",
+    )
     scoring_recommendation_provisional: bool = Field(
         default=False,
         description=(

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { Loader2, MessageCircle, Send, Sparkles, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { VoiceRecorderTranscribeButton } from '../VoiceRecorderTranscribeButton';
@@ -27,8 +28,43 @@ type OptionCoachPanelProps = {
   open: boolean;
   option: CoachOptionContext | null;
   decisionId: string;
+  /** Viewport rect of the "Ask how to execute" control — panel anchors beside the user's scroll position. */
+  anchorRect?: DOMRect | null;
   onClose: () => void;
 };
+
+const PANEL_WIDTH = 400;
+const PANEL_HEIGHT = 520;
+const VIEWPORT_PAD = 16;
+
+function modalRightInset(): number {
+  const modalW = Math.min(1240, window.innerWidth * 0.96);
+  const modalRight = (window.innerWidth + modalW) / 2;
+  return Math.max(VIEWPORT_PAD, window.innerWidth - modalRight + 12);
+}
+
+function computePanelStyle(anchorRect: DOMRect | null | undefined): CSSProperties {
+  const right = modalRightInset();
+  const maxH = Math.min(PANEL_HEIGHT, window.innerHeight - VIEWPORT_PAD * 2);
+  const maxW = Math.min(PANEL_WIDTH, window.innerWidth - VIEWPORT_PAD * 2);
+
+  let top = VIEWPORT_PAD;
+  if (anchorRect) {
+    top = anchorRect.top - 12;
+    top = Math.max(VIEWPORT_PAD, Math.min(top, window.innerHeight - maxH - VIEWPORT_PAD));
+  } else {
+    top = Math.max(VIEWPORT_PAD, (window.innerHeight - maxH) / 2);
+  }
+
+  return {
+    position: 'fixed',
+    top,
+    right,
+    width: maxW,
+    height: maxH,
+    zIndex: 250,
+  };
+}
 
 function toOptionContextPayload(option: CoachOptionContext) {
   return {
@@ -54,17 +90,39 @@ function resolveModelId(
   return models[0]?.id ?? 'little';
 }
 
-export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCoachPanelProps) {
+export function OptionCoachPanel({ open, option, decisionId, anchorRect, onClose }: OptionCoachPanelProps) {
   const slimeModels = useSlimeModelCatalog();
   const [coachModelId, setCoachModelId] = useState('');
   const [question, setQuestion] = useState('');
   const [threads, setThreads] = useState<Record<string, CoachMessage[]>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const anchorRectRef = useRef(anchorRect);
+
+  anchorRectRef.current = anchorRect;
 
   const optionId = option?.id ?? '';
   const activeThread: CoachMessage[] = optionId ? (threads[optionId] ?? []) : [];
+
+  const refreshPosition = useCallback(() => {
+    setPanelStyle(computePanelStyle(anchorRectRef.current));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    refreshPosition();
+    const scrollRoot = document.querySelector('.report-scroll-stability');
+    const onScroll = () => refreshPosition();
+    scrollRoot?.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => {
+      scrollRoot?.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [open, anchorRect, refreshPosition]);
 
   useEffect(() => {
     if (!open || !slimeModels.ready) return;
@@ -79,6 +137,12 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
       resolveModelId(prev, slimeModels.models, slimeModels.defaultModel),
     );
   }, [open, optionId, slimeModels.ready, slimeModels.defaultModel, slimeModels.models]);
+
+  useEffect(() => {
+    if (!open) return;
+    const t = window.setTimeout(() => textareaRef.current?.focus(), 120);
+    return () => window.clearTimeout(t);
+  }, [open, optionId]);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -139,7 +203,9 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
     slimeModels.models.find((m) => m.id === coachModelId) ??
     slimeModels.models.find((m) => m.id === slimeModels.defaultModel);
 
-  return (
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <AnimatePresence>
       {open && option ? (
         <>
@@ -149,34 +215,33 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[220] bg-slate-950/25 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[240] bg-slate-950/45"
             onClick={onClose}
           />
           <motion.aside
             role="dialog"
             aria-labelledby="option-coach-title"
-            initial={{ opacity: 0, x: 28, scale: 0.98 }}
-            animate={{ opacity: 1, x: 0, scale: 1 }}
-            exit={{ opacity: 0, x: 24, scale: 0.98 }}
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 16 }}
             transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-            className="fixed bottom-4 right-4 top-auto z-[221] flex h-[min(88vh,52rem)] w-[min(92vw,22rem)] min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/80 bg-gradient-to-b from-white/98 via-violet-50/40 to-indigo-50/55 shadow-[0_28px_80px_rgba(79,70,229,0.22)] backdrop-blur-xl sm:w-[min(92vw,26rem)]"
+            style={panelStyle}
+            className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,0.28)]"
           >
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_0%,rgba(255,255,255,0.95),transparent_42%),radial-gradient(circle_at_88%_8%,rgba(167,139,250,0.22),transparent_38%)]" />
-
-            <header className="relative z-10 flex items-start justify-between gap-3 border-b border-violet-100/80 px-4 py-3.5">
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3.5">
               <div className="min-w-0">
                 <p
                   id="option-coach-title"
-                  className="text-[10px] font-bold uppercase tracking-[0.28em] text-violet-600/90"
+                  className="text-[10px] font-bold uppercase tracking-[0.28em] text-violet-700"
                 >
                   Option coach
                 </p>
                 <p className="mt-1 truncate text-base font-semibold text-slate-950">{option.name}</p>
                 {activeModel ? (
-                  <p className="mt-1 text-[11px] text-slate-500">
+                  <p className="mt-1 text-[11px] text-slate-600">
                     Using <span className="font-semibold text-violet-800">{activeModel.display_name}</span>
                     {activeModel.engine ? (
-                      <span className="text-slate-400"> · {activeModel.engine}</span>
+                      <span className="text-slate-500"> · {activeModel.engine}</span>
                     ) : null}
                   </p>
                 ) : null}
@@ -184,14 +249,14 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
               <button
                 type="button"
                 onClick={onClose}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/90 bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
                 aria-label="Close"
               >
                 <X className="h-4 w-4" />
               </button>
             </header>
 
-            <div className="relative z-10 shrink-0 border-b border-violet-100/70 px-3 py-2.5">
+            <div className="shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-2.5">
               <ModelSelector
                 key={`coach-model-${option.id}`}
                 feature="shadow_chat"
@@ -213,20 +278,20 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
               />
             </div>
 
-            <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white px-3 py-3">
               <div className="space-y-3">
-                <div className="rounded-2xl border border-violet-200/80 bg-white/75 px-3 py-2.5 text-left shadow-sm">
-                  <p className="text-[9px] font-bold uppercase tracking-wider text-violet-600/90">About this option</p>
+                <div className="rounded-xl border border-violet-100 bg-violet-50/80 px-3 py-2.5 text-left">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-violet-700">About this option</p>
                   {option.description?.trim() ? (
-                    <p className="mt-1.5 text-[12px] leading-relaxed text-slate-700">{option.description}</p>
+                    <p className="mt-1.5 text-[12px] leading-relaxed text-slate-800">{option.description}</p>
                   ) : null}
                   {option.costOfReversal ? (
-                    <p className="mt-1.5 text-[11px] text-slate-600">
-                      <span className="font-semibold text-slate-800">Reversal cost:</span> {option.costOfReversal}
+                    <p className="mt-1.5 text-[11px] text-slate-700">
+                      <span className="font-semibold text-slate-900">Reversal cost:</span> {option.costOfReversal}
                     </p>
                   ) : null}
                   {option.keyAssumptions && option.keyAssumptions.length > 0 ? (
-                    <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] text-slate-600">
+                    <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] text-slate-700">
                       {option.keyAssumptions.slice(0, 4).map((a, i) => (
                         <li key={i}>{a}</li>
                       ))}
@@ -237,7 +302,7 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
                       {Object.entries(option.tradeoffScores).map(([k, v]) => (
                         <span
                           key={k}
-                          className="rounded-full border border-indigo-100 bg-indigo-50/90 px-2 py-0.5 text-[10px] font-semibold text-indigo-900"
+                          className="rounded-full border border-indigo-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-indigo-900"
                         >
                           {k} {v}
                         </span>
@@ -250,10 +315,10 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
                 </div>
 
                 {activeThread.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-violet-200/80 bg-white/50 px-3 py-4 text-center">
-                    <MessageCircle className="mx-auto h-5 w-5 text-violet-400" aria-hidden />
-                    <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                      Ask how to execute <span className="font-medium text-slate-800">{option.name}</span> — scripts,
+                  <div className="rounded-xl border border-dashed border-violet-200 bg-slate-50 px-3 py-4 text-center">
+                    <MessageCircle className="mx-auto h-5 w-5 text-violet-500" aria-hidden />
+                    <p className="mt-2 text-xs leading-relaxed text-slate-700">
+                      Ask how to execute <span className="font-medium text-slate-900">{option.name}</span> — scripts,
                       first steps, or handling pushback.
                     </p>
                   </div>
@@ -268,7 +333,7 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
                           'max-w-[92%] rounded-2xl px-3 py-2.5 text-[13px] leading-relaxed shadow-sm',
                           m.role === 'user'
                             ? 'rounded-br-md bg-gradient-to-br from-violet-600 to-indigo-600 text-white'
-                            : 'rounded-bl-md border border-white/90 bg-white/90 text-slate-800',
+                            : 'rounded-bl-md border border-slate-200 bg-slate-50 text-slate-900',
                         )}
                       >
                         <p className="mb-1 text-[9px] font-bold uppercase tracking-wider opacity-70">
@@ -279,7 +344,7 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
                         ) : (
                           <MarkdownContent
                             content={m.content}
-                            className="text-[13px] [&_p]:text-[13px] [&_p]:text-slate-800"
+                            className="text-[13px] [&_p]:text-[13px] [&_p]:text-slate-900"
                           />
                         )}
                       </div>
@@ -296,9 +361,9 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
               </div>
             </div>
 
-            <footer className="relative z-10 shrink-0 border-t border-violet-100/80 bg-white/55 px-3 py-3 backdrop-blur-md">
+            <footer className="shrink-0 border-t border-slate-200 bg-white px-3 py-3">
               {error ? (
-                <p className="mb-2 rounded-xl border border-red-200/80 bg-red-50/90 px-2.5 py-2 text-[11px] text-red-800">
+                <p className="mb-2 rounded-xl border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-800">
                   {error}
                 </p>
               ) : null}
@@ -310,6 +375,7 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
                   className="shrink-0"
                 />
                 <textarea
+                  ref={textareaRef}
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                   onKeyDown={(e) => {
@@ -321,13 +387,13 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
                   placeholder="Ask specifics — message template, first 3 steps, if they push back…"
                   rows={2}
                   disabled={busy}
-                  className="min-h-[2.75rem] flex-1 resize-none rounded-2xl border border-violet-100/90 bg-white/95 px-3 py-2 text-[13px] text-slate-900 shadow-inner placeholder:text-slate-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-200/80"
+                  className="min-h-[2.75rem] flex-1 resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-900 shadow-inner placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200"
                 />
                 <button
                   type="button"
                   onClick={() => void askCoach(question)}
                   disabled={!question.trim() || busy}
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 text-white shadow-[0_10px_28px_rgba(99,102,241,0.35)] transition hover:brightness-105 disabled:opacity-40"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600 to-indigo-600 text-white shadow-md transition hover:brightness-105 disabled:opacity-40"
                   aria-label="Send question"
                 >
                   <Send className="h-4 w-4" />
@@ -341,6 +407,7 @@ export function OptionCoachPanel({ open, option, decisionId, onClose }: OptionCo
           </motion.aside>
         </>
       ) : null}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }

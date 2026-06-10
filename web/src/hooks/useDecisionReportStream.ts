@@ -13,6 +13,12 @@ import {
 } from '../utils/degradedModeNotices';
 import { mergeStreamingPartial } from '../utils/mergeStreamingTrace';
 import { parseSseBlocks } from '../utils/parseSse';
+import { prefillElicitationAnswers } from '../utils/featureAudit';
+import {
+  gateFromReportEvent,
+  type ElicitationSubmitPayload,
+  type ScoringClarifyPending,
+} from '../utils/scoringClarifyGate';
 
 function pushDegraded(
   setNotices: Dispatch<SetStateAction<DegradedNotice[]>>,
@@ -23,11 +29,12 @@ function pushDegraded(
   setNotices((prev) => mergeDegradedNotices(prev, [notice]));
 }
 
-type StreamStatus = 'idle' | 'streaming' | 'done' | 'error';
+type StreamStatus = 'idle' | 'streaming' | 'gate' | 'done' | 'error';
 
 export type DecisionReportStreamResult = {
   trace: Record<string, unknown> | null;
   error: string | null;
+  awaitingScoringClarify?: boolean;
 };
 
 export function useDecisionReportStream() {
@@ -39,6 +46,7 @@ export function useDecisionReportStream() {
   const [error, setError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [degradedNotices, setDegradedNotices] = useState<DegradedNotice[]>([]);
+  const [scoringClarifyPending, setScoringClarifyPending] = useState<ScoringClarifyPending | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const lastStartParamsRef = useRef<{
     threadId: string;
@@ -48,6 +56,9 @@ export function useDecisionReportStream() {
     modelOptionId?: string;
     resumeFromStage?: string;
     resumePartial?: Record<string, unknown>;
+    scoringClarification?: Record<string, string>;
+    comparativeAnswers?: Record<string, string[]>;
+    scoringClarificationSkip?: boolean;
   } | null>(null);
 
   const start = useCallback(async (params: {
@@ -58,6 +69,9 @@ export function useDecisionReportStream() {
     modelOptionId?: string;
     resumeFromStage?: string;
     resumePartial?: Record<string, unknown>;
+    scoringClarification?: Record<string, string>;
+    comparativeAnswers?: Record<string, string[]>;
+    scoringClarificationSkip?: boolean;
   }) => {
     setStatus('streaming');
     setProgressStep('Structuring decision');
@@ -66,10 +80,12 @@ export function useDecisionReportStream() {
     setError(null);
     setIsStreaming(true);
     setDegradedNotices([]);
+    if (!params.resumeFromStage) setScoringClarifyPending(null);
     lastStartParamsRef.current = params;
 
     let capturedTrace: Record<string, unknown> | null = null;
     let streamError: string | null = null;
+    let awaitingGate = false;
     let lastStage = (params.resumeFromStage || '').trim();
     let snapshotTrace: Record<string, unknown> | null = params.resumePartial ?? null;
 
@@ -80,6 +96,18 @@ export function useDecisionReportStream() {
       const type = String(ev.type || '');
       if (type === 'status') {
         setProgressStep(String(ev.label || 'Generating report'));
+      } else if (type === 'awaiting_scoring_clarify') {
+        awaitingGate = true;
+        const gate = gateFromReportEvent(ev, params.decisionPrompt);
+        if (gate) {
+          setScoringClarifyPending(gate);
+          setStatus('gate');
+          setProgressStep('Grounding tradeoff features…');
+          if (gate.resumePartial) {
+            snapshotTrace = mergeStreamingPartial(snapshotTrace, gate.resumePartial);
+            setPartialTrace(snapshotTrace);
+          }
+        }
       } else if (type === 'report_event') {
         const inner = ev.event as Record<string, unknown> | undefined;
         if (inner?.event === 'partial' && inner.data && typeof inner.data === 'object') {
@@ -100,6 +128,18 @@ export function useDecisionReportStream() {
         if (inner?.event === 'degraded' && inner.degraded && typeof inner.degraded === 'object') {
           pushDegraded(setDegradedNotices, inner.degraded as Record<string, unknown>);
         }
+        if (inner?.event === 'scoring_clarify' && inner.data && typeof inner.data === 'object') {
+          const clarify = inner.data as Record<string, unknown>;
+          snapshotTrace = {
+            ...(snapshotTrace ?? {}),
+            feature_audit: {
+              ...((snapshotTrace?.feature_audit as Record<string, unknown> | undefined) ?? {}),
+              ...clarify,
+              needs_scoring_clarification: true,
+            },
+          };
+          setPartialTrace(snapshotTrace);
+        }
       } else if (type === 'error') {
         streamError = String(ev.message || 'Report failed');
         setError(streamError);
@@ -112,10 +152,10 @@ export function useDecisionReportStream() {
           );
         }
       } else if (type === 'pending_action_updated') {
-          /* Parent clears decision dock when report stream starts. */
-        } else if (type === 'done') {
-          setIsStreaming(false);
-        if (ev.stream_error) {
+        /* Parent clears decision dock when report stream starts. */
+      } else if (type === 'done') {
+        setIsStreaming(false);
+        if (ev.stream_error && !ev.awaiting_scoring_clarify) {
           if (!streamError) {
             streamError = 'Report failed';
             setError(streamError);
@@ -123,12 +163,17 @@ export function useDecisionReportStream() {
           setStatus('error');
           return;
         }
+        if (ev.awaiting_scoring_clarify || awaitingGate) {
+          setStatus('gate');
+          return;
+        }
         if (ev.decision_trace && typeof ev.decision_trace === 'object') {
           capturedTrace = ev.decision_trace as Record<string, unknown>;
           setDegradedNotices((prev) => mergeDegradedNotices(prev, noticesFromTrace(capturedTrace)));
           setFinalTrace(capturedTrace);
+          setScoringClarifyPending(null);
           setStatus('done');
-        } else {
+        } else if (!awaitingGate) {
           streamError = streamError || 'Report stream finished without decision data';
           setError(streamError);
           setStatus('error');
@@ -152,6 +197,9 @@ export function useDecisionReportStream() {
             ...(params.modelOptionId ? { model_option_id: params.modelOptionId } : {}),
             ...(params.resumeFromStage ? { resume_from_stage: params.resumeFromStage } : {}),
             ...(params.resumePartial ? { resume_partial: params.resumePartial } : {}),
+            ...(params.scoringClarification ? { scoring_clarification: params.scoringClarification } : {}),
+            ...(params.comparativeAnswers ? { comparative_answers: params.comparativeAnswers } : {}),
+            ...(params.scoringClarificationSkip ? { scoring_clarification_skip: true } : {}),
           }),
           signal: controller.signal,
         },
@@ -181,8 +229,6 @@ export function useDecisionReportStream() {
               : 'You need more Slime Credits for this action.',
           cheaperHint,
         });
-        // Reset stream UI: callers close the report panel; without this, error stays null and the
-        // journey panel looks "stuck" on Structuring while credits modal sits underneath.
         setPartialTrace(null);
         setFinalTrace(null);
         setError(null);
@@ -216,7 +262,7 @@ export function useDecisionReportStream() {
       if (buffer.trim()) {
         parseSseBlocks(`${buffer}\n\n`, onEvent);
       }
-      if (!capturedTrace && !streamError) {
+      if (!capturedTrace && !streamError && !awaitingGate) {
         streamError = 'Stream ended before the report finished';
         setError(streamError);
         setStatus('error');
@@ -228,7 +274,11 @@ export function useDecisionReportStream() {
           resumePartial: snapshotTrace ?? undefined,
         };
       }
-      return { trace: capturedTrace, error: streamError } satisfies DecisionReportStreamResult;
+      return {
+        trace: capturedTrace,
+        error: streamError,
+        awaitingScoringClarify: awaitingGate,
+      } satisfies DecisionReportStreamResult;
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         streamError = 'cancelled';
@@ -245,10 +295,43 @@ export function useDecisionReportStream() {
     }
   }, [showInsufficient]);
 
+  const applyScoringClarify = useCallback(
+    (payload: ElicitationSubmitPayload) => {
+      const pending = scoringClarifyPending;
+      if (!pending) return;
+      setScoringClarifyPending(null);
+      void start({
+        threadId: lastStartParamsRef.current?.threadId ?? '',
+        decisionPrompt: pending.decisionPrompt,
+        modelOptionId: lastStartParamsRef.current?.modelOptionId,
+        resumeFromStage: 'evaluate',
+        resumePartial: pending.resumePartial,
+        scoringClarification: payload.scoring_clarification,
+        comparativeAnswers: payload.comparative_answers,
+      });
+    },
+    [scoringClarifyPending, start],
+  );
+
+  const skipScoringClarify = useCallback(() => {
+    const pending = scoringClarifyPending;
+    if (!pending) return;
+    setScoringClarifyPending(null);
+    void start({
+      threadId: lastStartParamsRef.current?.threadId ?? '',
+      decisionPrompt: pending.decisionPrompt,
+      modelOptionId: lastStartParamsRef.current?.modelOptionId,
+      resumeFromStage: 'evaluate',
+      resumePartial: pending.resumePartial,
+      scoringClarificationSkip: true,
+    });
+  }, [scoringClarifyPending, start]);
+
   const cancel = useCallback(() => {
     controllerRef.current?.abort();
     setStatus('idle');
     setIsStreaming(false);
+    setScoringClarifyPending(null);
   }, []);
 
   const retryFromCurrentStage = useCallback(async () => {
@@ -261,11 +344,11 @@ export function useDecisionReportStream() {
     });
   }, [start]);
 
-  /** Load a persisted trace (e.g. reopen from chat artifact). Does not run the pipeline. */
   const loadExistingTrace = useCallback(async (decisionId: string) => {
     setError(null);
     setPartialTrace(null);
     setIsStreaming(false);
+    setScoringClarifyPending(null);
     try {
       const res = await apiFetch(`/api/traces/${encodeURIComponent(decisionId)}`);
       if (!res.ok) {
@@ -283,7 +366,19 @@ export function useDecisionReportStream() {
     }
   }, []);
 
+  const updateTrace = useCallback((trace: Record<string, unknown>) => {
+    setFinalTrace(trace);
+    setPartialTrace(null);
+    setScoringClarifyPending(null);
+    setStatus('done');
+  }, []);
+
   const trace = useMemo(() => finalTrace ?? partialTrace, [finalTrace, partialTrace]);
+  const gatePrefill = useMemo(() => {
+    const src = scoringClarifyPending?.resumePartial ?? trace;
+    return prefillElicitationAnswers(src as Record<string, unknown> | null);
+  }, [scoringClarifyPending, trace]);
+
   return {
     status,
     progressStep,
@@ -291,6 +386,11 @@ export function useDecisionReportStream() {
     finalTrace,
     trace,
     error,
+    scoringClarifyPending,
+    gatePrefill,
+    applyScoringClarify,
+    skipScoringClarify,
+    updateTrace,
     degradedWarnings: shouldShowDegradedModeBanner(degradedNotices, {
       streamError: status === 'error',
     })

@@ -29,3 +29,6 @@ pytest>=8.3,<9
 # Optional algorithmic layer accelerators (fallbacks remain built-in)
 ortools>=9.10,<10
 pymcdm>=1.3,<2
+
+# Temporal knowledge graph memory (Graphiti on embedded Kuzu; falls back to local PPR if absent)
+graphiti-core[kuzu]>=0.29,<1

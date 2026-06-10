@@ -108,6 +108,11 @@ export function ScoringAuditPanel({ audit }: ScoringAuditPanelProps) {
             {Math.round(coverage * 100)}% grounded
           </span>
         ) : null}
+        {typeof audit.cross_option_discrimination === 'number' ? (
+          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600 ring-1 ring-slate-200/60 ring-inset">
+            {Math.round(audit.cross_option_discrimination * 100)}% spread
+          </span>
+        ) : null}
       </div>
 
       <div className="mt-3 max-h-56 space-y-1.5 overflow-y-auto">

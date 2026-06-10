@@ -5,6 +5,7 @@ from __future__ import annotations
 from foresight_x.simulation.feature_schemas import FeatureAuditBundle, OptionFeatureVector
 from foresight_x.simulation.missing_field_detector import enrich_audit_bundle
 from foresight_x.simulation.scoring_clarify_gate import (
+    MAX_ELICITATION_ROUNDS,
     recommendation_is_provisional,
     scoring_clarification_attempted,
     should_pause_pipeline_for_scoring_clarify,
@@ -24,8 +25,9 @@ def test_pause_when_coverage_low_and_no_answers() -> None:
     assert audit.needs_scoring_clarification
     assert should_pause_pipeline_for_scoring_clarify(
         audit,
-        clarification_attempted=False,
         allow_provisional=False,
+        scoring_clarification_skip=False,
+        elicitation_rounds=0,
     )
 
 
@@ -33,17 +35,29 @@ def test_no_pause_after_user_skip() -> None:
     audit = _low_coverage_audit()
     assert not should_pause_pipeline_for_scoring_clarify(
         audit,
-        clarification_attempted=True,
-        allow_provisional=True,
+        allow_provisional=False,
+        scoring_clarification_skip=True,
+        elicitation_rounds=0,
     )
 
 
-def test_no_pause_after_clarify_resume() -> None:
+def test_re_pause_when_still_insufficient_under_round_cap() -> None:
+    audit = _low_coverage_audit()
+    assert should_pause_pipeline_for_scoring_clarify(
+        audit,
+        allow_provisional=False,
+        scoring_clarification_skip=False,
+        elicitation_rounds=1,
+    )
+
+
+def test_no_pause_when_max_rounds_reached() -> None:
     audit = _low_coverage_audit()
     assert not should_pause_pipeline_for_scoring_clarify(
         audit,
-        clarification_attempted=True,
         allow_provisional=False,
+        scoring_clarification_skip=False,
+        elicitation_rounds=MAX_ELICITATION_ROUNDS,
     )
 
 

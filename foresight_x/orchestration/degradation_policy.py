@@ -291,6 +291,7 @@ def safe_evaluate_options(
     memory: MemoryBundle | None = None,
     scoring_clarification: dict[str, str] | None = None,
     confirmed_candidates: list[dict[str, str]] | None = None,
+    comparative_answers: dict[str, list[str]] | None = None,
 ) -> tuple[list[OptionEvaluation], str, StageDegradation | None, FeatureAuditBundle | None, list[Option] | None]:
     """Feature-based deterministic evaluation; LLM is never used for numeric scores."""
     del llm
@@ -314,6 +315,7 @@ def safe_evaluate_options(
                 scoring_clarification,
                 confirmed_candidates,
                 risk_posture=profile.risk_posture,
+                comparative_answers=comparative_answers,
             )
             return evaluations, "deterministic", None, audit, opts
         evaluations = evaluate_options(futures, user_state, None)

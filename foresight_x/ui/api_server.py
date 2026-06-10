@@ -762,7 +762,10 @@ class RunRequest(BaseModel):
     resume_partial: dict[str, Any] | None = Field(default=None)
     #: Targeted scoring clarify answers (question_id → low|medium|high|not sure).
     scoring_clarification: dict[str, str] | None = Field(default=None)
-    #: When true, finalize with provisional ranking despite low grounded coverage.
+    comparative_answers: dict[str, list[str]] | None = Field(
+        default=None,
+        description="Cross-option rank answers (cmp:{feature}:rank → ordered option_ids).",
+    )
     scoring_clarification_skip: bool = Field(default=False)
     #: Resume an in-flight decision (must match ``resume_partial.decision_id``).
     decision_id: str | None = Field(default=None, max_length=64)
@@ -773,6 +776,7 @@ class RunRequest(BaseModel):
 class RescoreRequest(BaseModel):
     decision_id: str = Field(min_length=1)
     scoring_clarification: dict[str, str] = Field(default_factory=dict)
+    comparative_answers: dict[str, list[str]] | None = Field(default=None)
     confirmed_candidates: list[dict[str, str]] | None = Field(default=None)
     client_now_iso: str | None = Field(default=None)
 
@@ -1318,6 +1322,7 @@ def run_decision(body: RunRequest, request: Request):
             resume_partial=body.resume_partial,
             decision_id=body.decision_id,
             scoring_clarification=body.scoring_clarification,
+            comparative_answers=body.comparative_answers,
             scoring_clarification_skip=body.scoring_clarification_skip,
             confirmed_candidates=body.confirmed_candidates,
         )
@@ -1382,6 +1387,7 @@ def run_decision_stream(body: RunRequest, request: Request):
                 resume_partial=body.resume_partial,
                 decision_id=body.decision_id,
                 scoring_clarification=body.scoring_clarification,
+                comparative_answers=body.comparative_answers,
                 scoring_clarification_skip=body.scoring_clarification_skip,
                 confirmed_candidates=body.confirmed_candidates,
             ):
@@ -1423,6 +1429,7 @@ def rescore_decision(body: RescoreRequest, request: Request):
     updated = rescore_trace(
         trace,
         scoring_clarification=body.scoring_clarification,
+        comparative_answers=body.comparative_answers,
         confirmed_candidates=body.confirmed_candidates,
         llm=ctx.llm,
         persist_trace=True,
@@ -1456,6 +1463,23 @@ def get_profile() -> dict:
     if not p.get("slime_profile"):
         p["slime_profile"] = _default_slime_profile().model_dump(mode="json")
     return p
+
+
+@app.get("/api/graph/status")
+def get_graph_memory_status() -> dict[str, Any]:
+    """Graph memory backend health: Graphiti init state, ingest queue, fallback graph size."""
+    settings = _settings_for_active_user()
+    try:
+        return TemporalGraphMemory(settings.foresight_user_id, settings=settings).backend_status()
+    except Exception as e:
+        return {"backend": "unavailable", "error": f"{type(e).__name__}: {e}"}
+
+
+@app.get("/api/mcda/feature-registry")
+def get_mcda_feature_registry() -> dict[str, Any]:
+    from foresight_x.simulation.feature_registry import registry_export
+
+    return registry_export()
 
 
 @app.get("/api/models")
@@ -2400,6 +2424,9 @@ class ShadowDecisionReportStreamRequest(BaseModel):
     model_option_id: str | None = Field(default=None, max_length=64)
     resume_from_stage: str | None = Field(default=None, max_length=32)
     resume_partial: dict[str, Any] | None = Field(default=None)
+    scoring_clarification: dict[str, str] | None = Field(default=None)
+    comparative_answers: dict[str, list[str]] | None = Field(default=None)
+    scoring_clarification_skip: bool = Field(default=False)
 
 
 class ShadowReportContextRequest(BaseModel):
@@ -3908,6 +3935,9 @@ def stream_shadow_decision_report(
                 clarification_profile_merge_done_externally=bool(body.clarification_answers),
                 resume_from_stage=body.resume_from_stage,
                 resume_partial=body.resume_partial,
+                scoring_clarification=body.scoring_clarification,
+                comparative_answers=body.comparative_answers,
+                scoring_clarification_skip=body.scoring_clarification_skip,
             ):
                 run_degrade = current_run_events()
                 if sent_degrade < len(run_degrade):
@@ -3945,6 +3975,26 @@ def stream_shadow_decision_report(
                 if ev.get("event") == "partial":
                     yield _sse_chunk({"type": "report_event", "event": ev})
                     continue
+                if ev.get("event") == "scoring_clarify":
+                    yield _sse_chunk({"type": "report_event", "event": ev})
+                    continue
+                if ev.get("event") == "alignment_warning":
+                    yield _sse_chunk({"type": "report_event", "event": ev})
+                    continue
+                if ev.get("event") == "awaiting_scoring_clarify":
+                    data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+                    yield _sse_chunk({"type": "awaiting_scoring_clarify", **data})
+                    yield _sse_chunk(
+                        {
+                            "type": "done",
+                            "decision_trace": None,
+                            "decision_id": str(data.get("decision_id") or ""),
+                            "pending_action": None,
+                            "metrics": {},
+                            "awaiting_scoring_clarify": True,
+                        }
+                    )
+                    return
                 if ev.get("event") == "complete":
                     trace = ev.get("trace")
                     did = str((trace or {}).get("decision_id") or "")
