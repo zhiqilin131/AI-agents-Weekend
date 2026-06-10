@@ -21,6 +21,7 @@ chroma.sqlite3
 data/commits/*.json
 data/evaluation_logs/*.jsonl
 data/graph/*.json
+data/graphiti/
 data/profiles/*.json
 data/chat_threads/
 # Slime Credits balances / ledger (per-deploy or per-user runtime)

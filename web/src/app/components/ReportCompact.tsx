@@ -28,7 +28,10 @@ import { useSlimeModelCatalog } from '../../features/models/useSlimeModelCatalog
 import { OptionCoachPanel, type CoachOptionContext } from './report/OptionCoachPanel';
 import { ScoringAuditPanel } from './report/ScoringAuditPanel';
 import { ScoringClarifyPanel } from './report/ScoringClarifyPanel';
-import { parseFeatureAudit } from '../../utils/featureAudit';
+import { TradeoffMatrix } from './report/TradeoffMatrix';
+import { AlignmentWarnings } from './report/AlignmentWarnings';
+import { parseFeatureAudit, parseElicitationRounds, prefillElicitationAnswers } from '../../utils/featureAudit';
+import { ElicitationLedgerPanel } from './report/ElicitationLedgerPanel';
 import { fetchCalendarDraftFromReport } from '../../utils/calendarAgentApi';
 import { CALENDAR_AGENT_SESSION_DRAFT_KEY, isReportCalendarApplied } from '../../utils/executionStorageKeys';
 import { useExecutionStorageUserKey } from '../../hooks/useExecutionStorageUserKey';
@@ -152,6 +155,8 @@ export function ReportCompact({
   const optionTitleById = new Map(report.options.map((o) => [o.id, o.name]));
   const decisionId = typeof fullTrace?.decision_id === 'string' ? fullTrace.decision_id : '';
   const featureAudit = useMemo(() => parseFeatureAudit(fullTrace), [fullTrace]);
+  const elicitationRounds = useMemo(() => parseElicitationRounds(fullTrace), [fullTrace]);
+  const refinePrefill = useMemo(() => prefillElicitationAnswers(fullTrace), [fullTrace]);
 
   const prefetchExecutionDraft = useCallback(async () => {
     if (!decisionId) return;
@@ -165,6 +170,7 @@ export function ReportCompact({
   const [resourceDrops, setResourceDrops] = useState<ResourceDrop[]>([]);
   const [resourceDropsLoading, setResourceDropsLoading] = useState(false);
   const [coachOption, setCoachOption] = useState<CoachOptionContext | null>(null);
+  const [coachAnchorRect, setCoachAnchorRect] = useState<DOMRect | null>(null);
   const tradeoffByOptionId = useMemo(
     () => new Map((report.tradeoffs?.rows ?? []).map((r) => [r.optionId, r.scores])),
     [report.tradeoffs?.rows],
@@ -321,7 +327,8 @@ export function ReportCompact({
             {!!decisionId && (
               <button
                 type="button"
-                onClick={() =>
+                onClick={(e) => {
+                  setCoachAnchorRect(e.currentTarget.getBoundingClientRect());
                   setCoachOption({
                     id: o.id,
                     name: o.name,
@@ -332,9 +339,9 @@ export function ReportCompact({
                     importanceRank: o.importanceRank,
                     importanceTier: o.importanceTier,
                     tradeoffScores: tradeoffByOptionId.get(o.id),
-                  })
-                }
-                className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border border-purple-200 bg-white/85 text-purple-800 hover:bg-purple-50"
+                  });
+                }}
+                className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border border-purple-200 bg-white text-purple-800 hover:bg-purple-50"
               >
                 <MessageCircle className="w-3.5 h-3.5" aria-hidden />
                 Ask how to execute this option
@@ -499,19 +506,38 @@ export function ReportCompact({
       </div>
 
       {!isStreaming &&
-      fullTrace?.scoring_recommendation_provisional === true &&
       featureAudit?.needs_scoring_clarification &&
-      featureAudit.clarify_questions?.length ? (
+      ((featureAudit.clarify_questions?.length ?? 0) > 0 ||
+        (featureAudit.comparative_questions?.length ?? 0) > 0) ? (
         <ScoringClarifyPanel
           variant="refine"
           decisionId={decisionId}
-          questions={featureAudit.clarify_questions}
+          levelQuestions={featureAudit.clarify_questions ?? []}
+          comparativeQuestions={featureAudit.comparative_questions ?? []}
           coverage={featureAudit.grounded_feature_coverage}
+          discrimination={featureAudit.cross_option_discrimination}
+          audit={featureAudit}
+          optionNames={Object.fromEntries(report.options.map((o) => [o.id, o.name]))}
+          initialLevelAnswers={refinePrefill.levelAnswers}
+          initialRankAnswers={refinePrefill.rankAnswers}
           onRescored={onTraceRescored}
         />
       ) : null}
 
-      {!isStreaming && featureAudit ? <ScoringAuditPanel audit={featureAudit} /> : null}
+      {!isStreaming && elicitationRounds.length ? (
+        <ElicitationLedgerPanel rounds={elicitationRounds} />
+      ) : null}
+
+      {!isStreaming && featureAudit ? (
+        <>
+          <TradeoffMatrix
+            audit={featureAudit}
+            optionNames={Object.fromEntries(report.options.map((o) => [o.id, o.name]))}
+          />
+          <AlignmentWarnings report={featureAudit.alignment_report} />
+          <ScoringAuditPanel audit={featureAudit} />
+        </>
+      ) : null}
 
       {tradeoffsPanel}
 
@@ -585,7 +611,11 @@ export function ReportCompact({
         open={Boolean(coachOption)}
         option={coachOption}
         decisionId={decisionId}
-        onClose={() => setCoachOption(null)}
+        anchorRect={coachAnchorRect}
+        onClose={() => {
+          setCoachOption(null);
+          setCoachAnchorRect(null);
+        }}
       />
     </div>
   );

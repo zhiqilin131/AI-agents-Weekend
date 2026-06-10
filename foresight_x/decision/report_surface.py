@@ -65,6 +65,15 @@ def _has_history_memory(trace: DecisionTrace) -> bool:
     return False
 
 
+def _graph_influence_pattern_line(mem) -> str:
+    """Current-run graph influence summary for display (not stale vector-retrieval patterns)."""
+    gi = mem.graph_influence
+    if gi is None or not gi.top_nodes:
+        return ""
+    tops = ", ".join(f"{n.label} ({n.score:.2f})" for n in gi.top_nodes[:4])
+    return f"Graph influence: {tops}" if tops else ""
+
+
 def _shared_evidence_pool(trace: DecisionTrace) -> list[EvidenceReference]:
     us = trace.user_state
     mem = trace.memory
@@ -116,10 +125,14 @@ def _shared_evidence_pool(trace: DecisionTrace) -> list[EvidenceReference]:
                     confidence=fact.confidence,
                 )
             )
+    graph_line = _graph_influence_pattern_line(mem)
+    if graph_line:
+        pool.append(EvidenceReference(type="memory", text=graph_line))
     for pat in mem.behavioral_patterns[:2]:
         pat = pat.strip()
-        if pat:
-            pool.append(EvidenceReference(type="memory", text=pat))
+        if not pat or pat.lower().startswith("graph influence:"):
+            continue
+        pool.append(EvidenceReference(type="memory", text=pat))
     world_facts = trace.evidence.base_rates + trace.evidence.facts + trace.evidence.recent_events
     for fact in world_facts[:3]:
         t = fact.text.strip()
@@ -424,7 +437,16 @@ def _personalized_reasons(trace: DecisionTrace, pool: list[EvidenceReference]) -
     rec = trace.recommendation
     reasons: list[PersonalizedFitReason] = []
 
-    if mem.behavioral_patterns:
+    graph_line = _graph_influence_pattern_line(mem)
+    if graph_line:
+        chip = next((r for r in pool if graph_line[:80].lower() in r.text.lower()), None)
+        reasons.append(
+            PersonalizedFitReason(
+                text=_truncate(f"We factor in a pattern from your history: {graph_line}", 240),
+                based_on=[chip] if chip else [EvidenceReference(type="memory", text=graph_line)],
+            )
+        )
+    elif mem.behavioral_patterns:
         p0 = mem.behavioral_patterns[0].strip()
         if p0:
             chip = next((r for r in pool if p0[:80].lower() in r.text.lower()), None)

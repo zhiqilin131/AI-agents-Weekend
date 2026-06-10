@@ -69,11 +69,15 @@ from foresight_x.simulation.evaluator import evaluate_options
 from foresight_x.simulation.feature_merge import ensure_option_tags
 from foresight_x.simulation.future_simulator import simulate_futures
 from foresight_x.simulation.scoring_clarify_gate import (
+    MAX_ELICITATION_ROUNDS,
     MAX_GATE_QUESTIONS,
+    elicitation_round_count,
     recommendation_is_provisional,
     scoring_clarification_attempted,
     should_pause_pipeline_for_scoring_clarify,
 )
+from foresight_x.simulation.comparative_elicitation import MAX_COMPARATIVE_QUESTIONS
+from foresight_x.simulation.elicitation_service import merge_elicitation_answers, record_elicitation_round
 
 _PIPELINE_STAGE_ORDER = ["enhance", "perceive", "retrieve", "infer", "simulate", "evaluate", "finalize"]
 _GRAPH_DISPLAY_STOPWORDS = {
@@ -117,9 +121,12 @@ def _build_scoring_clarify_resume_partial(
     options: list[Option],
     futures: list[SimulatedFuture],
     feature_audit_blob: dict[str, Any] | None,
+    scoring_clarification: dict[str, str] | None = None,
+    comparative_answers: dict[str, list[str]] | None = None,
+    scoring_elicitation_rounds: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Snapshot for resuming from ``evaluate`` after pre-recommendation scoring clarify."""
-    return {
+    blob: dict[str, Any] = {
         "decision_id": decision_id,
         "timestamp": timestamp,
         "original_user_input": original_user_input,
@@ -132,6 +139,13 @@ def _build_scoring_clarify_resume_partial(
         "futures": [f.model_dump(mode="json") for f in futures],
         "feature_audit": feature_audit_blob,
     }
+    if scoring_clarification:
+        blob["scoring_clarification"] = scoring_clarification
+    if comparative_answers:
+        blob["comparative_answers"] = comparative_answers
+    if scoring_elicitation_rounds:
+        blob["scoring_elicitation_rounds"] = scoring_elicitation_rounds
+    return blob
 
 
 def _stage_index(stage: str | None) -> int:
@@ -457,9 +471,13 @@ def _augment_memory_with_graph(
             surfaced_ids = {p.decision_id for p in surfaced}
             ranked = surfaced + [p for p in ranked if p.decision_id not in surfaced_ids]
         top_line = ", ".join(f"{n.label} ({n.score:.2f})" for n in display_influence.top_nodes[:4])
-        merged_patterns = list(memory_bundle.behavioral_patterns)
+        # Drop stale graph-influence lines accumulated from vector retrieval of old traces;
+        # always prepend the current run's graph signal so UI/reasons stay in sync.
+        merged_patterns = [
+            p for p in memory_bundle.behavioral_patterns if not p.strip().lower().startswith("graph influence:")
+        ]
         if top_line:
-            merged_patterns.append(f"Graph influence: {top_line}")
+            merged_patterns.insert(0, f"Graph influence: {top_line}")
         return memory_bundle.model_copy(
             update={
                 "similar_past_decisions": ranked,
@@ -502,6 +520,44 @@ def _graph_retrieval_hints(influence: GraphInfluenceBundle | None) -> tuple[list
     return ids, score_by_id
 
 
+def _build_scoring_clarify_payload(feature_audit, *, elicitation_round: int = 0) -> dict[str, Any]:
+    gate_questions = feature_audit.clarify_questions[:MAX_GATE_QUESTIONS]
+    comparative = feature_audit.comparative_questions[:MAX_COMPARATIVE_QUESTIONS]
+    payload: dict[str, Any] = {
+        "needs_scoring_clarification": True,
+        "grounded_feature_coverage": feature_audit.grounded_feature_coverage,
+        "cross_option_discrimination": feature_audit.cross_option_discrimination,
+        "clarify_questions": [q.model_dump(mode="json") for q in gate_questions],
+        "comparative_questions": [q.model_dump(mode="json") for q in comparative],
+        "missing_fields": feature_audit.missing_fields,
+        "elicitation_round": elicitation_round,
+        "max_elicitation_rounds": MAX_ELICITATION_ROUNDS,
+    }
+    if feature_audit.alignment_report is not None:
+        payload["alignment_report"] = feature_audit.alignment_report.model_dump(mode="json")
+    return payload
+
+
+def _resolve_scoring_clarification(
+    options: list[Option],
+    scoring_clarification: dict[str, str] | None,
+    comparative_answers: dict[str, list[str]] | None,
+    existing_clarify: dict[str, str] | None = None,
+    existing_cmp: dict[str, list[str]] | None = None,
+) -> tuple[dict[str, str] | None, dict[str, list[str]], list[str]]:
+    if not scoring_clarification and not comparative_answers and not existing_clarify and not existing_cmp:
+        return scoring_clarification, comparative_answers or {}, []
+    merged, valid_cmp, errors = merge_elicitation_answers(
+        scoring_clarification=scoring_clarification,
+        comparative_answers=comparative_answers,
+        existing_clarification=existing_clarify,
+        option_ids={o.option_id for o in options},
+    )
+    full_cmp = dict(existing_cmp or {})
+    full_cmp.update(valid_cmp)
+    return merged or None, full_cmp, errors
+
+
 def step_infer(
     user_state: UserState,
     memory_bundle: MemoryBundle,
@@ -535,7 +591,9 @@ def finalize_trace(
     degradations: list[Degradation] | None = None,
     feature_audit: dict[str, Any] | None = None,
     scoring_clarification: dict[str, str] | None = None,
+    comparative_answers: dict[str, list[str]] | None = None,
     scoring_recommendation_provisional: bool = False,
+    scoring_elicitation_rounds: list[dict] | None = None,
 ) -> DecisionTrace:
     from foresight_x.config import load_settings
     from foresight_x.decision.weight_audit import build_weight_audit, composite_map
@@ -593,6 +651,8 @@ def finalize_trace(
         },
         feature_audit=feature_audit,
         scoring_clarification=scoring_clarification,
+        comparative_answers=comparative_answers,
+        scoring_elicitation_rounds=scoring_elicitation_rounds,
         scoring_recommendation_provisional=scoring_recommendation_provisional,
         weight_audit=weight_audit,
     )
@@ -626,6 +686,7 @@ def iter_pipeline_events(
     resume_from_stage: str | None = None,
     resume_partial: dict[str, Any] | None = None,
     scoring_clarification: dict[str, str] | None = None,
+    comparative_answers: dict[str, list[str]] | None = None,
     scoring_clarification_skip: bool = False,
     pause_for_scoring_clarify: bool = True,
     confirmed_candidates: list[dict[str, str]] | None = None,
@@ -778,11 +839,37 @@ def iter_pipeline_events(
         evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
         feature_audit_blob: dict[str, Any] | None = None
         feature_audit = None
+        prev_clarify = resume_partial.get("scoring_clarification") if isinstance(resume_partial, dict) else None
+        prev_cmp = resume_partial.get("comparative_answers") if isinstance(resume_partial, dict) else None
+        prev_rounds = resume_partial.get("scoring_elicitation_rounds") if isinstance(resume_partial, dict) else None
+        if not isinstance(prev_clarify, dict):
+            prev_clarify = None
+        if not isinstance(prev_cmp, dict):
+            prev_cmp = None
+        if not isinstance(prev_rounds, list):
+            prev_rounds = []
+        coverage_before = 0.0
+        if isinstance(resume_partial, dict) and isinstance(resume_partial.get("feature_audit"), dict):
+            coverage_before = float(resume_partial["feature_audit"].get("grounded_feature_coverage") or 0.0)
+        effective_clarify: dict[str, str] | None = None
+        valid_cmp: dict[str, list[str]] = {}
+        merge_errors: list[str] = []
+        elicitation_rounds: list[dict] = list(prev_rounds)
         if resume_partial and isinstance(resume_partial.get("feature_audit"), dict):
             feature_audit_blob = resume_partial["feature_audit"]
         if resume_idx <= 5 or evaluations is None:
             yield {"event": "stage", "stage": "evaluate"}
             t_stage = time.perf_counter()
+            effective_clarify, valid_cmp, merge_errors = _resolve_scoring_clarification(
+                options,
+                scoring_clarification,
+                comparative_answers,
+                existing_clarify=prev_clarify,
+                existing_cmp=prev_cmp,
+            )
+            if merge_errors:
+                yield {"event": "elicitation_validation", "errors": merge_errors}
+            submitted_this_round = bool(scoring_clarification) or bool(comparative_answers)
             evaluations, eval_provider, deg_eval, feature_audit, options = safe_evaluate_options(
                 futures,
                 user_state,
@@ -790,11 +877,26 @@ def iter_pipeline_events(
                 options=options,
                 evidence=evidence_bundle,
                 memory=memory_bundle,
-                scoring_clarification=scoring_clarification,
+                scoring_clarification=effective_clarify,
                 confirmed_candidates=confirmed_candidates,
+                comparative_answers=valid_cmp or None,
             )
             if feature_audit is not None:
                 feature_audit_blob = feature_audit.model_dump(mode="json")
+                if submitted_this_round:
+                    elicitation_rounds = record_elicitation_round(
+                        elicitation_rounds,
+                        comparative_answers={
+                            k: v
+                            for k, v in (valid_cmp or {}).items()
+                            if k not in (prev_cmp or {})
+                        } or dict(comparative_answers or {}),
+                        scoring_clarification=dict(scoring_clarification or {}),
+                        coverage_before=coverage_before,
+                        coverage_after=feature_audit.grounded_feature_coverage,
+                        discrimination_after=feature_audit.cross_option_discrimination,
+                        source="gate",
+                    )
             per_stage_latency_ms["evaluate"] = int(round((time.perf_counter() - t_stage) * 1000.0))
             provider_per_stage["evaluate"] = eval_provider
             if deg_eval:
@@ -808,24 +910,29 @@ def iter_pipeline_events(
                 },
             }
             if feature_audit and feature_audit.needs_scoring_clarification:
-                gate_questions = feature_audit.clarify_questions[:MAX_GATE_QUESTIONS]
-                clarify_payload = {
-                    "needs_scoring_clarification": True,
-                    "grounded_feature_coverage": feature_audit.grounded_feature_coverage,
-                    "clarify_questions": [q.model_dump(mode="json") for q in gate_questions],
-                    "missing_fields": feature_audit.missing_fields,
-                }
+                rounds_count = elicitation_round_count(elicitation_rounds)
+                clarify_payload = _build_scoring_clarify_payload(
+                    feature_audit,
+                    elicitation_round=rounds_count,
+                )
                 yield {"event": "scoring_clarify", "data": clarify_payload}
+                if feature_audit.alignment_report and feature_audit.alignment_report.constraint_violations:
+                    yield {
+                        "event": "alignment_warning",
+                        "data": feature_audit.alignment_report.model_dump(mode="json"),
+                    }
                 clarify_attempted = scoring_clarification_attempted(
                     resume_from_stage,
-                    scoring_clarification,
+                    effective_clarify,
                     scoring_clarification_skip,
+                    comparative_answers=valid_cmp or comparative_answers,
                 )
                 allow_provisional = scoring_clarification_skip or not pause_for_scoring_clarify
                 if should_pause_pipeline_for_scoring_clarify(
                     feature_audit,
-                    clarification_attempted=clarify_attempted,
                     allow_provisional=allow_provisional,
+                    scoring_clarification_skip=scoring_clarification_skip,
+                    elicitation_rounds=rounds_count,
                 ):
                     resume_blob = _build_scoring_clarify_resume_partial(
                         decision_id=did,
@@ -839,6 +946,9 @@ def iter_pipeline_events(
                         options=options,
                         futures=futures,
                         feature_audit_blob=feature_audit_blob,
+                        scoring_clarification=effective_clarify,
+                        comparative_answers=valid_cmp or None,
+                        scoring_elicitation_rounds=elicitation_rounds,
                     )
                     yield {
                         "event": "awaiting_scoring_clarify",
@@ -847,20 +957,29 @@ def iter_pipeline_events(
                             "decision_id": did,
                             "resume_from_stage": "evaluate",
                             "resume_partial": resume_blob,
+                            "scoring_clarification": effective_clarify,
+                            "comparative_answers": valid_cmp or None,
+                            "scoring_elicitation_rounds": elicitation_rounds,
+                            "validation_errors": merge_errors or None,
                         },
                     }
                     return
+        else:
+            effective_clarify = prev_clarify
+            valid_cmp = dict(prev_cmp or {})
 
         clarify_attempted = scoring_clarification_attempted(
             resume_from_stage,
-            scoring_clarification,
+            effective_clarify,
             scoring_clarification_skip,
+            comparative_answers=valid_cmp or None,
         )
         stream_allow_provisional = scoring_clarification_skip or not pause_for_scoring_clarify
         provisional = recommendation_is_provisional(
             feature_audit,
             allow_provisional=stream_allow_provisional,
             clarification_attempted=clarify_attempted,
+            elicitation_rounds=elicitation_round_count(elicitation_rounds),
         )
 
         yield {"event": "stage", "stage": "finalize"}
@@ -896,8 +1015,10 @@ def iter_pipeline_events(
             runtime_context=runtime_context,
             degradations=degradations,
             feature_audit=feature_audit_blob,
-            scoring_clarification=scoring_clarification,
+            scoring_clarification=effective_clarify,
+            comparative_answers=valid_cmp or None,
             scoring_recommendation_provisional=provisional,
+            scoring_elicitation_rounds=elicitation_rounds or None,
         )
         per_stage_latency_ms["finalize"] = int(round((time.perf_counter() - t_finalize) * 1000.0))
         provider_per_stage["finalize"] = _provider_label_from_llm(ctx.llm) or "unknown"
@@ -952,6 +1073,7 @@ def run_pipeline(
     resume_from_stage: str | None = None,
     resume_partial: dict[str, Any] | None = None,
     scoring_clarification: dict[str, str] | None = None,
+    comparative_answers: dict[str, list[str]] | None = None,
     scoring_clarification_skip: bool = False,
     confirmed_candidates: list[dict[str, str]] | None = None,
 ) -> DecisionTrace:
@@ -1043,10 +1165,26 @@ def run_pipeline(
         evaluations = _resume_model_list(OptionEvaluation, resume_partial, "evaluations")
         feature_audit_blob: dict[str, Any] | None = None
         feature_audit = None
+        prev_clarify = resume_partial.get("scoring_clarification") if isinstance(resume_partial, dict) else None
+        prev_cmp = resume_partial.get("comparative_answers") if isinstance(resume_partial, dict) else None
+        if not isinstance(prev_clarify, dict):
+            prev_clarify = None
+        if not isinstance(prev_cmp, dict):
+            prev_cmp = None
+        effective_clarify: dict[str, str] | None = prev_clarify
+        valid_cmp: dict[str, list[str]] = dict(prev_cmp or {})
+        elicitation_rounds: list[dict] = []
         if resume_partial and isinstance(resume_partial.get("feature_audit"), dict):
             feature_audit_blob = resume_partial["feature_audit"]
         if resume_idx <= 5 or evaluations is None:
             t_stage = time.perf_counter()
+            effective_clarify, valid_cmp, _ = _resolve_scoring_clarification(
+                options,
+                scoring_clarification,
+                comparative_answers,
+                existing_clarify=prev_clarify,
+                existing_cmp=prev_cmp,
+            )
             evaluations, eval_provider, _, feature_audit, options = safe_evaluate_options(
                 futures,
                 user_state,
@@ -1054,8 +1192,9 @@ def run_pipeline(
                 options=options,
                 evidence=evidence_bundle,
                 memory=memory_bundle,
-                scoring_clarification=scoring_clarification,
+                scoring_clarification=effective_clarify,
                 confirmed_candidates=confirmed_candidates,
+                comparative_answers=valid_cmp or None,
             )
             if feature_audit is not None:
                 feature_audit_blob = feature_audit.model_dump(mode="json")
@@ -1064,13 +1203,15 @@ def run_pipeline(
 
         clarify_attempted = scoring_clarification_attempted(
             resume_from_stage,
-            scoring_clarification,
+            effective_clarify,
             scoring_clarification_skip,
+            comparative_answers=valid_cmp or None,
         )
         provisional = recommendation_is_provisional(
             feature_audit,
             allow_provisional=scoring_clarification_skip,
             clarification_attempted=clarify_attempted,
+            elicitation_rounds=elicitation_round_count(elicitation_rounds),
         )
 
         runtime_context = RuntimeContext(
@@ -1105,8 +1246,10 @@ def run_pipeline(
             runtime_context=runtime_context,
             degradations=degradations,
             feature_audit=feature_audit_blob,
-            scoring_clarification=scoring_clarification,
+            scoring_clarification=effective_clarify,
+            comparative_answers=valid_cmp or None,
             scoring_recommendation_provisional=provisional,
+            scoring_elicitation_rounds=elicitation_rounds or None,
         )
         per_stage_latency_ms["finalize"] = int(round((time.perf_counter() - t_finalize) * 1000.0))
         provider_per_stage["finalize"] = _provider_label_from_llm(ctx.llm) or "unknown"

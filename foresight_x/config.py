@@ -429,6 +429,23 @@ class Settings(BaseSettings):
         le=1.0,
         validation_alias=AliasChoices("graph_min_influence_score", "GRAPH_MIN_INFLUENCE_SCORE"),
     )
+    #: Graph memory backend: "auto" prefers Graphiti when installed + OPENAI_API_KEY set, else local PPR.
+    graph_backend: str = Field(
+        default="auto",
+        validation_alias=AliasChoices("graph_backend", "GRAPH_BACKEND"),
+    )
+    #: Hard timeout for Graphiti hybrid search before falling back to the local PPR graph (seconds).
+    graphiti_search_timeout_s: float = Field(
+        default=8.0,
+        ge=1.0,
+        le=60.0,
+        validation_alias=AliasChoices("graphiti_search_timeout_s", "GRAPHITI_SEARCH_TIMEOUT_S"),
+    )
+    #: Enable background episode ingestion into Graphiti (LLM entity extraction off the request path).
+    graphiti_ingest_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("graphiti_ingest_enabled", "GRAPHITI_INGEST_ENABLED"),
+    )
     #: If > 0, periodically prune follow-up notify state files (seconds between runs; 0 disables).
     followup_maintenance_interval_sec: int = Field(
         default=0,
@@ -592,6 +609,10 @@ class Settings(BaseSettings):
     @property
     def graph_dir(self) -> Path:
         return self.foresight_data_dir / "graph"
+
+    @property
+    def graphiti_dir(self) -> Path:
+        return self.foresight_data_dir / "graphiti"
 
     @property
     def cors_origins_list(self) -> list[str]:

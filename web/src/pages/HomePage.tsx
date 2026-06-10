@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import type { ClarifyQuestion } from '../app/components/ClarifyDialog';
 import { ScoringClarifyPanel } from '../app/components/report/ScoringClarifyPanel';
-import type { ScoringClarifyQuestion } from '../utils/featureAudit';
+import type { ElicitationSubmitPayload, ScoringClarifyQuestion, FeatureAudit } from '../utils/featureAudit';
 import { ThreadActionDock } from '../app/components/shadow/ThreadActionDock';
 import { buildClarificationPendingAction, type PendingAction } from '../app/components/shadow/pendingActionTypes';
 import { InputPanel } from '../app/components/InputPanel';
@@ -55,13 +55,18 @@ type StreamOpts = {
   resume_partial?: Record<string, unknown>;
   decision_id?: string;
   scoring_clarification?: Record<string, string>;
+  comparative_answers?: Record<string, string[]>;
   scoring_clarification_skip?: boolean;
 };
 
 type ScoringClarifyPending = {
   decisionId: string;
-  questions: ScoringClarifyQuestion[];
+  levelQuestions: ScoringClarifyQuestion[];
+  comparativeQuestions: ScoringClarifyQuestion[];
   coverage?: number;
+  discrimination?: number;
+  audit?: FeatureAudit | null;
+  optionNames: Record<string, string>;
   resumePartial: Record<string, unknown>;
 };
 
@@ -358,6 +363,9 @@ export default function HomePage() {
         if (opts?.scoring_clarification && Object.keys(opts.scoring_clarification).length > 0) {
           body.scoring_clarification = opts.scoring_clarification;
         }
+        if (opts?.comparative_answers && Object.keys(opts.comparative_answers).length > 0) {
+          body.comparative_answers = opts.comparative_answers;
+        }
         if (opts?.scoring_clarification_skip) {
           body.scoring_clarification_skip = true;
         }
@@ -449,8 +457,11 @@ export default function HomePage() {
               gate.resume_partial && typeof gate.resume_partial === 'object'
                 ? (gate.resume_partial as Record<string, unknown>)
                 : retrySnapshotRef.current;
-            const questions = Array.isArray(gate.clarify_questions)
+            const levelQuestions = Array.isArray(gate.clarify_questions)
               ? (gate.clarify_questions as ScoringClarifyQuestion[])
+              : [];
+            const comparativeQuestions = Array.isArray(gate.comparative_questions)
+              ? (gate.comparative_questions as ScoringClarifyQuestion[])
               : [];
             const decisionId =
               typeof gate.decision_id === 'string'
@@ -458,14 +469,48 @@ export default function HomePage() {
                 : typeof streamTrace?.decision_id === 'string'
                   ? streamTrace.decision_id
                   : '';
-            if (resumePartial && decisionId && questions.length) {
+            const options = Array.isArray(resumePartial?.options)
+              ? (resumePartial.options as Array<{ option_id?: string; name?: string }>)
+              : [];
+            const optionNames: Record<string, string> = {};
+            for (const o of options) {
+              if (o.option_id) optionNames[o.option_id] = o.name ?? o.option_id;
+            }
+            const auditFromGate: FeatureAudit = {
+              ...(typeof streamTrace?.feature_audit === 'object'
+                ? (streamTrace.feature_audit as FeatureAudit)
+                : {}),
+              clarify_questions: levelQuestions,
+              comparative_questions: comparativeQuestions,
+              grounded_feature_coverage:
+                typeof gate.grounded_feature_coverage === 'number'
+                  ? gate.grounded_feature_coverage
+                  : undefined,
+              cross_option_discrimination:
+                typeof gate.cross_option_discrimination === 'number'
+                  ? gate.cross_option_discrimination
+                  : undefined,
+              alignment_report:
+                gate.alignment_report && typeof gate.alignment_report === 'object'
+                  ? (gate.alignment_report as FeatureAudit['alignment_report'])
+                  : undefined,
+              needs_scoring_clarification: true,
+            };
+            if (resumePartial && decisionId && (levelQuestions.length || comparativeQuestions.length)) {
               setScoringClarifyPending({
                 decisionId,
-                questions,
+                levelQuestions,
+                comparativeQuestions,
                 coverage:
                   typeof gate.grounded_feature_coverage === 'number'
                     ? gate.grounded_feature_coverage
                     : undefined,
+                discrimination:
+                  typeof gate.cross_option_discrimination === 'number'
+                    ? gate.cross_option_discrimination
+                    : undefined,
+                audit: auditFromGate,
+                optionNames,
                 resumePartial,
               });
               streamTrace = mergeStreamingPartial(streamTrace, resumePartial);
@@ -573,7 +618,7 @@ export default function HomePage() {
   );
 
   const handleScoringClarifyApply = useCallback(
-    (answers: Record<string, string>) => {
+    (payload: ElicitationSubmitPayload) => {
       if (!scoringClarifyPending) return;
       const pending = scoringClarifyPending;
       setScoringClarifyPending(null);
@@ -581,7 +626,8 @@ export default function HomePage() {
         resume_from_stage: 'evaluate',
         resume_partial: pending.resumePartial,
         decision_id: pending.decisionId,
-        scoring_clarification: answers,
+        scoring_clarification: payload.scoring_clarification,
+        comparative_answers: payload.comparative_answers,
       });
     },
     [scoringClarifyPending, runPipelineStream],
@@ -856,8 +902,12 @@ export default function HomePage() {
             <div className="mb-3">
               <ScoringClarifyPanel
                 variant="gate"
-                questions={scoringClarifyPending.questions}
+                levelQuestions={scoringClarifyPending.levelQuestions}
+                comparativeQuestions={scoringClarifyPending.comparativeQuestions}
                 coverage={scoringClarifyPending.coverage}
+                discrimination={scoringClarifyPending.discrimination}
+                audit={scoringClarifyPending.audit}
+                optionNames={scoringClarifyPending.optionNames}
                 busy={state === 'loading'}
                 onApply={handleScoringClarifyApply}
                 onSkip={handleScoringClarifySkip}

@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 from foresight_x.schemas import Option, OptionTradeoffTags
+from foresight_x.simulation.feature_registry import level_keys
 from foresight_x.simulation.feature_merge import level_from_clarify_answer
 from foresight_x.simulation.feature_schemas import FeatureCandidate, FeatureLevel
 
-LEVEL_KEYS = (
-    "time_cost_level",
-    "money_cost_level",
-    "stress_load_level",
-    "workload_level",
-    "upside_potential_level",
-    "downside_severity_level",
-    "goal_alignment_level",
-)
+LEVEL_KEYS = level_keys()
 
 
 def apply_scoring_clarification_to_options(

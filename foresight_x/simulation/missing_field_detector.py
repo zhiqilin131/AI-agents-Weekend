@@ -2,35 +2,17 @@
 
 from __future__ import annotations
 
+from foresight_x.simulation.feature_registry import (
+    FEATURE_LABELS,
+    QUESTION_TEMPLATES,
+    feature_label,
+)
 from foresight_x.simulation.feature_schemas import (
     CRITICAL_FEATURE_KEYS,
     FeatureAuditBundle,
-    FeatureLevel,
     OptionFeatureVector,
     ScoringClarifyQuestion,
 )
-
-FEATURE_LABELS: dict[str, str] = {
-    "time_cost_level": "time cost",
-    "money_cost_level": "money cost",
-    "stress_load_level": "stress load",
-    "workload_level": "workload",
-    "reversibility_level": "reversibility",
-    "downside_severity_level": "downside severity",
-    "upside_potential_level": "upside potential",
-    "goal_alignment_level": "goal alignment",
-}
-
-QUESTION_TEMPLATES: dict[str, str] = {
-    "time_cost_level": "How much time would {option_name} realistically require?",
-    "money_cost_level": "Would {option_name} materially change your money situation?",
-    "stress_load_level": "How stressful would {option_name} be for you?",
-    "workload_level": "How heavy is the workload for {option_name}?",
-    "reversibility_level": "How easy would it be to reverse {option_name} if it goes wrong?",
-    "downside_severity_level": "If {option_name} fails, how bad could the downside be?",
-    "upside_potential_level": "How much upside does {option_name} offer toward your goals?",
-    "goal_alignment_level": "How well does {option_name} fit your stated goals?",
-}
 
 COVERAGE_CLARIFY_THRESHOLD = 0.55
 MAX_QUESTIONS_PER_RUN = 6
@@ -48,11 +30,35 @@ def _missing_unknown_keys(fv: OptionFeatureVector) -> list[str]:
     return missing
 
 
+def _field_answered(
+    option_id: str,
+    feature_key: str,
+    *,
+    existing_clarification: dict[str, str] | None,
+) -> bool:
+    if not existing_clarification:
+        return False
+    return f"{option_id}:{feature_key}" in existing_clarification
+
+
+def _comparative_answered(
+    feature_key: str,
+    *,
+    existing_comparative: dict[str, list[str]] | None,
+) -> bool:
+    if not existing_comparative:
+        return False
+    return f"cmp:{feature_key}:rank" in existing_comparative
+
+
 def build_clarify_questions(
     feature_vectors: list[OptionFeatureVector],
     options_by_id: dict[str, str],
+    *,
+    existing_clarification: dict[str, str] | None = None,
+    existing_comparative: dict[str, list[str]] | None = None,
 ) -> list[ScoringClarifyQuestion]:
-    """One targeted question per unknown critical feature (cap per run)."""
+    """One targeted question per unknown critical feature (cap per run), excluding answered."""
     questions: list[ScoringClarifyQuestion] = []
     seen: set[str] = set()
     for fv in feature_vectors:
@@ -61,13 +67,17 @@ def build_clarify_questions(
             qkey = f"{fv.option_id}:{key}"
             if qkey in seen:
                 continue
+            if _field_answered(fv.option_id, key, existing_clarification=existing_clarification):
+                continue
+            if _comparative_answered(key, existing_comparative=existing_comparative):
+                continue
             seen.add(qkey)
             tmpl = QUESTION_TEMPLATES.get(key, "What is the {label} for {option_name}?")
-            label = FEATURE_LABELS.get(key, key)
+            label = feature_label(key)
             prompt = tmpl.format(option_name=option_name, label=label)
             questions.append(
                 ScoringClarifyQuestion(
-                    id=f"{fv.option_id}:{key}",
+                    id=qkey,
                     feature_key=key,
                     option_id=fv.option_id,
                     prompt=prompt,
@@ -91,9 +101,10 @@ def collect_missing_fields(feature_vectors: list[OptionFeatureVector]) -> list[s
 
 
 def needs_scoring_clarification(coverage: float, feature_vectors: list[OptionFeatureVector]) -> bool:
-    if coverage >= COVERAGE_CLARIFY_THRESHOLD:
-        return False
-    return any(_missing_unknown_keys(fv) for fv in feature_vectors)
+    from foresight_x.simulation.alignment_engine import cross_option_discrimination, needs_elicitation
+
+    disc = cross_option_discrimination(feature_vectors)
+    return needs_elicitation(coverage, feature_vectors, discrimination=disc)
 
 
 def enrich_audit_bundle(
@@ -102,13 +113,25 @@ def enrich_audit_bundle(
     *,
     evaluations: list | None = None,
     risk_posture: str | None = None,
+    options: list | None = None,
+    user_state=None,
+    existing_clarification: dict[str, str] | None = None,
+    existing_comparative: dict[str, list[str]] | None = None,
+    tag_quality_reports: list | None = None,
 ) -> FeatureAuditBundle:
-    from foresight_x.simulation.feature_merge import grounded_coverage
+    from foresight_x.simulation.alignment_engine import build_alignment_report, cross_option_discrimination
     from foresight_x.simulation.clarify_voi import rank_questions_by_voi
+    from foresight_x.simulation.comparative_elicitation import build_comparative_questions
+    from foresight_x.simulation.feature_merge import grounded_coverage
 
     coverage = grounded_coverage(audit.feature_vectors)
     missing = collect_missing_fields(audit.feature_vectors)
-    questions = build_clarify_questions(audit.feature_vectors, options_by_id)
+    questions = build_clarify_questions(
+        audit.feature_vectors,
+        options_by_id,
+        existing_clarification=existing_clarification,
+        existing_comparative=existing_comparative,
+    )
     if evaluations and questions:
         questions = rank_questions_by_voi(
             questions,
@@ -117,12 +140,58 @@ def enrich_audit_bundle(
             risk_posture=risk_posture,
         )
     voi_order = [q.id for q in questions]
+
+    disc = cross_option_discrimination(audit.feature_vectors)
+    comparative: list = []
+    if options and len(options) >= 2:
+        comparative_raw = build_comparative_questions(
+            options,
+            audit.feature_vectors,
+            existing_comparative=existing_comparative,
+        )
+        comparative = [
+            q.model_copy(update={"option_labels": {oid: options_by_id.get(oid, oid) for oid in q.choices}})
+            for q in comparative_raw
+        ]
+
+    alignment = None
+    if user_state is not None:
+        alignment = build_alignment_report(
+            user_state,
+            audit.feature_vectors,
+            evaluations,
+            risk_posture=risk_posture,
+            coverage=coverage,
+            tag_quality_reports=tag_quality_reports or audit.tag_quality_reports,
+            existing_clarification=existing_clarification,
+            existing_comparative=existing_comparative,
+        )
+
+    has_questions = bool(questions or comparative)
+    needs = needs_scoring_clarification(coverage, audit.feature_vectors) and has_questions
+
     return audit.model_copy(
         update={
             "grounded_feature_coverage": round(coverage, 3),
+            "cross_option_discrimination": round(disc, 3),
             "missing_fields": missing,
             "clarify_questions": questions,
-            "needs_scoring_clarification": needs_scoring_clarification(coverage, audit.feature_vectors),
+            "comparative_questions": comparative,
+            "needs_scoring_clarification": needs,
             "voi_question_order": voi_order,
+            "alignment_report": alignment,
         }
     )
+
+
+# Backward-compatible re-export for modules that import FEATURE_LABELS from here.
+__all__ = [
+    "COVERAGE_CLARIFY_THRESHOLD",
+    "FEATURE_LABELS",
+    "MAX_QUESTIONS_PER_RUN",
+    "QUESTION_TEMPLATES",
+    "build_clarify_questions",
+    "collect_missing_fields",
+    "enrich_audit_bundle",
+    "needs_scoring_clarification",
+]

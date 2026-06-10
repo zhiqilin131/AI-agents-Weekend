@@ -18,6 +18,7 @@ FeatureSourceType = Literal[
     "tool",
     "llm_inferred",
     "scoring_clarification",
+    "comparative_elicitation",
 ]
 FutureScoreUse = Literal["score_eligible", "explanation_only", "needs_more_info", "discard"]
 OptionTagSource = Literal["template", "llm_tagging", "user", "rule"]
@@ -100,9 +101,43 @@ class ScoringClarifyQuestion(BaseModel):
     feature_key: str
     option_id: str | None = None
     prompt: str
-    answer_type: Literal["level", "yes_no", "free_text"] = "level"
+    answer_type: Literal["level", "yes_no", "free_text", "rank"] = "level"
     choices: list[str] = Field(default_factory=lambda: ["low", "medium", "high", "not sure"])
     voi_score: float = Field(default=0.0, ge=0.0, description="Approximate value-of-information for ranking.")
+    option_labels: dict[str, str] = Field(
+        default_factory=dict,
+        description="option_id → display name for rank questions",
+    )
+
+
+class AlignmentViolation(BaseModel):
+    type: Literal["constraint_conflict", "comparative_inconsistent", "tag_evidence_conflict"] = "constraint_conflict"
+    option_id: str = ""
+    feature_key: str = ""
+    user_constraint_ref: str = ""
+    severity: Literal["blocker", "warning"] = "warning"
+    message: str = ""
+
+
+class AlignmentReport(BaseModel):
+    cross_option_discrimination: float = Field(default=0.0, ge=0.0, le=1.0)
+    constraint_violations: list[AlignmentViolation] = Field(default_factory=list)
+    near_duplicate_options: bool = False
+    clarity_test_passed: bool = False
+    reconcile_required: bool = False
+    coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    needs_comparative_elicitation: bool = False
+
+
+class ElicitationRound(BaseModel):
+    round_id: str = ""
+    timestamp: str = ""
+    comparative_answers: dict[str, list[str]] = Field(default_factory=dict)
+    scoring_clarification: dict[str, str] = Field(default_factory=dict)
+    coverage_before: float = Field(default=0.0, ge=0.0, le=1.0)
+    coverage_after: float = Field(default=0.0, ge=0.0, le=1.0)
+    discrimination_after: float = Field(default=0.0, ge=0.0, le=1.0)
+    source: Literal["gate", "refine", "rescore"] = "gate"
 
 
 class TagQualityReport(BaseModel):
@@ -119,7 +154,10 @@ class FeatureAuditBundle(BaseModel):
     candidates: list[FeatureCandidate] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
     clarify_questions: list[ScoringClarifyQuestion] = Field(default_factory=list)
+    comparative_questions: list[ScoringClarifyQuestion] = Field(default_factory=list)
     grounded_feature_coverage: float = Field(ge=0.0, le=1.0, default=0.0)
+    cross_option_discrimination: float = Field(ge=0.0, le=1.0, default=0.0)
     needs_scoring_clarification: bool = False
     tag_quality_reports: list[TagQualityReport] = Field(default_factory=list)
     voi_question_order: list[str] = Field(default_factory=list)
+    alignment_report: AlignmentReport | None = None

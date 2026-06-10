@@ -1531,6 +1531,11 @@ export function ShadowChatShell({
         isStreaming={reportStream.isStreaming}
         error={reportStream.error}
         degradedWarnings={reportStream.degradedWarnings}
+        scoringClarifyPending={reportStream.scoringClarifyPending}
+        gatePrefill={reportStream.gatePrefill}
+        onScoringClarifyApply={reportStream.applyScoringClarify}
+        onScoringClarifySkip={reportStream.skipScoringClarify}
+        onTraceRescored={reportStream.updateTrace}
         onRetryStage={() => {
           void reportStream.retryFromCurrentStage();
         }}

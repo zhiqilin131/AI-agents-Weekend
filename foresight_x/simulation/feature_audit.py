@@ -34,6 +34,7 @@ def build_feature_audit(
     confirmed_candidates: list[dict[str, str]] | None = None,
     evaluations: list[OptionEvaluation] | None = None,
     risk_posture: str | None = None,
+    comparative_answers: dict[str, list[str]] | None = None,
 ) -> FeatureAuditBundle:
     opts = ensure_option_tags(list(options))
     opts = apply_scoring_clarification_to_options(opts, scoring_clarification)
@@ -57,6 +58,11 @@ def build_feature_audit(
         names,
         evaluations=evaluations,
         risk_posture=risk_posture,
+        options=opts,
+        user_state=user_state,
+        existing_clarification=scoring_clarification,
+        existing_comparative=comparative_answers,
+        tag_quality_reports=tag_reports,
     )
 
 
@@ -69,6 +75,7 @@ def evaluate_with_audit(
     scoring_clarification: dict[str, str] | None = None,
     confirmed_candidates: list[dict[str, str]] | None = None,
     risk_posture: str | None = None,
+    comparative_answers: dict[str, list[str]] | None = None,
 ) -> tuple[list[OptionEvaluation], FeatureAuditBundle, list[Option]]:
     opts = ensure_option_tags(list(options))
     opts = apply_scoring_clarification_to_options(opts, scoring_clarification)
@@ -94,5 +101,10 @@ def evaluate_with_audit(
         names,
         evaluations=evaluations,
         risk_posture=risk_posture,
+        options=opts,
+        user_state=user_state,
+        existing_clarification=scoring_clarification,
+        existing_comparative=comparative_answers,
+        tag_quality_reports=tag_reports,
     )
     return evaluations, audit, opts
