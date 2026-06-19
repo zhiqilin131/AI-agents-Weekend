@@ -73,8 +73,6 @@ export function RecommendationCard({
   useEffect(() => {
     setReasoningTypewriterDone(false);
   }, [reasoning, isStreaming]);
-  /** After a streaming phase, fire one auto read-aloud when the card settles (same gesture chain as “generate report” if primed). */
-  const autoSpokenAfterIdleRef = useRef(false);
 
   /** Report view often mounts while streaming; refetch slime when the card settles so colors/voice match Profile. */
   useEffect(() => {
@@ -196,17 +194,6 @@ export function RecommendationCard({
     },
     [cleanupCloudAudio, playCloudBlob, slimeProfile.voice, speechText],
   );
-
-  useEffect(() => {
-    if (isStreaming) {
-      autoSpokenAfterIdleRef.current = false;
-      return;
-    }
-    if (slimeProfile.voice?.enabled === false || !speechText.trim()) return;
-    if (autoSpokenAfterIdleRef.current) return;
-    autoSpokenAfterIdleRef.current = true;
-    startCloudReadAloud();
-  }, [isStreaming, speechText, slimeProfile.voice?.enabled, startCloudReadAloud]);
 
   useEffect(
     () => () => {
