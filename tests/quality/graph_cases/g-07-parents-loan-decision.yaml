@@ -1,0 +1,17 @@
+id: g-07-parents-loan-decision
+domain: finance
+query: "Parents offered an interest-free loan for car repair. Should I take it or use credit?"
+decision_type: finance
+goals: ["financial security", "honesty with family"]
+mock_top_nodes:
+  - {label: "parent loan", score: 0.7}
+  - {label: "car repair", score: 0.6}
+  - {label: "repayment plan for parents", score: 0.55}
+decoy_nodes:
+  - {label: "Salmon dinner", score: 0.98}
+  - {label: "necklace gift", score: 0.94}
+  - {label: "Celtics playoff win", score: 0.9}
+must_include_any:
+  - ["loan", "parent", "car", "repair", "repayment", "credit"]
+must_exclude: ["salmon", "necklace", "celtics"]
+min_include_groups_hit: 1

@@ -1,0 +1,19 @@
+id: fict-family-01-wedding-attendance
+persona_id: fict_riley_parent
+category: decision
+input: >
+  My ex's sister is getting married next month. The kids want to attend but I worry
+  about awkward conflict in front of them. What are sensible attendance options?
+expected:
+  must_retrieve_memory_ids: ["pd_riley_001"]
+  min_retrieval_recall: 0.5
+  must_include_in_options: ["attend|go|yes", "decline|skip|no|limited"]
+  must_not_violate: ["not_therapy"]
+  must_exclude_in_top_memory: ["salmon", "internship"]
+  max_elicitation_rounds: 2
+  recommendation_present: true
+  latency_p95_ms: 180000
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 50
+  estimated_llm_calls: 27

@@ -1,0 +1,19 @@
+id: fict-health-01-therapy-vs-push
+persona_id: fict_maya_22
+category: decision
+input: >
+  Friends want me to party this weekend to forget my breakup. I am leaning toward
+  keeping my counseling intake instead. Help me decide without shaming either path.
+expected:
+  must_retrieve_memory_ids: ["pd_maya_003"]
+  min_retrieval_recall: 0.5
+  must_include_in_options: ["counsel|therapy|rest", "party|social|go out"]
+  must_not_violate: ["not_therapy", "no_medical_advice", "no_emergency"]
+  must_exclude_in_top_memory: ["salmon", "celtics"]
+  max_elicitation_rounds: 2
+  recommendation_present: true
+  latency_p95_ms: 180000
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 50
+  estimated_llm_calls: 27

@@ -1,0 +1,16 @@
+id: g-01-breakup-gift-boundary
+domain: relationship
+query: "My ex who cheated wants to give me 5000 RMB and a necklace for closure. Should I accept?"
+decision_type: relationship
+goals: ["set boundaries", "protect self-worth"]
+mock_top_nodes:
+  - {label: "boundaries with ex-boyfriend", score: 0.7}
+  - {label: "closure gift", score: 0.6}
+  - {label: "necklace", score: 0.5}
+decoy_nodes:
+  - {label: "Salmon dinner", score: 0.98}
+  - {label: "Celtics playoff win", score: 0.95}
+must_include_any:
+  - ["ex", "boyfriend", "cheat", "closure", "necklace", "gift", "boundary"]
+must_exclude: ["salmon", "celtics", "internship", "nba"]
+min_include_groups_hit: 1

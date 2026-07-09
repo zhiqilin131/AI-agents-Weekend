@@ -1,0 +1,7 @@
+id: mem-02-career-no-relationship-noise
+query: "How should I evaluate the retention bonus counter-offer?"
+top_memory_summaries:
+  - "Accepted retention bonus with written remote-day clause in 2024."
+  - "Chose higher base over larger stock options for cash flow stability."
+must_not_contain: ["salmon", "necklace", "wedding", "breakup"]
+must_contain_any: ["retention", "bonus", "counter", "compensation"]

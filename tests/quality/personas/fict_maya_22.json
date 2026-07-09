@@ -1,0 +1,53 @@
+{
+  "user_id": "fict_maya_22",
+  "values": ["emotional honesty", "self-respect", "financial independence"],
+  "risk_posture": "moderate",
+  "recurring_themes": [
+    "struggles to set boundaries after betrayal",
+    "weighs symbolic gifts against self-worth"
+  ],
+  "current_goals": [
+    "recover emotionally after a difficult breakup",
+    "avoid repeating people-pleasing patterns"
+  ],
+  "known_constraints": [
+    "limited savings while finishing university",
+    "parents do not know full details of the breakup"
+  ],
+  "about_me": "Maya, 22, university senior in Riverton. Recently ended a two-year relationship after discovering infidelity.",
+  "constraints": ["Cannot afford therapy twice a week", "Wants closure without public drama"],
+  "priorities": [
+    "Protect my dignity when interacting with my ex",
+    "Do not let guilt drive financial decisions"
+  ],
+  "user_priorities": [
+    "Protect my dignity when interacting with my ex",
+    "Do not let guilt drive financial decisions"
+  ],
+  "past_decisions": [
+    {
+      "id": "pd_maya_001",
+      "decision_type": "relationship",
+      "situation_summary": "Ex asked to keep a shared necklace after the breakup; Maya felt pressured to agree.",
+      "chosen_option": "Returned the necklace and asked for no further contact for one month.",
+      "outcome": "Felt clearer boundaries but still anxious about running into him on campus.",
+      "timestamp": "2025-11-02T18:00:00Z"
+    },
+    {
+      "id": "pd_maya_002",
+      "decision_type": "finance",
+      "situation_summary": "Ex offered 3000 RMB as a 'closure gift' after cheating was revealed.",
+      "chosen_option": "Declined the money and blocked payment requests.",
+      "outcome": "Avoided feeling bought off; short-term stress from mutual friends gossip.",
+      "timestamp": "2025-11-10T20:30:00Z"
+    },
+    {
+      "id": "pd_maya_003",
+      "decision_type": "health",
+      "situation_summary": "Roommate suggested partying to forget the breakup versus resting.",
+      "chosen_option": "Skipped the party and scheduled a counseling intake.",
+      "outcome": "Sleep improved; still processing anger in waves.",
+      "timestamp": "2025-12-01T09:00:00Z"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "user_id": "fict_jordan_28",
+  "values": ["career growth", "work-life balance", "integrity"],
+  "risk_posture": "moderate",
+  "recurring_themes": [
+    "negotiates offers with deadline pressure",
+    "prefers transparent tradeoffs over vague promises"
+  ],
+  "current_goals": [
+    "decide whether to accept a counter-offer from current employer",
+    "maintain reputation with both companies"
+  ],
+  "known_constraints": [
+    "mortgage payments due monthly",
+    "cannot relocate for six months"
+  ],
+  "about_me": "Jordan, 28, product manager in Harbor City evaluating a startup offer versus a retention package.",
+  "constraints": ["No relocation before Q3", "Needs health benefits continuity"],
+  "priorities": [
+    "Compare total compensation honestly, not just headline salary",
+    "Protect evening time for partner"
+  ],
+  "user_priorities": [
+    "Compare total compensation honestly, not just headline salary",
+    "Protect evening time for partner"
+  ],
+  "past_decisions": [
+    {
+      "id": "pd_jordan_001",
+      "decision_type": "career",
+      "situation_summary": "Chose between internal promotion with modest raise and external role with learning curve.",
+      "chosen_option": "Took external role for broader scope.",
+      "outcome": "Skills grew quickly but first year was stressful.",
+      "timestamp": "2023-04-15T10:00:00Z"
+    },
+    {
+      "id": "pd_jordan_002",
+      "decision_type": "career",
+      "situation_summary": "Employer countered a competing offer with retention bonus tied to two-year stay.",
+      "chosen_option": "Accepted retention bonus with written remote-day clause.",
+      "outcome": "Stayed two years; bonus helped with mortgage.",
+      "timestamp": "2024-08-20T14:00:00Z"
+    },
+    {
+      "id": "pd_jordan_003",
+      "decision_type": "finance",
+      "situation_summary": "Evaluated stock options versus higher base at a late-stage startup.",
+      "chosen_option": "Chose higher base with smaller option grant.",
+      "outcome": "Cash flow stability improved; sometimes wonders about upside.",
+      "timestamp": "2025-02-01T11:30:00Z"
+    }
+  ]
+}

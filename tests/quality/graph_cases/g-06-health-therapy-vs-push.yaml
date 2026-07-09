@@ -1,0 +1,17 @@
+id: g-06-health-therapy-vs-push
+domain: health
+query: "Friends say I should party to forget my breakup. I am considering counseling instead."
+decision_type: health
+goals: ["mental health", "sleep recovery"]
+mock_top_nodes:
+  - {label: "counseling intake", score: 0.7}
+  - {label: "breakup recovery", score: 0.6}
+  - {label: "party avoidance", score: 0.5}
+decoy_nodes:
+  - {label: "Salmon dinner", score: 0.97}
+  - {label: "counter-offer deadline", score: 0.93}
+  - {label: "remittance transfer", score: 0.9}
+must_include_any:
+  - ["counseling", "therapy", "breakup", "mental", "party"]
+must_exclude: ["salmon", "counter-offer", "remittance"]
+min_include_groups_hit: 1

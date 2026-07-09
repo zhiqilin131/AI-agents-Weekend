@@ -1,0 +1,45 @@
+{
+  "user_id": "fict_alex_nb",
+  "values": ["authenticity", "community", "creative expression"],
+  "risk_posture": "moderate",
+  "recurring_themes": [
+    "navigates family expectations about gender expression",
+    "seeks safe spaces at work and school"
+  ],
+  "current_goals": [
+    "decide how open to be with new team at internship",
+    "find affordable mental health support"
+  ],
+  "known_constraints": [
+    "family is supportive but cautious",
+    "internship is in a conservative industry"
+  ],
+  "about_me": "Alex, 24, non-binary designer starting a corporate internship in Midland.",
+  "constraints": ["Cannot risk internship reference", "Needs inclusive healthcare"],
+  "priorities": [
+    "Stay mentally healthy during transition at work",
+    "Do not hide core identity from close colleagues"
+  ],
+  "user_priorities": [
+    "Stay mentally healthy during transition at work",
+    "Do not hide core identity from close colleagues"
+  ],
+  "past_decisions": [
+    {
+      "id": "pd_alex_001",
+      "decision_type": "career",
+      "situation_summary": "Interview asked about 'professional presentation'; Alex considered how much to disclose.",
+      "chosen_option": "Asked about dress code policies and ERG availability instead of personal details.",
+      "outcome": "Received offer; still uncertain about day-to-day acceptance.",
+      "timestamp": "2025-09-01T13:00:00Z"
+    },
+    {
+      "id": "pd_alex_002",
+      "decision_type": "health",
+      "situation_summary": "Chose between online peer support group and one-on-one counseling.",
+      "chosen_option": "Started counseling with LGBTQ-affirming therapist.",
+      "outcome": "Anxiety decreased; still building workplace confidence.",
+      "timestamp": "2025-10-15T19:00:00Z"
+    }
+  ]
+}

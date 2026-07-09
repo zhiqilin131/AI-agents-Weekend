@@ -1,0 +1,39 @@
+{
+  "user_id": "fict_sam_19",
+  "values": ["friendship loyalty", "academic focus", "fun"],
+  "risk_posture": "risk-seeking",
+  "recurring_themes": [
+    "balances social life with grades",
+    "gets pulled into friends' drama"
+  ],
+  "current_goals": [
+    "finish freshman year strong",
+    "support best friend through family issues without burning out"
+  ],
+  "known_constraints": [
+    "part-time campus job 12 hours/week",
+    "limited car access"
+  ],
+  "about_me": "Sam, 19, first-year student at Lakeside College. Works at the campus cafe.",
+  "constraints": ["Cannot miss more than two shifts per month"],
+  "priorities": ["Keep GPA above 3.5", "Be there for close friends"],
+  "user_priorities": ["Keep GPA above 3.5", "Be there for close friends"],
+  "past_decisions": [
+    {
+      "id": "pd_sam_001",
+      "decision_type": "social",
+      "situation_summary": "Friends planned a road trip the weekend before midterms.",
+      "chosen_option": "Stayed on campus to study and met friends for one evening only.",
+      "outcome": "Passed midterms; mild FOMO but no regret.",
+      "timestamp": "2025-10-05T16:00:00Z"
+    },
+    {
+      "id": "pd_sam_002",
+      "decision_type": "career",
+      "situation_summary": "Summer internship at a local marketing shop versus research assistant role.",
+      "chosen_option": "Took marketing internship for portfolio pieces.",
+      "outcome": "Built portfolio; less academic prestige.",
+      "timestamp": "2025-05-20T09:00:00Z"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+id: g-05-family-wedding-attendance
+domain: family
+query: "My ex's sister is getting married. Kids want to go but I worry about conflict."
+decision_type: family
+goals: ["children emotional safety", "avoid escalation"]
+mock_top_nodes:
+  - {label: "family wedding", score: 0.7}
+  - {label: "co-parenting conflict", score: 0.6}
+  - {label: "children anxiety", score: 0.55}
+decoy_nodes:
+  - {label: "Salmon dinner", score: 0.98}
+  - {label: "marketing internship", score: 0.93}
+  - {label: "visa renewal", score: 0.9}
+must_include_any:
+  - ["wedding", "children", "co-parent", "family", "conflict"]
+must_exclude: ["salmon", "internship", "visa"]
+min_include_groups_hit: 1

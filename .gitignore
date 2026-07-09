@@ -61,3 +61,4 @@ dist/
 tests/eval/reports/eval-*.json
 tests/eval/reports/_runtime_data/
 tests/eval/reports/traces/
+tests/quality/reports/
