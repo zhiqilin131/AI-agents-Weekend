@@ -1,0 +1,17 @@
+id: g-03-counter-offer-deadline
+domain: career
+query: "Startup gave me until Friday; my manager countered with retention bonus. How do I compare?"
+decision_type: career
+goals: ["compare total compensation", "protect evenings"]
+mock_top_nodes:
+  - {label: "counter offer compare", score: 0.7}
+  - {label: "retention bonus", score: 0.6}
+  - {label: "startup offer", score: 0.55}
+decoy_nodes:
+  - {label: "Salmon dinner", score: 0.98}
+  - {label: "family wedding", score: 0.93}
+  - {label: "therapy session", score: 0.9}
+must_include_any:
+  - ["counter", "retention", "bonus", "startup", "offer", "compensation"]
+must_exclude: ["salmon", "wedding", "therapy"]
+min_include_groups_hit: 1

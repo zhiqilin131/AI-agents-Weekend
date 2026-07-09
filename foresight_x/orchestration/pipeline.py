@@ -289,7 +289,14 @@ def _rank_graph_nodes_for_display(influence: GraphInfluenceBundle, user_state: U
             n.label,
         ),
     )
-    return ordered[: len(influence.top_nodes)]
+    # A raw retrieval score alone is not evidence of relevance: an off-topic node
+    # (tier 2 — no token overlap with the current query/goals, not a surfaced
+    # decision event) can score arbitrarily high yet have nothing to do with the
+    # user's situation. Never let such nodes pad out the displayed set as long as
+    # at least one genuinely relevant node exists; only fall back to the raw
+    # score ranking when nothing relevant was found at all (cold-start graph).
+    relevant = [n for n in ordered if _tier(n) < 2]
+    return relevant if relevant else ordered
 
 
 def _retrieve_provider_label(

@@ -32,6 +32,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
+**Quality benchmark (memory / graph / MCDA / pipeline):** manual tiered suite — not in CI. Start with `make quality-help` or read [`tests/quality/DEVELOPER.md`](tests/quality/DEVELOPER.md).
+
 For a repeatable local workflow, see `docs/REPRODUCIBILITY.md` (`make setup`, `make doctor`).
 
 **Environment:** `cp .env.example .env`, then set `OPENAI_API_KEY` and, for live web retrieval, `TAVILY_API_KEY`.  
@@ -102,6 +104,7 @@ If you previously deployed without a volume, data was only inside the container 
 ## Docs
 
 - Voice / Slime: `docs/voice_slime_agent.md`, `docs/voice_asr.md`
+- **Quality benchmark (developers):** `tests/quality/DEVELOPER.md`
 
 ## GitHub About (maintainers)
 

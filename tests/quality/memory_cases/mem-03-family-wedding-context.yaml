@@ -1,0 +1,7 @@
+id: mem-03-family-wedding-context
+query: "Should my kids attend my ex's family wedding?"
+top_memory_summaries:
+  - "Allowed children to attend ex's family reunion with structured pickup time."
+  - "Prioritized children's emotional safety over courtroom escalation."
+must_not_contain: ["salmon", "internship", "visa"]
+must_contain_any: ["children", "family", "wedding", "co-parent"]

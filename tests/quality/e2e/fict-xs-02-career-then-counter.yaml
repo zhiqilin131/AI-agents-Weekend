@@ -1,0 +1,20 @@
+id: fict-xs-02-career-then-counter
+persona_id: fict_jordan_28
+category: cross_session
+input:
+  - role: user
+    content: "I received a startup offer with better scope but more risk."
+  - role: user
+    content: "My manager just countered with retention bonus due Friday. How do I decide?"
+expected:
+  must_retrieve_memory_ids: ["pd_jordan_002"]
+  min_retrieval_recall: 0.5
+  must_include_in_options: ["stay|retention", "startup|leave"]
+  must_exclude_in_top_memory: ["salmon", "wedding"]
+  max_elicitation_rounds: 2
+  recommendation_present: true
+  latency_p95_ms: 180000
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 50
+  estimated_llm_calls: 30

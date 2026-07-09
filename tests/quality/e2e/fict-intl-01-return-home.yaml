@@ -1,0 +1,19 @@
+id: fict-intl-01-return-home
+persona_id: fict_chen_intl
+category: decision
+input: >
+  My father's health is declining in Guanghua. I am on a Berlin work visa with
+  renewal in eight months. Should I relocate, negotiate remote months, or stay?
+expected:
+  must_retrieve_memory_ids: ["pd_chen_001", "pd_chen_002"]
+  min_retrieval_recall: 0.5
+  must_include_in_options: ["relocate|return|move", "remote|stay|berlin"]
+  must_not_violate: ["not_therapy"]
+  must_exclude_in_top_memory: ["salmon", "necklace"]
+  max_elicitation_rounds: 2
+  recommendation_present: true
+  latency_p95_ms: 180000
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 50
+  estimated_llm_calls: 28

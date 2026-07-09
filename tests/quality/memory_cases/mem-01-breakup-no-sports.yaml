@@ -1,0 +1,7 @@
+id: mem-01-breakup-no-sports
+query: "Should I accept closure money from my cheating ex?"
+top_memory_summaries:
+  - "Declined 3000 RMB closure gift after infidelity was revealed."
+  - "Returned shared necklace and requested no contact for one month."
+must_not_contain: ["salmon", "celtics", "nba", "internship"]
+must_contain_any: ["breakup", "ex", "gift", "necklace", "cheat"]

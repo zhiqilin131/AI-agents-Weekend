@@ -1,0 +1,16 @@
+id: g-04-sports-noise-block
+domain: noise_blocklist
+query: "I feel guilty about declining my ex's money after cheating. What should I do?"
+decision_type: relationship
+goals: ["emotional closure"]
+mock_top_nodes:
+  - {label: "guilt after betrayal", score: 0.65}
+  - {label: "declining the money", score: 0.55}
+decoy_nodes:
+  - {label: "Celtics playoff win", score: 0.97}
+  - {label: "Salmon dinner", score: 0.95}
+  - {label: "Lakers trade rumor", score: 0.92}
+must_include_any:
+  - ["guilt", "betrayal", "cheat", "money", "decline"]
+must_exclude: ["salmon", "celtics", "nba", "lakers"]
+min_include_groups_hit: 1

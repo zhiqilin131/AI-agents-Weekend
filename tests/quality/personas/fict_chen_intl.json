@@ -1,0 +1,53 @@
+{
+  "user_id": "fict_chen_intl",
+  "values": ["family duty", "career stability", "cultural roots"],
+  "risk_posture": "risk-averse",
+  "recurring_themes": [
+    "weighs staying abroad versus returning home for parents",
+    "sends remittances while building savings"
+  ],
+  "current_goals": [
+    "decide whether to return home when father's health declines",
+    "maintain work visa status"
+  ],
+  "known_constraints": [
+    "parents aging in Guanghua",
+    "employer sponsorship tied to current role"
+  ],
+  "about_me": "Chen Wei, 31, software engineer in Berlin with family in Guanghua, China.",
+  "constraints": ["Visa renewal in eight months", "Cannot afford frequent flights"],
+  "priorities": [
+    "Be present for parents without derailing career",
+    "Compare cost of relocation honestly"
+  ],
+  "user_priorities": [
+    "Be present for parents without derailing career",
+    "Compare cost of relocation honestly"
+  ],
+  "past_decisions": [
+    {
+      "id": "pd_chen_001",
+      "decision_type": "family",
+      "situation_summary": "Mother asked Chen to return for a year to help with father's recovery.",
+      "chosen_option": "Negotiated three-month remote work from Guanghua.",
+      "outcome": "Helped family; project delays created stress with manager.",
+      "timestamp": "2024-06-01T08:00:00Z"
+    },
+    {
+      "id": "pd_chen_002",
+      "decision_type": "finance",
+      "situation_summary": "Compared sending larger remittances versus building emergency fund abroad.",
+      "chosen_option": "Split 60% remittance / 40% savings for six months.",
+      "outcome": "Parents covered medical bills; Chen had thin buffer when visa fees rose.",
+      "timestamp": "2025-01-10T12:00:00Z"
+    },
+    {
+      "id": "pd_chen_003",
+      "decision_type": "career",
+      "situation_summary": "Offered internal transfer to Singapore office closer to family.",
+      "chosen_option": "Declined transfer to keep Berlin tech network.",
+      "outcome": "Career momentum continued; guilt about distance persisted.",
+      "timestamp": "2025-07-20T09:30:00Z"
+    }
+  ]
+}

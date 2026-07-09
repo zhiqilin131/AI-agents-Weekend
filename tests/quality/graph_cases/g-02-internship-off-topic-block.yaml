@@ -1,0 +1,16 @@
+id: g-02-internship-off-topic-block
+domain: career_noise
+query: "Should I accept the summer marketing internship at Harbor Media?"
+decision_type: career
+goals: ["build portfolio", "keep GPA"]
+mock_top_nodes:
+  - {label: "marketing internship", score: 0.7}
+  - {label: "Harbor Media", score: 0.6}
+  - {label: "portfolio", score: 0.5}
+decoy_nodes:
+  - {label: "Salmon dinner", score: 0.97}
+  - {label: "breakup necklace", score: 0.94}
+must_include_any:
+  - ["internship", "marketing", "harbor", "portfolio"]
+must_exclude: ["salmon", "breakup", "necklace", "celtics"]
+min_include_groups_hit: 1

@@ -1,0 +1,91 @@
+# Quality tiers (machine-readable). See DEVELOPER.md for human workflow.
+
+version: 1
+ci_wired: false  # manual invoke only — do not add to CI without team review
+
+tiers:
+  F0:
+    id: free
+    cost_usd: 0
+    cadence: every_change
+    make: quality-preflight
+    covers:
+      - graph_blocklist_scoring
+      - report_surface_integrity
+      - mcda_elicitation_gates
+      - memory_precision_fixtures
+      - persona_schema_validation
+      - e2e_fixture_integrity
+
+  F1:
+    id: graph
+    cost_usd: 0
+    cadence: on_graph_or_pipeline_change
+    make: quality-graph
+    parent: F0
+
+  P0:
+    id: e2e-smoke
+    cost_usd_ceiling: 0.02
+    cadence: before_merge
+    make: quality-e2e-smoke
+    requires_confirm: true
+    requires_env: [OPENAI_API_KEY]
+    covers:
+      - api_connectivity
+      - persona_chroma_seed
+      - shadow_safety
+
+  P1:
+    id: e2e-core
+    cost_usd_ceiling: 0.36
+    cadence: weekly_or_pre_release
+    make: quality-e2e-core
+    requires_confirm: true
+    scenario_count: 6
+
+  P2:
+    id: e2e-all
+    cost_usd_ceiling: 0.50
+    cadence: monthly
+    make: quality-e2e-all
+    requires_confirm: true
+    scenario_count: 10
+
+gate:
+  min_mean_dgs: 0.72
+  min_scenario_dgs: 0.55
+  hard_gates:
+    - pipeline_errors
+    - safety_must_not_violate
+    - silent_llm_degradation
+    - graph_influence_absent  # only when a scenario sets expect_graph_influence: true
+    - infra_severe_latency_overrun  # > 2x latency_p95_ms budget
+    - infra_severe_llm_overrun  # > 2x llm_call_count_budget
+  dgs_weights:  # override any via QUALITY_DGS_WEIGHT_<COMPONENT> env var; auto-renormalized to sum 1.0
+    memory: 0.30
+    graph: 0.25
+    mcda: 0.20
+    report: 0.15
+    recommendation: 0.10
+
+optional_features:  # all opt-in, $0 unless explicitly enabled
+  repeat_sampling:
+    flag: "--repeat N"
+    effect: median dgs + majority-vote status across N independent runs per scenario
+  llm_judge:
+    flag: "--llm-judge"
+    effect: adds ~1 extra structured LLM call per scored turn with a judgeable must_not_violate rule
+    cost_note: additive on top of the base suite estimate — see estimate.py --llm-judge
+  multi_model_comparison:
+    flag: "--model a,b,c"
+    effect: runs the suite once per model, prints/saves a comparison table
+
+history:
+  file: tests/quality/dgs_history.jsonl  # committed to git, append-only, one line per run
+  viewer: python -m tests.quality.trend
+
+exit_codes:
+  0: gate_pass
+  1: gate_fail
+  2: setup_or_preflight_error

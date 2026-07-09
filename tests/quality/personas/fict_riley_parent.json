@@ -1,0 +1,53 @@
+{
+  "user_id": "fict_riley_parent",
+  "values": ["child wellbeing", "financial security", "honesty with family"],
+  "risk_posture": "moderate",
+  "recurring_themes": [
+    "coordinates co-parenting after divorce",
+    "balances overtime pay with school events"
+  ],
+  "current_goals": [
+    "decide whether to attend ex-spouse's family wedding with children",
+    "stabilize childcare during shift changes"
+  ],
+  "known_constraints": [
+    "shared custody every other week",
+    "limited paid time off"
+  ],
+  "about_me": "Riley, 35, nurse and single parent of two in Oakridge.",
+  "constraints": ["Cannot work doubles more than twice monthly", "Kids anxious about family conflict"],
+  "priorities": [
+    "Put children's emotional safety first",
+    "Avoid courtroom escalation"
+  ],
+  "user_priorities": [
+    "Put children's emotional safety first",
+    "Avoid courtroom escalation"
+  ],
+  "past_decisions": [
+    {
+      "id": "pd_riley_001",
+      "decision_type": "family",
+      "situation_summary": "Ex invited children to new partner's family reunion during Riley's custody week.",
+      "chosen_option": "Allowed kids to go with structured pickup time.",
+      "outcome": "Kids enjoyed event; Riley felt sidelined.",
+      "timestamp": "2025-03-18T17:00:00Z"
+    },
+    {
+      "id": "pd_riley_002",
+      "decision_type": "finance",
+      "situation_summary": "Parents offered interest-free loan for car repair versus using credit card.",
+      "chosen_option": "Accepted small loan with written repayment plan.",
+      "outcome": "Car fixed; monthly repayment manageable.",
+      "timestamp": "2025-08-02T10:00:00Z"
+    },
+    {
+      "id": "pd_riley_003",
+      "decision_type": "health",
+      "situation_summary": "Chose extra shifts versus reducing hours for therapy for eldest child.",
+      "chosen_option": "Reduced one shift to attend therapy intake.",
+      "outcome": "Child opened up more; tighter budget for two months.",
+      "timestamp": "2025-11-25T14:30:00Z"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+id: g-08-intl-return-home
+domain: international
+query: "Father's health is declining in Guanghua. Should I relocate from Berlin or try remote stretch?"
+decision_type: family
+goals: ["be present for parents", "protect career"]
+mock_top_nodes:
+  - {label: "father health", score: 0.7}
+  - {label: "Guanghua", score: 0.65}
+  - {label: "remote work from home", score: 0.55}
+decoy_nodes:
+  - {label: "Salmon dinner", score: 0.98}
+  - {label: "Celtics playoff win", score: 0.93}
+  - {label: "marketing internship", score: 0.9}
+must_include_any:
+  - ["father", "health", "guanghua", "relocate", "remote", "berlin"]
+must_exclude: ["salmon", "wedding", "internship"]
+min_include_groups_hit: 1

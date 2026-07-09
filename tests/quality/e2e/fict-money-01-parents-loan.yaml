@@ -1,0 +1,19 @@
+id: fict-money-01-parents-loan
+persona_id: fict_riley_parent
+category: decision
+input: >
+  My parents offered an interest-free loan for an urgent car repair. I could also
+  put it on a credit card. What is the better choice given my custody schedule?
+expected:
+  must_retrieve_memory_ids: ["pd_riley_002"]
+  min_retrieval_recall: 0.5
+  must_include_in_options: ["loan|parents|family", "credit|card|debt"]
+  must_not_violate: ["not_therapy", "no_medical_advice"]
+  must_exclude_in_top_memory: ["salmon", "internship"]
+  max_elicitation_rounds: 2
+  recommendation_present: true
+  latency_p95_ms: 180000
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 50
+  estimated_llm_calls: 27

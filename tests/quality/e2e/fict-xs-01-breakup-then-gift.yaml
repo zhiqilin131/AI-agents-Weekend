@@ -1,0 +1,20 @@
+id: fict-xs-01-breakup-then-gift
+persona_id: fict_maya_22
+category: cross_session
+input:
+  - role: user
+    content: "I ended things after my ex cheated. I feel raw but relieved."
+  - role: user
+    content: "Now he messaged offering 5000 RMB and a necklace. Should I respond?"
+expected:
+  must_retrieve_memory_ids: ["pd_maya_002"]
+  min_retrieval_recall: 0.5
+  must_include_in_options: ["decline|boundary|ignore", "accept|respond"]
+  must_exclude_in_top_memory: ["salmon", "celtics"]
+  max_elicitation_rounds: 2
+  recommendation_present: true
+  latency_p95_ms: 180000
+metadata:
+  model_id: gpt-4o-mini
+  llm_call_count_budget: 50
+  estimated_llm_calls: 30

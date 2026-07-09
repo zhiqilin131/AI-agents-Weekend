@@ -1,0 +1,7 @@
+id: mem-04-intl-parents-health
+query: "Remote from Guanghua or relocate permanently?"
+top_memory_summaries:
+  - "Negotiated three-month remote work from Guanghua during father's recovery."
+  - "Split remittances and emergency savings when parents had medical bills."
+must_not_contain: ["salmon", "party", "necklace"]
+must_contain_any: ["guanghua", "father", "remote", "parents", "remittance"]
