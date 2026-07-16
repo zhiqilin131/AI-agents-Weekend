@@ -180,6 +180,36 @@ def test_confirm_persists_event(tmp_path: Path) -> None:
     assert len(stored) >= 1
 
 
+def test_confirm_consumed_draft_returns_existing_events(tmp_path: Path) -> None:
+    settings = Settings(foresight_user_id="u_cal_retry", foresight_data_dir=tmp_path)
+    intent = CalendarIntent(intent_type="create_event", title="Retry-safe", duration_minutes=30, source="manual", confidence=0.9)
+    draft = build_draft_from_intent(
+        intent,
+        settings=settings,
+        user_id="u_cal_retry",
+        existing_events=[],
+        user_timezone="UTC",
+        now=datetime(2026, 5, 11, 8, 0, tzinfo=timezone.utc),
+    )
+    first, _ = confirm_draft(
+        settings=settings,
+        user_id="u_cal_retry",
+        draft_id=draft.draft_id,
+        selected_event_ids=None,
+        edits=None,
+    )
+    retry, retry_draft = confirm_draft(
+        settings=settings,
+        user_id="u_cal_retry",
+        draft_id=draft.draft_id,
+        selected_event_ids=None,
+        edits=None,
+    )
+    assert retry_draft is None
+    assert [e.id for e in retry] == [e.id for e in first]
+    assert len(list_events(settings, "u_cal_retry")) == 1
+
+
 def test_user_isolation_store(tmp_path: Path) -> None:
     settings_a = Settings(foresight_user_id="a", foresight_data_dir=tmp_path)
     settings_b = Settings(foresight_user_id="b", foresight_data_dir=tmp_path)

@@ -307,6 +307,37 @@ type VoiceResponse = {
   timing?: { asr_model_load_ms?: number | null; total_ms?: number };
 };
 
+const CALENDAR_DRAFT_TERMINAL_KEY = 'fx.slime.calendarDraftTerminal.v1';
+
+function readTerminalCalendarDraftIds(): Set<string> {
+  if (typeof localStorage === 'undefined') return new Set();
+  try {
+    const raw = localStorage.getItem(CALENDAR_DRAFT_TERMINAL_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((x) => String(x).trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+function markCalendarDraftTerminal(draftId: string | null | undefined): void {
+  const id = String(draftId || '').trim();
+  if (!id || typeof localStorage === 'undefined') return;
+  try {
+    const ids = readTerminalCalendarDraftIds();
+    ids.add(id);
+    localStorage.setItem(CALENDAR_DRAFT_TERMINAL_KEY, JSON.stringify([...ids].slice(-100)));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function isCalendarDraftTerminal(draftId: string | null | undefined): boolean {
+  const id = String(draftId || '').trim();
+  return Boolean(id && readTerminalCalendarDraftIds().has(id));
+}
+
 function httpErrorBodyToMessage(body: string, fallback: string): string {
   const t = body.trim();
   if (!t.startsWith('{')) return t || fallback;
@@ -1397,12 +1428,14 @@ export function SlimeVoiceAgent({
 
   const onConfirmCalendar = useCallback(async () => {
     unlockSlimeAudioContext();
+    const actedDraftId = pendingAgentDraftId;
     try {
-      if (pendingAgentDraftId) {
-        const events = await confirmCalendarDraft(pendingAgentDraftId);
+      if (actedDraftId) {
+        const events = await confirmCalendarDraft(actedDraftId);
         for (const ev of events) {
           mergeCalendarEvent(ev);
         }
+        markCalendarDraftTerminal(actedDraftId);
         setPendingAgentDraftId(null);
         setPendingCalendar(null);
         runTts('Done — I added it to your execution calendar.', {
@@ -1429,6 +1462,8 @@ export function SlimeVoiceAgent({
       }
       const body = (await res.json()) as { event?: Record<string, unknown> };
       if (body.event) mergeCalendarEvent(body.event);
+      markCalendarDraftTerminal(actedDraftId);
+      setPendingAgentDraftId(null);
       setPendingCalendar(null);
       runTts('Done — I added it to your execution calendar.', {
         force: true,
@@ -1436,6 +1471,9 @@ export function SlimeVoiceAgent({
           setTtsHint('No audio? Tap “Play reply” below after the message appears.'),
       });
     } catch (e) {
+      markCalendarDraftTerminal(actedDraftId);
+      setPendingAgentDraftId(null);
+      setPendingCalendar(null);
       showSpeechOutput(apiFetchErrorMessage(e), { source: 'error' });
       setVoiceState('error');
     }
@@ -1540,8 +1578,17 @@ export function SlimeVoiceAgent({
       if (fe?.type === 'calendar_draft_confirm' && fe.payload && typeof fe.payload === 'object') {
         const pl = fe.payload as { resolved?: ResolvedCalendar; draft_id?: string };
         const resolved = pl.resolved;
-        if (typeof pl.draft_id === 'string' && pl.draft_id.trim()) {
-          setPendingAgentDraftId(pl.draft_id.trim());
+        const draftId = typeof pl.draft_id === 'string' ? pl.draft_id.trim() : '';
+        if (draftId && isCalendarDraftTerminal(draftId)) {
+          setPendingAgentDraftId(null);
+          setPendingCalendar(null);
+          setPendingCalendarMutation(null);
+          setVoiceState('idle');
+          void refreshCredits();
+          return;
+        }
+        if (draftId) {
+          setPendingAgentDraftId(draftId);
         } else {
           setPendingAgentDraftId(null);
         }
@@ -2101,6 +2148,7 @@ export function SlimeVoiceAgent({
                     type="button"
                     className="rounded-full border border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-700"
                     onClick={() => {
+                      markCalendarDraftTerminal(pendingAgentDraftId);
                       setPendingCalendar(null);
                       setPendingAgentDraftId(null);
                       setVoiceState('idle');
